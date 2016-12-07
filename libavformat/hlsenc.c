@@ -1132,7 +1132,7 @@ static int hls_write_header(AVFormatContext *s)
     hls->start_pts      = AV_NOPTS_VALUE;
     hls->current_segment_final_filename_fmt[0] = '\0';
 
-    if (hls->flags & HLS_PROGRAM_DATE_TIME) {
+    if (hls->flags & HLS_PROGRAM_DATE_TIME && hls->initial_prog_date_time == 0) {
         time_t now0;
         time(&now0);
         hls->initial_prog_date_time = now0;
@@ -1492,6 +1492,7 @@ static const AVOption options[] = {
     {"start_number",  "set first number in the sequence",        OFFSET(start_sequence),AV_OPT_TYPE_INT64,  {.i64 = 0},     0, INT64_MAX, E},
     {"hls_time",      "set segment length in seconds",           OFFSET(time),    AV_OPT_TYPE_FLOAT,  {.dbl = 2},     0, FLT_MAX, E},
     {"hls_init_time", "set segment length in seconds at init list",           OFFSET(init_time),    AV_OPT_TYPE_FLOAT,  {.dbl = 0},     0, FLT_MAX, E},
+    {"hls_init_prog_time", "set initial program date time in seconds since epoch", OFFSET(initial_prog_date_time),    AV_OPT_TYPE_DOUBLE,  {.dbl = 0},     0, DBL_MAX, E},
     {"hls_list_size", "set maximum number of playlist entries",  OFFSET(max_nb_segments),    AV_OPT_TYPE_INT,    {.i64 = 5},     0, INT_MAX, E},
     {"hls_ts_options","set hls mpegts list of options for the container format used for hls", OFFSET(format_options_str), AV_OPT_TYPE_STRING, {.str = NULL},  0, 0,    E},
     {"hls_vtt_options","set hls vtt list of options for the container format used for hls", OFFSET(vtt_format_options_str), AV_OPT_TYPE_STRING, {.str = NULL},  0, 0,    E},
