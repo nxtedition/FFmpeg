@@ -295,7 +295,7 @@ static int dnxhd_decode_header(DNXHDContext *ctx, AVFrame *frame,
            ctx->bit_depth, ctx->mbaff, ctx->act);
 
     // Newer format supports variable mb_scan_index sizes
-    if (ctx->mb_height > 68 && ff_dnxhd_check_header_prefix_hr(header_prefix)) {
+    if (header_prefix == DNXHD_HEADER_HR2) {
         ctx->data_offset = 0x170 + (ctx->mb_height << 2);
     } else {
         if (ctx->mb_height > 68) {
