@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2017 Google Inc.
+ *
  * This file is part of FFmpeg.
  *
  * FFmpeg is free software; you can redistribute it and/or
@@ -16,42 +18,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AVCODEC_IMDCT15_H
-#define AVCODEC_IMDCT15_H
+#ifndef AVCODEC_ARM_VP9DSP_INIT_H
+#define AVCODEC_ARM_VP9DSP_INIT_H
 
-#include <stddef.h>
+#include "libavcodec/vp9dsp.h"
 
-#include "avfft.h"
+void ff_vp9dsp_init_10bpp_arm(VP9DSPContext *dsp);
+void ff_vp9dsp_init_12bpp_arm(VP9DSPContext *dsp);
 
-typedef struct IMDCT15Context {
-    int fft_n;
-    int len2;
-    int len4;
-
-    FFTComplex *tmp;
-
-    FFTComplex *twiddle_exptab;
-
-    FFTComplex *exptab[6];
-
-    /**
-     * Calculate the middle half of the iMDCT
-     */
-    void (*imdct_half)(struct IMDCT15Context *s, float *dst, const float *src,
-                       ptrdiff_t src_stride, float scale);
-} IMDCT15Context;
-
-/**
- * Init an iMDCT of the length 2 * 15 * (2^N)
- */
-int ff_imdct15_init(IMDCT15Context **s, int N);
-
-/**
- * Free an iMDCT.
- */
-void ff_imdct15_uninit(IMDCT15Context **s);
-
-
-void ff_imdct15_init_aarch64(IMDCT15Context *s);
-
-#endif /* AVCODEC_IMDCT15_H */
+#endif /* AVCODEC_ARM_VP9DSP_INIT_H */

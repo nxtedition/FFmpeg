@@ -183,6 +183,7 @@ void av_register_all(void)
     REGISTER_DEMUXER (MGSTS,            mgsts);
     REGISTER_MUXDEMUX(MICRODVD,         microdvd);
     REGISTER_MUXDEMUX(MJPEG,            mjpeg);
+    REGISTER_DEMUXER (MJPEG_2000,       mjpeg_2000);
     REGISTER_MUXDEMUX(MLP,              mlp);
     REGISTER_DEMUXER (MLV,              mlv);
     REGISTER_DEMUXER (MM,               mm);
@@ -272,8 +273,11 @@ void av_register_all(void)
     REGISTER_DEMUXER (SAMI,             sami);
     REGISTER_MUXDEMUX(SAP,              sap);
     REGISTER_DEMUXER (SBG,              sbg);
+    REGISTER_MUXDEMUX(SCC,              scc);
     REGISTER_DEMUXER (SDP,              sdp);
     REGISTER_DEMUXER (SDR2,             sdr2);
+    REGISTER_DEMUXER (SDS,              sds);
+    REGISTER_DEMUXER (SDX,              sdx);
 #if CONFIG_RTPDEC
     ff_register_rtp_dynamic_payload_handlers();
     ff_register_rdt_dynamic_payload_handlers();
@@ -366,6 +370,7 @@ void av_register_all(void)
     REGISTER_DEMUXER (IMAGE_PICTOR_PIPE,     image_pictor_pipe);
     REGISTER_DEMUXER (IMAGE_PNG_PIPE,        image_png_pipe);
     REGISTER_DEMUXER (IMAGE_PPM_PIPE,        image_ppm_pipe);
+    REGISTER_DEMUXER (IMAGE_PSD_PIPE,        image_psd_pipe);
     REGISTER_DEMUXER (IMAGE_QDRAW_PIPE,      image_qdraw_pipe);
     REGISTER_DEMUXER (IMAGE_SGI_PIPE,        image_sgi_pipe);
     REGISTER_DEMUXER (IMAGE_SUNRAST_PIPE,    image_sunrast_pipe);
