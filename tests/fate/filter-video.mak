@@ -78,6 +78,10 @@ fate-filter-lavd-scalenorm: tests/data/filtergraphs/scalenorm
 fate-filter-lavd-scalenorm: CMD = framecrc -f lavfi -graph_file $(TARGET_PATH)/tests/data/filtergraphs/scalenorm -i dummy
 
 
+FATE_FILTER-$(call ALLYES FRAMERATE_FILTER TESTSRC2_FILTER) += fate-filter-framerate-up fate-filter-framerate-down
+fate-filter-framerate-up: CMD = framecrc -lavfi testsrc2=r=2:d=10,framerate=fps=10 -t 1
+fate-filter-framerate-down: CMD = framecrc -lavfi testsrc2=r=2:d=10,framerate=fps=1 -t 1
+
 FATE_FILTER_VSYNTH-$(CONFIG_BOXBLUR_FILTER) += fate-filter-boxblur
 fate-filter-boxblur: CMD = framecrc -c:v pgmyuv -i $(SRC) -vf boxblur=2:1
 
@@ -534,7 +538,7 @@ fate-filter-tile: CMD = video_filter "tile=3x3:nb_frames=5:padding=7:margin=2"
 
 
 tests/pixfmts.mak: TAG = GEN
-tests/pixfmts.mak: ffmpeg$(PROGSSUF)$(EXESUF)
+tests/pixfmts.mak: ffmpeg$(PROGSSUF)$(EXESUF) | tests
 	$(M)printf "PIXFMTS = " > $@
 	$(Q)$(TARGET_EXEC) $(TARGET_PATH)/$< -pix_fmts list 2> /dev/null | awk 'NR > 8 && /^IO/ { printf $$2 " " }' >> $@
 	$(Q)printf "\n" >> $@

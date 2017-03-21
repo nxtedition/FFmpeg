@@ -1762,6 +1762,7 @@ static inline int show_tags(WriterContext *w, AVDictionary *tags, int section_id
 }
 
 static void print_pkt_side_data(WriterContext *w,
+                                AVCodecParameters *par,
                                 const AVPacketSideData *side_data,
                                 int nb_side_data,
                                 SectionID id_data_list,
@@ -1776,7 +1777,6 @@ static void print_pkt_side_data(WriterContext *w,
 
         writer_print_section_header(w, SECTION_ID_STREAM_SIDE_DATA);
         print_str("side_data_type", name ? name : "unknown");
-        print_int("side_data_size", sd->size);
         if (sd->type == AV_PKT_DATA_DISPLAYMATRIX && sd->size >= 9*4) {
             writer_print_integers(w, "displaymatrix", sd->data, 9, " %11d", 3, 4, 1);
             print_int("rotation", av_display_rotation_get((int32_t *)sd->data));
@@ -1788,9 +1788,19 @@ static void print_pkt_side_data(WriterContext *w,
             const AVSphericalMapping *spherical = (AVSphericalMapping *)sd->data;
             if (spherical->projection == AV_SPHERICAL_EQUIRECTANGULAR)
                 print_str("projection", "equirectangular");
-            else if (spherical->projection == AV_SPHERICAL_CUBEMAP)
+            else if (spherical->projection == AV_SPHERICAL_CUBEMAP) {
                 print_str("projection", "cubemap");
-            else
+                print_int("padding", spherical->padding);
+            } else if (spherical->projection == AV_SPHERICAL_EQUIRECTANGULAR_TILE) {
+                size_t l, t, r, b;
+                av_spherical_tile_bounds(spherical, par->width, par->height,
+                                         &l, &t, &r, &b);
+                print_str("projection", "tiled equirectangular");
+                print_int("bound_left", l);
+                print_int("bound_top", t);
+                print_int("bound_right", r);
+                print_int("bound_bottom", b);
+            } else
                 print_str("projection", "unknown");
 
             print_int("yaw", (double) spherical->yaw / (1 << 16));
@@ -1843,7 +1853,7 @@ static void show_packet(WriterContext *w, InputFile *ifile, AVPacket *pkt, int p
             av_dict_free(&dict);
         }
 
-        print_pkt_side_data(w, pkt->side_data, pkt->side_data_elems,
+        print_pkt_side_data(w, st->codecpar, pkt->side_data, pkt->side_data_elems,
                             SECTION_ID_PACKET_SIDE_DATA_LIST,
                             SECTION_ID_PACKET_SIDE_DATA);
     }
@@ -1959,7 +1969,6 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
             writer_print_section_header(w, SECTION_ID_FRAME_SIDE_DATA);
             name = av_frame_side_data_name(sd->type);
             print_str("side_data_type", name ? name : "unknown");
-            print_int("side_data_size", sd->size);
             if (sd->type == AV_FRAME_DATA_DISPLAYMATRIX && sd->size >= 9*4) {
                 writer_print_integers(w, "displaymatrix", sd->data, 9, " %11d", 3, 4, 1);
                 print_int("rotation", av_display_rotation_get((int32_t *)sd->data));
@@ -2404,7 +2413,7 @@ static int show_stream(WriterContext *w, AVFormatContext *fmt_ctx, int stream_id
         ret = show_tags(w, stream->metadata, in_program ? SECTION_ID_PROGRAM_STREAM_TAGS : SECTION_ID_STREAM_TAGS);
 
     if (stream->nb_side_data) {
-        print_pkt_side_data(w, stream->side_data, stream->nb_side_data,
+        print_pkt_side_data(w, stream->codecpar, stream->side_data, stream->nb_side_data,
                             SECTION_ID_STREAM_SIDE_DATA_LIST,
                             SECTION_ID_STREAM_SIDE_DATA);
     }
@@ -2563,6 +2572,14 @@ static int open_input_file(InputFile *ifile, const char *filename)
     AVDictionaryEntry *t;
     AVDictionary **opts;
     int scan_all_pmts_set = 0;
+
+    fmt_ctx = avformat_alloc_context();
+    if (!fmt_ctx) {
+        print_error(filename, AVERROR(ENOMEM));
+        exit_program(1);
+    }
+
+    fmt_ctx->flags |= AVFMT_FLAG_KEEP_SIDE_DATA;
 
     if (!av_dict_get(format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
         av_dict_set(&format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
@@ -2993,6 +3010,7 @@ void show_help_default(const char *opt, const char *arg)
     printf("\n");
 
     show_help_children(avformat_get_class(), AV_OPT_FLAG_DECODING_PARAM);
+    show_help_children(avcodec_get_class(), AV_OPT_FLAG_DECODING_PARAM);
 }
 
 /**

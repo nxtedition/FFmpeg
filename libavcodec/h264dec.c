@@ -681,7 +681,7 @@ static int decode_nal_units(H264Context *h, const uint8_t *buf, int buf_size)
             }
 
             if (h->current_slice == 1) {
-                if (avctx->active_thread_type & FF_THREAD_FRAME && !h->avctx->hwaccel &&
+                if (avctx->active_thread_type & FF_THREAD_FRAME &&
                     i >= nals_needed && !h->setup_finished && h->cur_pic_ptr) {
                     ff_thread_finish_setup(avctx);
                     h->setup_finished = 1;
@@ -850,7 +850,12 @@ static int output_frame(H264Context *h, AVFrame *dst, H264Picture *srcp)
     AVFrame *src = srcp->f;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(src->format);
     int i;
-    int ret = av_frame_ref(dst, src);
+    int ret;
+
+    if (src->format == AV_PIX_FMT_VIDEOTOOLBOX && src->buf[0]->size == 1)
+        return AVERROR_EXTERNAL;
+
+    ret = av_frame_ref(dst, src);
     if (ret < 0)
         return ret;
 
@@ -1072,8 +1077,8 @@ static int h264_decode_frame(AVCodecContext *avctx, void *data,
 #define OFFSET(x) offsetof(H264Context, x)
 #define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption h264_options[] = {
-    {"is_avc", "is avc", offsetof(H264Context, is_avc), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, 0},
-    {"nal_length_size", "nal_length_size", offsetof(H264Context, nal_length_size), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 4, 0},
+    { "is_avc", "is avc", OFFSET(is_avc), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, 0 },
+    { "nal_length_size", "nal_length_size", OFFSET(nal_length_size), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 4, 0 },
     { "enable_er", "Enable error resilience on damaged frames (unsafe)", OFFSET(enable_er), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, VD },
     { NULL },
 };

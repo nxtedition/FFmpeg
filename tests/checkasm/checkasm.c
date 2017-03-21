@@ -68,6 +68,12 @@ static const struct {
     #if CONFIG_ALAC_DECODER
         { "alacdsp", checkasm_check_alacdsp },
     #endif
+    #if CONFIG_AUDIODSP
+        { "audiodsp", checkasm_check_audiodsp },
+    #endif
+    #if CONFIG_BLOCKDSP
+        { "blockdsp", checkasm_check_blockdsp },
+    #endif
     #if CONFIG_BSWAPDSP
         { "bswapdsp", checkasm_check_bswapdsp },
     #endif
@@ -217,7 +223,7 @@ int float_near_ulp(float a, float b, unsigned max_ulp)
         return a == b;
     }
 
-    if (abs(x.i - y.i) <= max_ulp)
+    if (llabs((int64_t)x.i - y.i) <= max_ulp)
         return 1;
 
     return 0;
@@ -502,7 +508,8 @@ static void print_cpu_name(void)
 
 int main(int argc, char *argv[])
 {
-    int i, seed, ret = 0;
+    unsigned int seed;
+    int i, ret = 0;
 
 #if ARCH_ARM && HAVE_ARMV5TE_EXTERNAL
     if (have_vfp(av_get_cpu_flags()) || have_neon(av_get_cpu_flags()))
@@ -529,7 +536,7 @@ int main(int argc, char *argv[])
         argv++;
     }
 
-    seed = (argc > 1) ? atoi(argv[1]) : av_get_random_seed();
+    seed = (argc > 1) ? strtoul(argv[1], NULL, 10) : av_get_random_seed();
     fprintf(stderr, "checkasm: using random seed %u\n", seed);
     av_lfg_init(&checkasm_lfg, seed);
 

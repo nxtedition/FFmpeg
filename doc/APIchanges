@@ -15,6 +15,27 @@ libavutil:     2015-08-28
 
 API changes, most recent first:
 
+2017-03-21 - xxxxxxx - lavf 57.66.105, lavc 57.83.101 - avformat.h, avcodec.h
+  Deprecate AVFMT_FLAG_KEEP_SIDE_DATA. It will be ignored after the next major
+  bump, and libavformat will behave as if it were always set.
+  Deprecate av_packet_merge_side_data() and av_packet_split_side_data().
+
+2016-03-20 - xxxxxxx - lavu 55.50.100 / 55.21.0 - imgutils.h
+  Add av_image_copy_uc_from(), a version of av_image_copy() for copying
+  from GPU mapped memory.
+
+2017-03-20 - 9c2436e - lavu 55.49.100 - pixdesc.h
+  Add AV_PIX_FMT_FLAG_BAYER pixel format flag.
+
+2017-03-18 - xxxxxxx - lavfi 6.77.100 - avfilter.h
+  Deprecate AVFilterGraph.resample_lavr_opts
+  It's never been used by avfilter nor passed to anything.
+
+2017-02-10 - xxxxxxx - lavu 55.48.100 / 55.33.0 - spherical.h
+  Add AV_SPHERICAL_EQUIRECTANGULAR_TILE, av_spherical_tile_bounds(),
+  and projection-specific properties (bound_left, bound_top, bound_right,
+  bound_bottom, padding) to AVSphericalMapping.
+
 2017-03-02 - xxxxxxx - lavc 57.81.104 - videotoolbox.h
   AVVideotoolboxContext.cv_pix_fmt_type can now be set to 0 to output the
   native decoder format. (The default value is not changed.)

@@ -555,12 +555,14 @@ static void ffmpeg_cleanup(int ret)
         avcodec_free_context(&ost->enc_ctx);
         avcodec_parameters_free(&ost->ref_par);
 
-        while (ost->muxing_queue && av_fifo_size(ost->muxing_queue)) {
-            AVPacket pkt;
-            av_fifo_generic_read(ost->muxing_queue, &pkt, sizeof(pkt), NULL);
-            av_packet_unref(&pkt);
+        if (ost->muxing_queue) {
+            while (av_fifo_size(ost->muxing_queue)) {
+                AVPacket pkt;
+                av_fifo_generic_read(ost->muxing_queue, &pkt, sizeof(pkt), NULL);
+                av_packet_unref(&pkt);
+            }
+            av_fifo_freep(&ost->muxing_queue);
         }
-        av_fifo_freep(&ost->muxing_queue);
 
         av_freep(&output_streams[i]);
     }
@@ -816,7 +818,6 @@ static void output_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost)
     if (ost->nb_bitstream_filters) {
         int idx;
 
-        av_packet_split_side_data(pkt);
         ret = av_bsf_send_packet(ost->bsf_ctx[0], pkt);
         if (ret < 0)
             goto finish;
@@ -1433,7 +1434,7 @@ static int reap_filters(int flush)
         filter = ost->filter->filter;
 
         if (!ost->initialized) {
-            char error[1024];
+            char error[1024] = "";
             ret = init_output_stream(ost, error, sizeof(error));
             if (ret < 0) {
                 av_log(NULL, AV_LOG_ERROR, "Error initializing output stream %d:%d -- %s\n",
@@ -1846,7 +1847,7 @@ static void flush_encoders(void)
         // Maybe we should just let encoding fail instead.
         if (!ost->initialized) {
             FilterGraph *fg = ost->filter->graph;
-            char error[1024];
+            char error[1024] = "";
 
             av_log(NULL, AV_LOG_WARNING,
                    "Finishing stream %d:%d without any data written to it.\n",
@@ -2436,6 +2437,9 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int eo
     ist->hwaccel_retrieved_pix_fmt = decoded_frame->format;
 
     best_effort_timestamp= av_frame_get_best_effort_timestamp(decoded_frame);
+
+    if (ist->framerate.num)
+        best_effort_timestamp = ist->cfr_next_pts++;
 
     if (eof && best_effort_timestamp == AV_NOPTS_VALUE && ist->nb_dts_buffer > 0) {
         best_effort_timestamp = ist->dts_buffer[0];
@@ -3308,6 +3312,8 @@ static int init_output_stream_encode(OutputStream *ost)
         if (dec_ctx)
             enc_ctx->bits_per_raw_sample = FFMIN(dec_ctx->bits_per_raw_sample,
                                                  av_pix_fmt_desc_get(enc_ctx->pix_fmt)->comp[0].depth);
+
+        enc_ctx->framerate = ost->frame_rate;
 
         ost->st->avg_frame_rate = ost->frame_rate;
 
@@ -4240,8 +4246,6 @@ static int process_input(int file_index)
 
     /* add the stream-global side data to the first packet */
     if (ist->nb_packets == 1) {
-        if (ist->st->nb_side_data)
-            av_packet_split_side_data(&pkt);
         for (i = 0; i < ist->st->nb_side_data; i++) {
             AVPacketSideData *src_sd = &ist->st->side_data[i];
             uint8_t *dst_data;
