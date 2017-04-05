@@ -29,7 +29,6 @@
 #include "libavutil/opt.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/pixfmt.h"
-#include "libavutil/atomic.h"
 
 #include "avcodec.h"
 #include "h264_parse.h"
@@ -208,14 +207,14 @@ static int hevc_set_extradata(AVCodecContext *avctx, FFAMediaFormat *format)
         goto done;
     }
 
-    for (i = 0; i < MAX_VPS_COUNT; i++) {
+    for (i = 0; i < HEVC_MAX_VPS_COUNT; i++) {
         if (ps.vps_list[i]) {
             vps = (const HEVCVPS*)ps.vps_list[i]->data;
             break;
         }
     }
 
-    for (i = 0; i < MAX_PPS_COUNT; i++) {
+    for (i = 0; i < HEVC_MAX_PPS_COUNT; i++) {
         if (ps.pps_list[i]) {
             pps = (const HEVCPPS*)ps.pps_list[i]->data;
             break;
@@ -553,7 +552,7 @@ AVCodec ff_h264_mediacodec_decoder = {
     .decode         = mediacodec_decode_frame,
     .flush          = mediacodec_decode_flush,
     .close          = mediacodec_decode_close,
-    .capabilities   = CODEC_CAP_DELAY,
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
     .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS,
 };
 #endif
@@ -569,7 +568,7 @@ AVCodec ff_hevc_mediacodec_decoder = {
     .decode         = mediacodec_decode_frame,
     .flush          = mediacodec_decode_flush,
     .close          = mediacodec_decode_close,
-    .capabilities   = CODEC_CAP_DELAY,
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
     .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS,
 };
 #endif
@@ -585,7 +584,7 @@ AVCodec ff_mpeg4_mediacodec_decoder = {
     .decode         = mediacodec_decode_frame,
     .flush          = mediacodec_decode_flush,
     .close          = mediacodec_decode_close,
-    .capabilities   = CODEC_CAP_DELAY,
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
     .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS,
 };
 #endif
@@ -601,7 +600,7 @@ AVCodec ff_vp8_mediacodec_decoder = {
     .decode         = mediacodec_decode_frame,
     .flush          = mediacodec_decode_flush,
     .close          = mediacodec_decode_close,
-    .capabilities   = CODEC_CAP_DELAY,
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
     .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS,
 };
 #endif
@@ -617,7 +616,7 @@ AVCodec ff_vp9_mediacodec_decoder = {
     .decode         = mediacodec_decode_frame,
     .flush          = mediacodec_decode_flush,
     .close          = mediacodec_decode_close,
-    .capabilities   = CODEC_CAP_DELAY,
+    .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_AVOID_PROBING,
     .caps_internal  = FF_CODEC_CAP_SETS_PKT_DTS,
 };
 #endif

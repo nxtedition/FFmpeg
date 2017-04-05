@@ -128,7 +128,9 @@ void avfilter_graph_free(AVFilterGraph **graph)
 
     av_freep(&(*graph)->scale_sws_opts);
     av_freep(&(*graph)->aresample_swr_opts);
+#if FF_API_LAVR_OPTS
     av_freep(&(*graph)->resample_lavr_opts);
+#endif
     av_freep(&(*graph)->filters);
     av_freep(&(*graph)->internal);
     av_freep(graph);
@@ -1322,6 +1324,9 @@ int avfilter_graph_queue_command(AVFilterGraph *graph, const char *target, const
                 queue = &(*queue)->next;
             next = *queue;
             *queue = av_mallocz(sizeof(AVFilterCommand));
+            if (!*queue)
+                return AVERROR(ENOMEM);
+
             (*queue)->command = av_strdup(command);
             (*queue)->arg     = av_strdup(arg);
             (*queue)->time    = ts;

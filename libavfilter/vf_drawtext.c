@@ -269,8 +269,7 @@ AVFILTER_DEFINE_CLASS(drawtext);
 #define FT_ERRORDEF(e, v, s) { (e), (s) },
 #define FT_ERROR_END_LIST { 0, NULL } };
 
-static const struct ft_error
-{
+static const struct ft_error {
     int err;
     const char *err_msg;
 } ft_errors[] =
@@ -709,7 +708,8 @@ static av_cold void uninit(AVFilterContext *ctx)
 
     av_expr_free(s->x_pexpr);
     av_expr_free(s->y_pexpr);
-    s->x_pexpr = s->y_pexpr = NULL;
+    av_expr_free(s->a_pexpr);
+    s->x_pexpr = s->y_pexpr = s->a_pexpr = NULL;
     av_freep(&s->positions);
     s->nb_positions = 0;
 
@@ -752,7 +752,8 @@ static int config_input(AVFilterLink *inlink)
 
     av_expr_free(s->x_pexpr);
     av_expr_free(s->y_pexpr);
-    s->x_pexpr = s->y_pexpr = NULL;
+    av_expr_free(s->a_pexpr);
+    s->x_pexpr = s->y_pexpr = s->a_pexpr = NULL;
 
     if ((ret = av_expr_parse(&s->x_pexpr, s->x_expr, var_names,
                              NULL, NULL, fun2_names, fun2, 0, ctx)) < 0 ||

@@ -336,7 +336,7 @@ uint8_t *av_packet_new_side_data(AVPacket *pkt, enum AVPacketSideDataType type,
     return data;
 }
 
-uint8_t *av_packet_get_side_data(AVPacket *pkt, enum AVPacketSideDataType type,
+uint8_t *av_packet_get_side_data(const AVPacket *pkt, enum AVPacketSideDataType type,
                                  int *size)
 {
     int i;
@@ -378,6 +378,8 @@ const char *av_packet_side_data_name(enum AVPacketSideDataType type)
     }
     return NULL;
 }
+
+#if FF_API_MERGE_SD_API
 
 #define FF_MERGE_MARKER 0x8c4d9d108e25e9feULL
 
@@ -459,6 +461,8 @@ int av_packet_split_side_data(AVPacket *pkt){
     }
     return 0;
 }
+
+#endif
 
 uint8_t *av_packet_pack_dictionary(AVDictionary *dict, int *size)
 {
@@ -610,7 +614,7 @@ fail:
     return ret;
 }
 
-AVPacket *av_packet_clone(AVPacket *src)
+AVPacket *av_packet_clone(const AVPacket *src)
 {
     AVPacket *ret = av_packet_alloc();
 

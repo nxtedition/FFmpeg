@@ -19,6 +19,7 @@
 #ifndef COMPAT_ATOMICS_WIN32_STDATOMIC_H
 #define COMPAT_ATOMICS_WIN32_STDATOMIC_H
 
+#define WIN32_LEAN_AND_MEAN
 #include <stddef.h>
 #include <stdint.h>
 #include <windows.h>
@@ -159,7 +160,7 @@ static inline int atomic_compare_exchange_strong(intptr_t *object, intptr_t *exp
     atomic_fetch_or(object, operand)
 
 #define atomic_fetch_xor_explicit(object, operand, order) \
-    atomic_fetch_sub(object, operand)
+    atomic_fetch_xor(object, operand)
 
 #define atomic_fetch_and_explicit(object, operand, order) \
     atomic_fetch_and(object, operand)

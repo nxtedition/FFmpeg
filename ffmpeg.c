@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #if HAVE_IO_H
@@ -47,9 +48,11 @@
 #include "libavutil/parseutils.h"
 #include "libavutil/samplefmt.h"
 #include "libavutil/fifo.h"
+#include "libavutil/hwcontext.h"
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/dict.h"
+#include "libavutil/display.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/avstring.h"
@@ -317,7 +320,7 @@ void term_exit(void)
 
 static volatile int received_sigterm = 0;
 static volatile int received_nb_signals = 0;
-static volatile int transcode_init_done = 0;
+static atomic_int transcode_init_done = ATOMIC_VAR_INIT(0);
 static volatile int ffmpeg_exited = 0;
 static int main_return_code = 0;
 
@@ -455,7 +458,7 @@ static int read_key(void)
 
 static int decode_interrupt_cb(void *ctx)
 {
-    return received_nb_signals > transcode_init_done;
+    return received_nb_signals > atomic_load(&transcode_init_done);
 }
 
 const AVIOInterruptCB int_cb = { decode_interrupt_cb, NULL };
@@ -555,12 +558,14 @@ static void ffmpeg_cleanup(int ret)
         avcodec_free_context(&ost->enc_ctx);
         avcodec_parameters_free(&ost->ref_par);
 
-        while (ost->muxing_queue && av_fifo_size(ost->muxing_queue)) {
-            AVPacket pkt;
-            av_fifo_generic_read(ost->muxing_queue, &pkt, sizeof(pkt), NULL);
-            av_packet_unref(&pkt);
+        if (ost->muxing_queue) {
+            while (av_fifo_size(ost->muxing_queue)) {
+                AVPacket pkt;
+                av_fifo_generic_read(ost->muxing_queue, &pkt, sizeof(pkt), NULL);
+                av_packet_unref(&pkt);
+            }
+            av_fifo_freep(&ost->muxing_queue);
         }
-        av_fifo_freep(&ost->muxing_queue);
 
         av_freep(&output_streams[i]);
     }
@@ -608,7 +613,7 @@ static void ffmpeg_cleanup(int ret)
     if (received_sigterm) {
         av_log(NULL, AV_LOG_INFO, "Exiting normally, received signal %d.\n",
                (int) received_sigterm);
-    } else if (ret && transcode_init_done) {
+    } else if (ret && atomic_load(&transcode_init_done)) {
         av_log(NULL, AV_LOG_INFO, "Conversion failed!\n");
     }
     term_exit();
@@ -816,7 +821,6 @@ static void output_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost)
     if (ost->nb_bitstream_filters) {
         int idx;
 
-        av_packet_split_side_data(pkt);
         ret = av_bsf_send_packet(ost->bsf_ctx[0], pkt);
         if (ret < 0)
             goto finish;
@@ -1433,7 +1437,7 @@ static int reap_filters(int flush)
         filter = ost->filter->filter;
 
         if (!ost->initialized) {
-            char error[1024];
+            char error[1024] = "";
             ret = init_output_stream(ost, error, sizeof(error));
             if (ret < 0) {
                 av_log(NULL, AV_LOG_ERROR, "Error initializing output stream %d:%d -- %s\n",
@@ -1540,7 +1544,7 @@ static void print_final_stats(int64_t total_size)
         }
         extra_size += ost->enc_ctx->extradata_size;
         data_size  += ost->data_size;
-        if (   (ost->enc_ctx->flags & (AV_CODEC_FLAG_PASS1 | CODEC_FLAG_PASS2))
+        if (   (ost->enc_ctx->flags & (AV_CODEC_FLAG_PASS1 | AV_CODEC_FLAG_PASS2))
             != AV_CODEC_FLAG_PASS1)
             pass1_used = 0;
     }
@@ -1846,7 +1850,7 @@ static void flush_encoders(void)
         // Maybe we should just let encoding fail instead.
         if (!ost->initialized) {
             FilterGraph *fg = ost->filter->graph;
-            char error[1024];
+            char error[1024] = "";
 
             av_log(NULL, AV_LOG_WARNING,
                    "Finishing stream %d:%d without any data written to it.\n",
@@ -2173,8 +2177,10 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
 
                 if (!av_fifo_space(ifilter->frame_queue)) {
                     ret = av_fifo_realloc2(ifilter->frame_queue, 2 * av_fifo_size(ifilter->frame_queue));
-                    if (ret < 0)
+                    if (ret < 0) {
+                        av_frame_free(&tmp);
                         return ret;
+                    }
                 }
                 av_fifo_generic_write(ifilter->frame_queue, &tmp, sizeof(tmp), NULL);
                 return 0;
@@ -2287,7 +2293,8 @@ static int send_frame_to_filters(InputStream *ist, AVFrame *decoded_frame)
     return ret;
 }
 
-static int decode_audio(InputStream *ist, AVPacket *pkt, int *got_output)
+static int decode_audio(InputStream *ist, AVPacket *pkt, int *got_output,
+                        int *decode_failed)
 {
     AVFrame *decoded_frame;
     AVCodecContext *avctx = ist->dec_ctx;
@@ -2303,6 +2310,8 @@ static int decode_audio(InputStream *ist, AVPacket *pkt, int *got_output)
     update_benchmark(NULL);
     ret = decode(avctx, decoded_frame, got_output, pkt);
     update_benchmark("decode_audio %d.%d", ist->file_index, ist->st->index);
+    if (ret < 0)
+        *decode_failed = 1;
 
     if (ret >= 0 && avctx->sample_rate <= 0) {
         av_log(avctx, AV_LOG_ERROR, "Sample rate %d invalid\n", avctx->sample_rate);
@@ -2348,7 +2357,8 @@ static int decode_audio(InputStream *ist, AVPacket *pkt, int *got_output)
     return err < 0 ? err : ret;
 }
 
-static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int eof)
+static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int eof,
+                        int *decode_failed)
 {
     AVFrame *decoded_frame;
     int i, ret = 0, err = 0;
@@ -2387,6 +2397,8 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int eo
     update_benchmark(NULL);
     ret = decode(ist->dec_ctx, decoded_frame, got_output, pkt ? &avpkt : NULL);
     update_benchmark("decode_video %d.%d", ist->file_index, ist->st->index);
+    if (ret < 0)
+        *decode_failed = 1;
 
     // The following line may be required in some cases where there is no parser
     // or the parser does not has_b_frames correctly
@@ -2437,6 +2449,9 @@ static int decode_video(InputStream *ist, AVPacket *pkt, int *got_output, int eo
 
     best_effort_timestamp= av_frame_get_best_effort_timestamp(decoded_frame);
 
+    if (ist->framerate.num)
+        best_effort_timestamp = ist->cfr_next_pts++;
+
     if (eof && best_effort_timestamp == AV_NOPTS_VALUE && ist->nb_dts_buffer > 0) {
         best_effort_timestamp = ist->dts_buffer[0];
 
@@ -2474,7 +2489,8 @@ fail:
     return err < 0 ? err : ret;
 }
 
-static int transcode_subtitles(InputStream *ist, AVPacket *pkt, int *got_output)
+static int transcode_subtitles(InputStream *ist, AVPacket *pkt, int *got_output,
+                               int *decode_failed)
 {
     AVSubtitle subtitle;
     int free_sub = 1;
@@ -2484,6 +2500,7 @@ static int transcode_subtitles(InputStream *ist, AVPacket *pkt, int *got_output)
     check_decode_result(NULL, got_output, ret);
 
     if (ret < 0 || !*got_output) {
+        *decode_failed = 1;
         if (!pkt->size)
             sub2video_flush(ist);
         return ret;
@@ -2496,7 +2513,7 @@ static int transcode_subtitles(InputStream *ist, AVPacket *pkt, int *got_output)
                              1000, AV_TIME_BASE);
             if (end < ist->prev_sub.subtitle.end_display_time) {
                 av_log(ist->dec_ctx, AV_LOG_DEBUG,
-                       "Subtitle duration reduced from %d to %d%s\n",
+                       "Subtitle duration reduced from %"PRId32" to %d%s\n",
                        ist->prev_sub.subtitle.end_display_time, end,
                        end <= 0 ? ", dropping it" : "");
                 ist->prev_sub.subtitle.end_display_time = end;
@@ -2602,16 +2619,19 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
     while (ist->decoding_needed) {
         int duration = 0;
         int got_output = 0;
+        int decode_failed = 0;
 
         ist->pts = ist->next_pts;
         ist->dts = ist->next_dts;
 
         switch (ist->dec_ctx->codec_type) {
         case AVMEDIA_TYPE_AUDIO:
-            ret = decode_audio    (ist, repeating ? NULL : &avpkt, &got_output);
+            ret = decode_audio    (ist, repeating ? NULL : &avpkt, &got_output,
+                                   &decode_failed);
             break;
         case AVMEDIA_TYPE_VIDEO:
-            ret = decode_video    (ist, repeating ? NULL : &avpkt, &got_output, !pkt);
+            ret = decode_video    (ist, repeating ? NULL : &avpkt, &got_output, !pkt,
+                                   &decode_failed);
             if (!repeating || !pkt || got_output) {
                 if (pkt && pkt->duration) {
                     duration = av_rescale_q(pkt->duration, ist->st->time_base, AV_TIME_BASE_Q);
@@ -2634,7 +2654,7 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
         case AVMEDIA_TYPE_SUBTITLE:
             if (repeating)
                 break;
-            ret = transcode_subtitles(ist, &avpkt, &got_output);
+            ret = transcode_subtitles(ist, &avpkt, &got_output, &decode_failed);
             if (!pkt && ret >= 0)
                 ret = AVERROR_EOF;
             break;
@@ -2648,9 +2668,14 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
         }
 
         if (ret < 0) {
-            av_log(NULL, AV_LOG_ERROR, "Error while decoding stream #%d:%d: %s\n",
-                   ist->file_index, ist->st->index, av_err2str(ret));
-            if (exit_on_error)
+            if (decode_failed) {
+                av_log(NULL, AV_LOG_ERROR, "Error while decoding stream #%d:%d: %s\n",
+                       ist->file_index, ist->st->index, av_err2str(ret));
+            } else {
+                av_log(NULL, AV_LOG_FATAL, "Error while processing the decoded "
+                       "data for stream #%d:%d\n", ist->file_index, ist->st->index);
+            }
+            if (!decode_failed || exit_on_error)
                 exit_program(1);
             break;
         }
@@ -3047,9 +3072,6 @@ static int init_output_stream_streamcopy(OutputStream *ost)
             const AVPacketSideData *sd_src = &ist->st->side_data[i];
             AVPacketSideData *sd_dst = &ost->st->side_data[ost->st->nb_side_data];
 
-            if (ost->rotate_overridden && sd_src->type == AV_PKT_DATA_DISPLAYMATRIX)
-                continue;
-
             sd_dst->data = av_malloc(sd_src->size);
             if (!sd_dst->data)
                 return AVERROR(ENOMEM);
@@ -3058,6 +3080,13 @@ static int init_output_stream_streamcopy(OutputStream *ost)
             sd_dst->type = sd_src->type;
             ost->st->nb_side_data++;
         }
+    }
+
+    if (ost->rotate_overridden) {
+        uint8_t *sd = av_stream_new_side_data(ost->st, AV_PKT_DATA_DISPLAYMATRIX,
+                                              sizeof(int32_t) * 9);
+        if (sd)
+            av_display_rotation_set((int32_t *)sd, -ost->rotate_override_value);
     }
 
     ost->parser = av_parser_init(par_dst->codec_id);
@@ -3213,6 +3242,11 @@ static int init_output_stream_encode(OutputStream *ost)
 
     set_encoder_id(output_files[ost->file_index], ost);
 
+    // Muxers use AV_PKT_DATA_DISPLAYMATRIX to signal rotation. On the other
+    // hand, the legacy API makes demuxers set "rotate" metadata entries,
+    // which have to be filtered out to prevent leaking them to output files.
+    av_dict_set(&ost->st->metadata, "rotate", NULL, 0);
+
     if (ist) {
         ost->st->disposition          = ist->st->disposition;
 
@@ -3309,6 +3343,8 @@ static int init_output_stream_encode(OutputStream *ost)
             enc_ctx->bits_per_raw_sample = FFMIN(dec_ctx->bits_per_raw_sample,
                                                  av_pix_fmt_desc_get(enc_ctx->pix_fmt)->comp[0].depth);
 
+        enc_ctx->framerate = ost->frame_rate;
+
         ost->st->avg_frame_rate = ost->frame_rate;
 
         if (!dec_ctx ||
@@ -3389,7 +3425,9 @@ static int init_output_stream(OutputStream *ost, char *error, int error_len)
             !av_dict_get(ost->encoder_opts, "ab", NULL, 0))
             av_dict_set(&ost->encoder_opts, "b", "128000", 0);
 
-        if (ost->filter && av_buffersink_get_hw_frames_ctx(ost->filter->filter)) {
+        if (ost->filter && av_buffersink_get_hw_frames_ctx(ost->filter->filter) &&
+            ((AVHWFramesContext*)av_buffersink_get_hw_frames_ctx(ost->filter->filter)->data)->format ==
+            av_buffersink_get_format(ost->filter->filter)) {
             ost->enc_ctx->hw_frames_ctx = av_buffer_ref(av_buffersink_get_hw_frames_ctx(ost->filter->filter));
             if (!ost->enc_ctx->hw_frames_ctx)
                 return AVERROR(ENOMEM);
@@ -3445,6 +3483,26 @@ static int init_output_stream(OutputStream *ost, char *error, int error_len)
                 sd_dst->size = sd_src->size;
                 sd_dst->type = sd_src->type;
                 ost->st->nb_side_data++;
+            }
+        }
+
+        /*
+         * Add global input side data. For now this is naive, and copies it
+         * from the input stream's global side data. All side data should
+         * really be funneled over AVFrame and libavfilter, then added back to
+         * packet side data, and then potentially using the first packet for
+         * global side data.
+         */
+        if (ist) {
+            int i;
+            for (i = 0; i < ist->st->nb_side_data; i++) {
+                AVPacketSideData *sd = &ist->st->side_data[i];
+                uint8_t *dst = av_stream_new_side_data(ost->st, sd->type, sd->size);
+                if (!dst)
+                    return AVERROR(ENOMEM);
+                memcpy(dst, sd->data, sd->size);
+                if (ist->autorotate && sd->type == AV_PKT_DATA_DISPLAYMATRIX)
+                    av_display_rotation_set((uint32_t *)dst, 0);
             }
         }
 
@@ -3701,7 +3759,7 @@ static int transcode_init(void)
         return ret;
     }
 
-    transcode_init_done = 1;
+    atomic_store(&transcode_init_done, 1);
 
     return 0;
 }
@@ -4240,15 +4298,14 @@ static int process_input(int file_index)
 
     /* add the stream-global side data to the first packet */
     if (ist->nb_packets == 1) {
-        if (ist->st->nb_side_data)
-            av_packet_split_side_data(&pkt);
         for (i = 0; i < ist->st->nb_side_data; i++) {
             AVPacketSideData *src_sd = &ist->st->side_data[i];
             uint8_t *dst_data;
 
-            if (av_packet_get_side_data(&pkt, src_sd->type, NULL))
+            if (src_sd->type == AV_PKT_DATA_DISPLAYMATRIX)
                 continue;
-            if (ist->autorotate && src_sd->type == AV_PKT_DATA_DISPLAYMATRIX)
+
+            if (av_packet_get_side_data(&pkt, src_sd->type, NULL))
                 continue;
 
             dst_data = av_packet_new_side_data(&pkt, src_sd->type, src_sd->size);
