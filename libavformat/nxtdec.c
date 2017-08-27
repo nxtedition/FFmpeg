@@ -180,5 +180,6 @@ AVInputFormat ff_nxt_demuxer = {
     .read_packet    = read_packet,
     .read_timestamp = read_timestamp,
     .extensions     = "nxt",
+    .flags          = AVFMT_GENERIC_INDEX,
     .priv_data_size = sizeof(NXTHeader),
 };
