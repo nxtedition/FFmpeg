@@ -47,6 +47,7 @@ static void register_all(void)
     avcodec_register_all();
 
     /* (de)muxers */
+    REGISTER_DEMUXER (NXT,              nxt);
     REGISTER_MUXER   (A64,              a64);
     REGISTER_DEMUXER (AA,               aa);
     REGISTER_DEMUXER (AAC,              aac);
