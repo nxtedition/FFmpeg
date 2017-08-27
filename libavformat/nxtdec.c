@@ -2,11 +2,11 @@
 #include "internal.h"
 #include "avio_internal.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/avassert.h"
 
-#define NXT_TAG         = 0xf07563b4c0000000LL;
-#define NXT_TAG_MASK    = 0xfffffffff0000000LL;
-#define NXT_FLAG_KEY    = 1
-#define NXT_HEADER_SIZE = 4096
+#define NXT_TAG         0xf07563b4c0000000LL
+#define NXT_TAG_MASK    0xfffffffff0000000LL
+#define NXT_FLAG_KEY    1
 
 typedef struct NXTHeader {
   int64_t     tag;
@@ -25,28 +25,28 @@ typedef struct NXTHeader {
   int32_t     duration;
 } NXTHeader;
 
-static int probe(AVProbeData *p)
+static int __attribute__((optimize("O0"))) nxt_probe(AVProbeData *p)
 {
     int i;
     NXTHeader *header;
 
     for (i = 0; i < p->buf_size - sizeof(header->tag); i++) {
       header = (NXTHeader*)(p->buf + i);
-      if (header->tag & NXT_TAG_MASK == NXT_TAG)
+      if ((header->tag & NXT_TAG_MASK) == NXT_TAG)
           return AVPROBE_SCORE_MAX;
     }
 
     return 0;
 }
 
-static int read_header(AVFormatContext *s)
+static int nxt_read_header(AVFormatContext *s)
 {
     int ret;
-    NXTHeader *header = (NXTHeader*)s->priv;
+    NXTHeader *header = (NXTHeader*)s->priv_data;
     AVStream *st = NULL;
     AVIOContext *bc = s->pb;
 
-    ret = avio_read(bc, header, sizeof(*header));
+    ret = avio_read(bc, (char*)header, 4096);
 
     if (ret < 0)
       goto fail;
@@ -61,10 +61,11 @@ static int read_header(AVFormatContext *s)
     ret = -1;
 
     st->start_time = header->pts;
+    // TODO st->duration
 
     switch (header->format) {
       case 1: {
-        st->codecpar = AVMEDIA_TYPE_VIDEO;
+        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
         st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
         st->codecpar->format = AV_PIX_FMT_YUV422P;
         st->codecpar->field_order = AV_FIELD_TB;
@@ -74,7 +75,8 @@ static int read_header(AVFormatContext *s)
         st->codecpar->width = 1920;
         st->codecpar->height = 1080;
 
-        st->avg_frame_rate = 25;
+        st->avg_frame_rate.num = 25;
+        st->avg_frame_rate.den = 1;
         st->time_base.num = 1;
         st->time_base.den = 25;
 
@@ -82,7 +84,7 @@ static int read_header(AVFormatContext *s)
       }
       case 2: {
         // TODO
-        // st->codecpar = AVMEDIA_TYPE_AUDIO;
+        // st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
         // st->codecpar->codec_id = AV_CODEC_ID_PCM_S32LE;
         // st->codecpar->codec_tag = 0;
         // st->codecpar->format = AV_SAMPLE_FMT_S32;
@@ -102,14 +104,13 @@ fail:
     return ret;
 }
 
-static int read_packet(AVFormatContext *s, AVPacket *pkt)
+static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     int ret, size;
-    NXTHeader *header = (NXTHeader*)s->priv;
+    NXTHeader *header = (NXTHeader*)s->priv_data;
     AVIOContext *bc = s->pb;
-    AVStream *st = s->streams[0];
 
-    if (header->tag & NXT_TAG_MASK != NXT_TAG){
+    if ((header->tag & NXT_TAG_MASK) != NXT_TAG){
         ret = -1;
         goto fail;
     }
@@ -118,6 +119,8 @@ static int read_packet(AVFormatContext *s, AVPacket *pkt)
 
     if (ret < 0)
         goto fail;
+
+    av_assert0(avio_tell(bc) == header->position + 4096);
 
     ret = avio_read(bc, pkt->data, pkt->size);
 
@@ -134,9 +137,9 @@ static int read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->duration = header->duration;
     pkt->pts = header->pts;
 
-    size = header->size
+    size = header->size;
     if (ret == pkt->size) {
-      memcpy(header, pkt->data + header->next - NXT_HEADER_SIZE, sizeof(NXTHeader));
+      memcpy(header, pkt->data + header->next - 4096, sizeof(NXTHeader));
     } else {
       memset(header, 0, sizeof(NXTHeader));
     }
@@ -149,37 +152,30 @@ fail:
     return ret;
 }
 
-static int64_t read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit)
+static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit)
 {
     int64_t pos;
     NXTHeader header;
     AVIOContext *bc = s->pb;
 
-    for (pos = *ppos; true; pos += NXT_HEADER_SIZE;) {
-        if (pos + sizeof(header) >= pos_limit)
-            return AV_NOPTS_VALUE;
-
-        if (avio_seek(bc, pos, SEEK_SET) < 0)
-            return AV_NOPTS_VALUE;
-
-        if (avio_read(bc, &header, sizeof(header)) < 0)
-            return AV_NOPTS_VALUE;
-
-        if (header->tag & NXT_TAG_MASK == NXT_TAG) {
+    for (pos = (*ppos + 4095) / 4096; pos < pos_limit || avio_read(bc, (char*)&header, 4096) == 4096; pos += 4096) {
+        if ((header.tag & NXT_TAG_MASK) == NXT_TAG) {
           *ppos = header.position;
           return header.pts;
         }
     }
+
+    return AV_NOPTS_VALUE;
 }
 
 AVInputFormat ff_nxt_demuxer = {
     .name           = "nxt",
     .long_name      = NULL_IF_CONFIG_SMALL("NXT"),
-    .read_probe     = probe,
-    .read_header    = read_header,
-    .read_packet    = read_packet,
-    .read_timestamp = read_timestamp,
+    .read_probe     = nxt_probe,
+    .read_header    = nxt_read_header,
+    .read_packet    = nxt_read_packet,
+    .read_timestamp = nxt_read_timestamp,
     .extensions     = "nxt",
     .flags          = AVFMT_GENERIC_INDEX,
-    .priv_data_size = sizeof(NXTHeader),
+    .priv_data_size = 4096,
 };
