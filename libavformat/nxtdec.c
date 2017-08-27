@@ -104,7 +104,7 @@ fail:
 
 static int read_packet(AVFormatContext *s, AVPacket *pkt)
 {
-    int ret, data_size, payload_size;
+    int ret, size;
     NXTHeader *header = (NXTHeader*)s->priv;
     AVIOContext *bc = s->pb;
     AVStream *st = s->streams[0];
@@ -114,10 +114,7 @@ static int read_packet(AVFormatContext *s, AVPacket *pkt)
         goto fail;
     }
 
-    payload_size = header->next - NXT_HEADER_SIZE;
-    data_size = header->size
-
-    ret = av_new_packet(pkt, payload_size + sizeof(NXTHeader));
+    ret = av_new_packet(pkt, header->next);
 
     if (ret < 0)
         goto fail;
@@ -127,7 +124,7 @@ static int read_packet(AVFormatContext *s, AVPacket *pkt)
     if (ret < 0)
         goto fail;
 
-    if (ret < data_size) {
+    if (ret < size) {
         ret = -1;
         goto fail;
     }
@@ -137,13 +134,14 @@ static int read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->duration = header->duration;
     pkt->pts = header->pts;
 
+    size = header->size
     if (ret == pkt->size) {
-      memcpy(header, pkt->data + payload_size, sizeof(NXTHeader));
+      memcpy(header, pkt->data + header->next - NXT_HEADER_SIZE, sizeof(NXTHeader));
     } else {
       memset(header, 0, sizeof(NXTHeader));
     }
 
-    av_shrink_packet(pkt, data_size);
+    av_shrink_packet(pkt, size);
 
     return pkt->size;
 fail:
@@ -182,6 +180,5 @@ AVInputFormat ff_nxt_demuxer = {
     .read_packet    = read_packet,
     .read_timestamp = read_timestamp,
     .extensions     = "nxt",
-    // .flags          = AVFMT_GENERIC_INDEX,
     .priv_data_size = sizeof(NXTHeader),
 };
