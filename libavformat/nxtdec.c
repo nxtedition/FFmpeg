@@ -37,25 +37,18 @@ typedef struct NXTContext {
 
 _Static_assert(sizeof(NXTContext) == NXT_ALIGN, "sizeof NXTContext != NXT_ALIGN");
 
-/*
+
 static int64_t nxt_floor(int64_t val)
 {
     return (val / NXT_ALIGN) * NXT_ALIGN;
 }
 
-static int64_t nxt_seek_fwd(AVFormatContext *s, NXTContext* nxt, int64_t pos)
+static int64_t nxt_seek_fwd(AVFormatContext *s, NXTContext* nxt)
 {
-    int64_t ret, end;
+    int64_t ret, i;
     AVIOContext *bc = s->pb;
 
-    end = pos + NXT_MAX_FRAME_SIZE;
-
-    for (; pos < end; pos += NXT_ALIGN) {
-        ret = avio_seek(bc, pos, SEEK_SET);
-
-        if (ret < 0)
-            return ret;
-
+    for (i = 0; i < NXT_MAX_FRAME_SIZE; i += NXT_ALIGN) {
         ret = avio_read(bc, (char*)nxt, NXT_ALIGN);
 
         if (ret < 0)
@@ -70,7 +63,7 @@ static int64_t nxt_seek_fwd(AVFormatContext *s, NXTContext* nxt, int64_t pos)
 
     return -1;
 }
-*/
+
 
 static int nxt_probe(AVProbeData *p)
 {
