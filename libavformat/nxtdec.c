@@ -57,9 +57,8 @@ static int64_t nxt_seek_fwd(AVFormatContext *s, NXTContext* nxt, int64_t pos)
         if (ret < sizeof(NXTContext))
             return -1;
 
-        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG)
           return 0;
-        }
     }
 
     return -1;
