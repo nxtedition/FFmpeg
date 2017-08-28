@@ -121,7 +121,7 @@ static int nxt_read_header(AVFormatContext *s)
 
         st->duration = nxt1.pts - nxt->pts;
 
-        avio_seek(bc, nxt->position, SEEK_SET);
+        avio_seek(bc, nxt->position + 4096, SEEK_SET);
     }
 
     ret = -1;
