@@ -204,6 +204,11 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
         return -1;
     }
 
+    ret = avio_seek(bc, nxt->position + 4096, SEEK_SET);
+
+    if (ret < 0)
+        return ret;
+
     ret = av_new_packet(pkt, nxt->next);
 
     if (ret < 0)
@@ -245,6 +250,7 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
 {
     int64_t ret;
     int64_t step;
+    NXTContext *nxt = (NXTContext*)s->priv_data;
     NXTContext nxt1, nxt2;
     AVIOContext *bc = s->pb;
 
@@ -256,6 +262,7 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
 
     step /= 2;
 
+    nxt1.position = 0;
     nxt1.index = -1;
 
     while (step >= 4096) {
@@ -270,7 +277,17 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
         }
     }
 
-    return nxt1.index == -1 ? -1 : avio_seek(bc, nxt1.position, SEEK_SET);
+    if (nxt1.index == -1)
+        return -1;
+
+    ret = avio_seek(bc, nxt1.position + 4096, SEEK_SET);
+
+    if (ret < 0)
+        return ret;
+
+    memcpy(nxt, &nxt1, sizeof(NXTContext));
+
+    return ret;
 }
 
 AVInputFormat ff_nxt_demuxer = {
