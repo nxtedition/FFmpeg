@@ -296,5 +296,5 @@ AVInputFormat ff_nxt_demuxer = {
     .read_seek      = nxt_read_seek,
     .extensions     = "nxt",
     .flags          = AVFMT_GENERIC_INDEX,
-    .priv_data_size = 4096,
+    .priv_data_size = sizeof(NXTContext),
 };
