@@ -41,7 +41,7 @@ static int nxt_probe(AVProbeData *p)
 
 static int nxt_read_header(AVFormatContext *s)
 {
-    int ret, i;
+    int ret;
     NXTContext *nxt = (NXTContext*)s->priv_data;
     AVStream *st = NULL;
     AVIOContext *bc = s->pb;
@@ -52,7 +52,7 @@ static int nxt_read_header(AVFormatContext *s)
       goto fail;
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
-        ret = -1
+        ret = -1;
         goto fail;
     }
 
@@ -100,6 +100,25 @@ static int nxt_read_header(AVFormatContext *s)
         st->start_time = nxt->pts;
 
         return 0;
+    case 3:
+        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+        st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
+        st->codecpar->format = AV_PIX_FMT_YUV422P;
+        st->codecpar->field_order = AV_FIELD_PROGRESSIVE;
+        st->codecpar->sample_aspect_ratio.num = 1;
+        st->codecpar->sample_aspect_ratio.den = 1;
+        st->codecpar->bit_rate = 115000000;
+        st->codecpar->width = 1280;
+        st->codecpar->height = 720;
+
+        st->avg_frame_rate.num = 50;
+        st->avg_frame_rate.den = 1;
+
+        st->time_base.num = 1;
+        st->time_base.den = 50;
+        st->start_time = nxt->pts;
+
+        return 0;
     }
 fail:
     av_free(st);
@@ -144,8 +163,8 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     if (ret == pkt->size) {
         memcpy(nxt, pkt->data + nxt->next - 4096, sizeof(NXTContext));
-    } else if (ret == size) {
-        memset(nxt, 0, sizeof(NXTContext))
+    } else if (ret == size && avio_feof(bc)) {
+        memset(nxt, 0, sizeof(NXTContext));
     } else {
         ret = -1;
         goto fail;
