@@ -4,9 +4,15 @@
 #include "libavutil/intreadwrite.h"
 #include "libavutil/avassert.h"
 
-#define NXT_TAG         0xf07563b4c0000000LL
-#define NXT_TAG_MASK    0xfffffffff0000000LL
-#define NXT_FLAG_KEY    1
+#define NXT_TAG           0xf07563b4c0000000LL
+#define NXT_TAG_MASK      0xfffffffff0000000LL
+#define NXT_FLAG_KEY      1
+
+#define DNXHD_120_1080i50 1
+#define PCM_S32LE_48000c8 2
+#define DNXHD_115_720p50  3
+#define YUV422P_1080i50   4
+#define YUV422P_720p50    5
 
 typedef struct NXTContext {
   int64_t     tag;
@@ -67,7 +73,7 @@ static int nxt_read_header(AVFormatContext *s)
 
     switch (nxt->format)
     {
-    case 1:
+    case DNXHD_120_1080i50:
         st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
         st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
         st->codecpar->format = AV_PIX_FMT_YUV422P;
@@ -86,21 +92,23 @@ static int nxt_read_header(AVFormatContext *s)
         st->start_time = nxt->pts;
 
         return 0;
-    case 2:
+    case PCM_S32LE_48000c8:
         st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
         st->codecpar->codec_id = AV_CODEC_ID_PCM_S32LE;
         st->codecpar->codec_tag = 0;
         st->codecpar->format = AV_SAMPLE_FMT_S32;
         st->codecpar->block_align = 32;
         st->codecpar->channels = 8;
+        st->codecpar->sample_rate = 48000;
         st->codecpar->bits_per_coded_sample = 32;
 
         st->time_base.num = 1;
         st->time_base.den = 48000;
         st->start_time = nxt->pts;
+        // st->duration =
 
         return 0;
-    case 3:
+    case DNXHD_115_720p50:
         st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
         st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
         st->codecpar->format = AV_PIX_FMT_YUV422P;
@@ -117,6 +125,7 @@ static int nxt_read_header(AVFormatContext *s)
         st->time_base.num = 1;
         st->time_base.den = 50;
         st->start_time = nxt->pts;
+        // st->duration =
 
         return 0;
     }
