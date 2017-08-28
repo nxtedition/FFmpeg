@@ -47,7 +47,7 @@ static int nxt_probe(AVProbeData *p)
 
 static int nxt_read_header(AVFormatContext *s)
 {
-    int ret;
+    int64_t ret;
     NXTContext *nxt = (NXTContext*)s->priv_data;
     AVStream *st = NULL;
     AVIOContext *bc = s->pb;
@@ -136,7 +136,7 @@ fail:
 
 static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
-    int ret, size;
+    int64_t ret, size;
     NXTContext *nxt = (NXTContext*)s->priv_data;
     AVIOContext *bc = s->pb;
     size = nxt->size;
@@ -146,8 +146,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
-        ret = -1;
-        goto fail;
+        return -1;
     }
 
     ret = av_new_packet(pkt, nxt->next);
@@ -187,61 +186,56 @@ fail:
     return ret;
 }
 
-#pragma GCC optimize ("O0")
-
-static int64_t nxt_floor(int64_t val)
-{
-    return (val / 4096) * 4096;
-}
-
 static int64_t nxt_seek_fwd(AVFormatContext *s, NXTContext* nxt, int64_t pos)
 {
-    int ret, end;
+    int64_t ret, end;
     AVIOContext *bc = s->pb;
 
-    end = pos + 4096 * 1024;
-    ret = -1;
+    end = pos + 4096 * 256;
 
     for (; pos < end; pos += 4096) {
         ret = avio_seek(bc, pos, SEEK_SET);
 
         if (ret < 0)
-            goto fail;
+            return ret;
 
         ret = avio_read(bc, (char*)nxt, sizeof(NXTContext));
 
         if (ret < 0)
-            goto fail;
+            return ret;
 
-        if (ret < sizeof(NXTContext)) {
-            ret = -1;
-            goto fail;
-        }
+        if (ret < sizeof(NXTContext))
+            return -1;
 
         if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
           return 0;
         }
     }
 
-fail:
-    return ret;
+    return -1;
+}
+
+static int64_t nxt_floor(int64_t val)
+{
+    return (val / 4096) * 4096;
 }
 
 static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
-    int ret;
-    int64_t pos = 0, step;
+    int64_t ret;
+    int64_t step;
     NXTContext nxt, nxt2;
     AVIOContext *bc = s->pb;
 
-    ret = avio_size(bc);
+    step = avio_size(bc);
 
-    if (ret < 0)
-        goto fail;
+    if (step < 0) {
+      return step;
+    }
 
-    step = ret > 0 ? ret / 2 : 1e11;
+    step /= 2;
 
-    memset(&nxt, 0, sizeof(NXTContext));
+    nxt.index = -1;
 
     while (step >= 4096) {
         ret = nxt_seek_fwd(s, &nxt2, nxt.position + nxt_floor(step));
@@ -255,10 +249,7 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
         }
     }
 
-    return avio_seek(bc, nxt.position, SEEK_SET);
-
-fail:
-    return ret;
+    return nxt.index == -1 ? -1 : avio_seek(bc, nxt.position, SEEK_SET);
 }
 
 AVInputFormat ff_nxt_demuxer = {
