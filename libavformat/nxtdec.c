@@ -123,6 +123,8 @@ static int nxt_read_header(AVFormatContext *s)
         avio_seek(bc, nxt->position + 4096, SEEK_SET);
     }
 
+    st->start_time = nxt->pts;
+
     switch (nxt->format)
     {
     case DNXHD_120_1080i50:
@@ -141,7 +143,6 @@ static int nxt_read_header(AVFormatContext *s)
 
         st->time_base.num = 1;
         st->time_base.den = 25;
-        st->start_time = nxt->pts;
 
         return 0;
     case PCM_S32LE_48000c8:
@@ -156,8 +157,6 @@ static int nxt_read_header(AVFormatContext *s)
 
         st->time_base.num = 1;
         st->time_base.den = 48000;
-        st->start_time = nxt->pts;
-        // st->duration =
 
         return 0;
     case DNXHD_115_720p50:
@@ -171,13 +170,11 @@ static int nxt_read_header(AVFormatContext *s)
         st->codecpar->width = 1280;
         st->codecpar->height = 720;
 
-        st->avg_frame_rate.num = 50;
-        st->avg_frame_rate.den = 1;
-
         st->time_base.num = 1;
         st->time_base.den = 50;
-        st->start_time = nxt->pts;
-        // st->duration =
+
+        st->avg_frame_rate.num = 50;
+        st->avg_frame_rate.den = 1;
 
         return 0;
       default:
@@ -231,7 +228,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     if (ret == pkt->size) {
         memcpy(nxt, pkt->data + nxt->next - 4096, sizeof(NXTContext));
-    } else if (ret == size && avio_feof(bc)) {
+    } else if (ret == size) {
         memset(nxt, 0, sizeof(NXTContext));
     } else {
         ret = -1;
