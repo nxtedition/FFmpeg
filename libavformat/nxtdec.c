@@ -86,7 +86,7 @@ static int nxt_read_header(AVFormatContext *s)
     AVStream *st = NULL;
     AVIOContext *bc = s->pb;
 
-    ret = avio_read(bc, (char*)nxt, 4096);
+    ret = avio_read(bc, (char*)nxt, sizeof(NXTContext));
 
     if (ret < 0)
         return ret;
@@ -119,9 +119,9 @@ static int nxt_read_header(AVFormatContext *s)
         }
 
         st->duration = nxt1.pts - nxt->pts;
-
-        avio_seek(bc, nxt->position + 4096, SEEK_SET);
     }
+
+    avio_seek(bc, nxt->position + 4096, SEEK_SET);
 
     st->start_time = nxt->pts;
 
