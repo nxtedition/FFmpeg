@@ -24,6 +24,7 @@
 #include "bytestream.h"
 #include "internal.h"
 #include "libavutil/colorspace.h"
+#include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
 
 #define DVBSUB_PAGE_SEGMENT     0x10
@@ -1102,9 +1103,9 @@ static int dvbsub_parse_clut_segment(AVCodecContext *avctx,
                 return AVERROR_INVALIDDATA;
         }
 
-        if (depth & 0x80)
+        if (depth & 0x80 && entry_id < 4)
             clut->clut4[entry_id] = RGBA(r,g,b,255 - alpha);
-        else if (depth & 0x40)
+        else if (depth & 0x40 && entry_id < 16)
             clut->clut16[entry_id] = RGBA(r,g,b,255 - alpha);
         else if (depth & 0x20)
             clut->clut256[entry_id] = RGBA(r,g,b,255 - alpha);
@@ -1127,6 +1128,7 @@ static int dvbsub_parse_region_segment(AVCodecContext *avctx,
     DVBSubObject *object;
     DVBSubObjectDisplay *display;
     int fill;
+    int ret;
 
     if (buf_size < 10)
         return AVERROR_INVALIDDATA;
@@ -1154,6 +1156,16 @@ static int dvbsub_parse_region_segment(AVCodecContext *avctx,
     buf += 2;
     region->height = AV_RB16(buf);
     buf += 2;
+
+    ret = av_image_check_size2(region->width, region->height, avctx->max_pixels, AV_PIX_FMT_PAL8, 0, avctx);
+    if (ret >= 0 && region->width * region->height * 2 > 320 * 1024 * 8) {
+        ret = AVERROR_INVALIDDATA;
+        av_log(avctx, AV_LOG_ERROR, "Pixel buffer memory constraint violated\n");
+    }
+    if (ret < 0) {
+        region->width= region->height= 0;
+        return ret;
+    }
 
     if (region->width * region->height != region->buf_size) {
         av_free(region->pbuf);
@@ -1290,6 +1302,15 @@ static int dvbsub_parse_page_segment(AVCodecContext *avctx,
         region_id = *buf++;
         buf += 1;
 
+        display = ctx->display_list;
+        while (display && display->region_id != region_id) {
+            display = display->next;
+        }
+        if (display) {
+            av_log(avctx, AV_LOG_ERROR, "duplicate region\n");
+            break;
+        }
+
         display = tmp_display_list;
         tmp_ptr = &tmp_display_list;
 
@@ -1332,7 +1353,7 @@ static int dvbsub_parse_page_segment(AVCodecContext *avctx,
 
 
 #ifdef DEBUG
-static void png_save(const char *filename, uint32_t *bitmap, int w, int h)
+static void png_save(DVBSubContext *ctx, const char *filename, uint32_t *bitmap, int w, int h)
 {
     int x, y, v;
     FILE *f;
@@ -1382,13 +1403,13 @@ static void png_save(const char *filename, uint32_t *bitmap, int w, int h)
 
     snprintf(command, sizeof(command), "pnmtopng -alpha %s %s > %s.png 2> /dev/null", fname2, fname, filename);
     if (system(command) != 0) {
-        fprintf(stderr, "Error running pnmtopng\n");
+        av_log(ctx, AV_LOG_ERROR, "Error running pnmtopng\n");
         return;
     }
 
     snprintf(command, sizeof(command), "rm %s %s", fname, fname2);
     if (system(command) != 0) {
-        fprintf(stderr, "Error removing %s and %s\n", fname, fname2);
+        av_log(ctx, AV_LOG_ERROR, "Error removing %s and %s\n", fname, fname2);
         return;
     }
 }
@@ -1486,7 +1507,7 @@ static int save_display_set(DVBSubContext *ctx)
 
         snprintf(filename, sizeof(filename), "dvbs.%d", fileno_index);
 
-        png_save(filename, pbuf, width, height);
+        png_save(ctx, filename, pbuf, width, height);
 
         av_freep(&pbuf);
     }

@@ -53,7 +53,7 @@
 /**
  * A fragment of audio waveform
  */
-typedef struct {
+typedef struct AudioFragment {
     // index of the first sample of this fragment in the overall waveform;
     // 0: input sample position
     // 1: output sample position
@@ -84,7 +84,7 @@ typedef enum {
 /**
  * Filter state machine
  */
-typedef struct {
+typedef struct ATempoContext {
     const AVClass *class;
 
     // ring-buffer of input samples, necessary because some times
@@ -1090,8 +1090,10 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *src_buffer)
     while (src < src_end) {
         if (!atempo->dst_buffer) {
             atempo->dst_buffer = ff_get_audio_buffer(outlink, n_out);
-            if (!atempo->dst_buffer)
+            if (!atempo->dst_buffer) {
+                av_frame_free(&src_buffer);
                 return AVERROR(ENOMEM);
+            }
             av_frame_copy_props(atempo->dst_buffer, src_buffer);
 
             atempo->dst = atempo->dst_buffer->data[0];
@@ -1146,6 +1148,8 @@ static int request_frame(AVFilterLink *outlink)
 
             if (n_out) {
                 ret = push_samples(atempo, outlink, n_out);
+                if (ret < 0)
+                    return ret;
             }
         }
 

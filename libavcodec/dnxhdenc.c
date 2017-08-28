@@ -362,13 +362,6 @@ fail:
     return AVERROR(ENOMEM);
 }
 
-static int dnxhd_get_hr_frame_size(const CIDEntry* profile, int mb_num)
-{
-    int result = mb_num * profile->packet_scale.num / profile->packet_scale.den;
-    result = (result + 2048) / 4096 * 4096;
-    return FFMAX(result, 8192);
-}
-
 static av_cold int dnxhd_encode_init(AVCodecContext *avctx)
 {
     DNXHDEncContext *ctx = avctx->priv_data;
@@ -483,8 +476,9 @@ static av_cold int dnxhd_encode_init(AVCodecContext *avctx)
     ctx->m.mb_num = ctx->m.mb_height * ctx->m.mb_width;
 
     if (ctx->cid_table->frame_size == DNXHD_VARIABLE) {
-        ctx->frame_size = dnxhd_get_hr_frame_size(ctx->cid_table,
-                                                  ctx->m.mb_num);
+        ctx->frame_size = ff_dnxhd_get_hr_frame_size(ctx->cid,
+                                                     avctx->width, avctx->height);
+        av_assert0(ctx->frame_size >= 0);
         ctx->coding_unit_size = ctx->frame_size;
     } else {
         ctx->frame_size = ctx->cid_table->frame_size;
@@ -532,9 +526,11 @@ FF_DISABLE_DEPRECATION_WARNINGS
 FF_ENABLE_DEPRECATION_WARNINGS
 #endif
 
-    if (avctx->thread_count > MAX_THREADS) {
-        av_log(avctx, AV_LOG_ERROR, "too many threads\n");
-        return AVERROR(EINVAL);
+    if (avctx->active_thread_type == FF_THREAD_SLICE) {
+        if (avctx->thread_count > MAX_THREADS) {
+            av_log(avctx, AV_LOG_ERROR, "too many threads\n");
+            return AVERROR(EINVAL);
+        }
     }
 
     if (avctx->qmax <= 1) {
@@ -543,9 +539,11 @@ FF_ENABLE_DEPRECATION_WARNINGS
     }
 
     ctx->thread[0] = ctx;
-    for (i = 1; i < avctx->thread_count; i++) {
-        ctx->thread[i] = av_malloc(sizeof(DNXHDEncContext));
-        memcpy(ctx->thread[i], ctx, sizeof(DNXHDEncContext));
+    if (avctx->active_thread_type == FF_THREAD_SLICE) {
+        for (i = 1; i < avctx->thread_count; i++) {
+            ctx->thread[i] = av_malloc(sizeof(DNXHDEncContext));
+            memcpy(ctx->thread[i], ctx, sizeof(DNXHDEncContext));
+        }
     }
 
     return 0;
@@ -582,7 +580,7 @@ static int dnxhd_write_header(AVCodecContext *avctx, uint8_t *buf)
 
     buf[0x167] = 0x02; // reserved
     AV_WB16(buf + 0x16a, ctx->m.mb_height * 4 + 4); // MSIPS
-    buf[0x16d] = ctx->m.mb_height; // Ns
+    AV_WB16(buf + 0x16c, ctx->m.mb_height); // Ns
     buf[0x16f] = 0x10; // reserved
 
     ctx->msip = buf + 0x170;
@@ -1397,7 +1395,7 @@ AVCodec ff_dnxhd_encoder = {
     .init           = dnxhd_encode_init,
     .encode2        = dnxhd_encode_picture,
     .close          = dnxhd_encode_end,
-    .capabilities   = AV_CODEC_CAP_SLICE_THREADS,
+    .capabilities   = AV_CODEC_CAP_SLICE_THREADS | AV_CODEC_CAP_FRAME_THREADS | AV_CODEC_CAP_INTRA_ONLY,
     .pix_fmts       = (const enum AVPixelFormat[]) {
         AV_PIX_FMT_YUV422P,
         AV_PIX_FMT_YUV422P10,

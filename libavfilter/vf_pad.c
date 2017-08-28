@@ -173,8 +173,13 @@ static int config_input(AVFilterLink *inlink)
         goto eval_fail;
     s->x = var_values[VAR_X] = res;
 
+    if (s->x < 0 || s->x + inlink->w > s->w)
+        s->x = var_values[VAR_X] = (s->w - inlink->w) / 2;
+    if (s->y < 0 || s->y + inlink->h > s->h)
+        s->y = var_values[VAR_Y] = (s->h - inlink->h) / 2;
+
     /* sanity check params */
-    if (s->w < 0 || s->h < 0 || s->x < 0 || s->y < 0) {
+    if (s->w < 0 || s->h < 0) {
         av_log(ctx, AV_LOG_ERROR, "Negative values are not acceptable.\n");
         return AVERROR(EINVAL);
     }

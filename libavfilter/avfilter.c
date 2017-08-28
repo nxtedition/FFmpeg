@@ -53,7 +53,7 @@ void ff_tlog_ref(void *ctx, AVFrame *ref, int end)
             "ref[%p buf:%p data:%p linesize[%d, %d, %d, %d] pts:%"PRId64" pos:%"PRId64,
             ref, ref->buf, ref->data[0],
             ref->linesize[0], ref->linesize[1], ref->linesize[2], ref->linesize[3],
-            ref->pts, av_frame_get_pkt_pos(ref));
+            ref->pts, ref->pkt_pos);
 
     if (ref->width) {
         ff_tlog(ctx, " a:%d/%d s:%dx%d i:%c iskey:%d type:%c",
@@ -1143,7 +1143,7 @@ int ff_filter_frame(AVFilterLink *link, AVFrame *frame)
             av_log(link->dst, AV_LOG_ERROR, "Format change is not supported\n");
             goto error;
         }
-        if (av_frame_get_channels(frame) != link->channels) {
+        if (frame->channels != link->channels) {
             av_log(link->dst, AV_LOG_ERROR, "Channel count change is not supported\n");
             goto error;
         }
@@ -1191,7 +1191,7 @@ static int take_samples(AVFilterLink *link, unsigned min, unsigned max,
        called with enough samples. */
     av_assert1(samples_ready(link, link->min_samples));
     frame0 = frame = ff_framequeue_peek(&link->fifo, 0);
-    if (frame->nb_samples >= min && frame->nb_samples < max) {
+    if (!link->fifo.samples_skipped && frame->nb_samples >= min && frame->nb_samples <= max) {
         *rframe = ff_framequeue_take(&link->fifo);
         return 0;
     }
@@ -1303,8 +1303,6 @@ static int forward_status_change(AVFilterContext *filter, AVFilterLink *in)
     ff_filter_set_ready(filter, 200);
     return 0;
 }
-
-#define FFERROR_NOT_READY FFERRTAG('N','R','D','Y')
 
 static int ff_filter_activate_default(AVFilterContext *filter)
 {
@@ -1522,6 +1520,12 @@ int ff_inlink_consume_frame(AVFilterLink *link, AVFrame **rframe)
     *rframe = NULL;
     if (!ff_inlink_check_available_frame(link))
         return 0;
+
+    if (link->fifo.samples_skipped) {
+        frame = ff_framequeue_peek(&link->fifo, 0);
+        return ff_inlink_consume_samples(link, frame->nb_samples, frame->nb_samples, rframe);
+    }
+
     frame = ff_framequeue_take(&link->fifo);
     consume_update(link, frame);
     *rframe = frame;
@@ -1585,7 +1589,7 @@ int ff_inlink_make_frame_writable(AVFilterLink *link, AVFrame **rframe)
     case AVMEDIA_TYPE_AUDIO:
         av_samples_copy(out->extended_data, frame->extended_data,
                         0, 0, frame->nb_samples,
-                        av_frame_get_channels(frame),
+                        frame->channels,
                         frame->format);
         break;
     default:
@@ -1616,7 +1620,7 @@ int ff_inlink_evaluate_timeline_at_frame(AVFilterLink *link, const AVFrame *fram
 {
     AVFilterContext *dstctx = link->dst;
     int64_t pts = frame->pts;
-    int64_t pos = av_frame_get_pkt_pos(frame);
+    int64_t pos = frame->pkt_pos;
 
     if (!dstctx->enable_str)
         return 1;

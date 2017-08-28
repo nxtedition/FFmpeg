@@ -148,7 +148,7 @@ static AVFrame *do_psnr(AVFilterContext *ctx, AVFrame *main,
     PSNRContext *s = ctx->priv;
     double comp_mse[4], mse = 0;
     int j, c;
-    AVDictionary **metadata = avpriv_frame_get_metadatap(main);
+    AVDictionary **metadata = &main->metadata;
 
     compute_images_mse(s, (const uint8_t **)main->data, main->linesize,
                           (const uint8_t **)ref->data, ref->linesize,
@@ -252,7 +252,7 @@ static av_cold int init(AVFilterContext *ctx)
 static int query_formats(AVFilterContext *ctx)
 {
     static const enum AVPixelFormat pix_fmts[] = {
-        AV_PIX_FMT_GRAY8, AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12, AV_PIX_FMT_GRAY16,
+        AV_PIX_FMT_GRAY8, AV_PIX_FMT_GRAY9, AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12, AV_PIX_FMT_GRAY16,
 #define PF_NOALPHA(suf) AV_PIX_FMT_YUV420##suf,  AV_PIX_FMT_YUV422##suf,  AV_PIX_FMT_YUV444##suf
 #define PF_ALPHA(suf)   AV_PIX_FMT_YUVA420##suf, AV_PIX_FMT_YUVA422##suf, AV_PIX_FMT_YUVA444##suf
 #define PF(suf)         PF_NOALPHA(suf), PF_ALPHA(suf)

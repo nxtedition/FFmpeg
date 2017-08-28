@@ -58,7 +58,7 @@ typedef struct DNXHDContext {
     unsigned int width, height;
     enum AVPixelFormat pix_fmt;
     unsigned int mb_width, mb_height;
-    uint32_t mb_scan_index[256];
+    uint32_t mb_scan_index[512];
     int data_offset;                    // End of mb_scan_index, where macroblocks start
     int cur_field;                      ///< current interlaced field
     VLC ac_vlc, dc_vlc, run_vlc;
@@ -285,7 +285,7 @@ static int dnxhd_decode_header(DNXHDContext *ctx, AVFrame *frame,
     }
 
     ctx->mb_width  = (ctx->width + 15)>> 4;
-    ctx->mb_height = buf[0x16d];
+    ctx->mb_height = AV_RB16(buf + 0x16c);
 
     if ((ctx->height + 15) >> 4 == ctx->mb_height && frame->interlaced_frame)
         ctx->height <<= 1;
@@ -298,13 +298,17 @@ static int dnxhd_decode_header(DNXHDContext *ctx, AVFrame *frame,
     if (header_prefix == DNXHD_HEADER_HR2) {
         ctx->data_offset = 0x170 + (ctx->mb_height << 2);
     } else {
-        if (ctx->mb_height > 68 ||
-            (ctx->mb_height << frame->interlaced_frame) > (ctx->height + 15) >> 4) {
+        if (ctx->mb_height > 68) {
             av_log(ctx->avctx, AV_LOG_ERROR,
                    "mb height too big: %d\n", ctx->mb_height);
             return AVERROR_INVALIDDATA;
         }
         ctx->data_offset = 0x280;
+    }
+    if ((ctx->mb_height << frame->interlaced_frame) > (ctx->height + 15) >> 4) {
+        av_log(ctx->avctx, AV_LOG_ERROR,
+                "mb height too big: %d\n", ctx->mb_height);
+        return AVERROR_INVALIDDATA;
     }
 
     if (buf_size < ctx->data_offset) {
@@ -313,7 +317,11 @@ static int dnxhd_decode_header(DNXHDContext *ctx, AVFrame *frame,
         return AVERROR_INVALIDDATA;
     }
 
-    av_assert0((unsigned)ctx->mb_height <= FF_ARRAY_ELEMS(ctx->mb_scan_index));
+    if (ctx->mb_height > FF_ARRAY_ELEMS(ctx->mb_scan_index)) {
+        av_log(ctx->avctx, AV_LOG_ERROR,
+               "mb_height too big (%d > %"SIZE_SPECIFIER").\n", ctx->mb_height, FF_ARRAY_ELEMS(ctx->mb_scan_index));
+        return AVERROR_INVALIDDATA;
+    }
 
     for (i = 0; i < ctx->mb_height; i++) {
         ctx->mb_scan_index[i] = AV_RB32(buf + 0x170 + (i << 2));

@@ -149,7 +149,6 @@ typedef struct VAAPIEncodeH265MiscSequenceParams {
 typedef struct VAAPIEncodeH265MiscSliceParams {
     // Slice segments.
     char first_slice_segment_in_pic_flag;
-    unsigned int slice_segment_address;
 
     // Short-term reference picture sets.
     char short_term_ref_pic_set_sps_flag;
@@ -586,7 +585,7 @@ static void vaapi_encode_h265_write_slice_header2(PutBitContext *pbc,
         if (vpic->pic_fields.bits.dependent_slice_segments_enabled_flag)
             u(1, vslice_field(dependent_slice_segment_flag));
         u(av_log2((priv->ctu_width * priv->ctu_height) - 1) + 1,
-          mslice_var(slice_segment_address));
+          vslice_var(slice_segment_address));
     }
     if (!vslice->slice_fields.bits.dependent_slice_segment_flag) {
         for (i = 0; i < mseq->num_extra_slice_header_bits; i++)
@@ -832,8 +831,8 @@ static int vaapi_encode_h265_init_sequence_params(AVCodecContext *avctx)
             vseq->vui_time_scale        = avctx->time_base.den;
         }
 
-        vseq->intra_period     = ctx->p_per_i * (ctx->b_per_p + 1);
-        vseq->intra_idr_period = vseq->intra_period;
+        vseq->intra_period     = avctx->gop_size;
+        vseq->intra_idr_period = avctx->gop_size;
         vseq->ip_period        = ctx->b_per_p + 1;
     }
 

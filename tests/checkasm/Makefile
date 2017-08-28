@@ -5,6 +5,7 @@ AVCODECOBJS-$(CONFIG_BLOCKDSP)          += blockdsp.o
 AVCODECOBJS-$(CONFIG_BSWAPDSP)          += bswapdsp.o
 AVCODECOBJS-$(CONFIG_FLACDSP)           += flacdsp.o
 AVCODECOBJS-$(CONFIG_FMTCONVERT)        += fmtconvert.o
+AVCODECOBJS-$(CONFIG_G722DSP)           += g722dsp.o
 AVCODECOBJS-$(CONFIG_H264DSP)           += h264dsp.o
 AVCODECOBJS-$(CONFIG_H264PRED)          += h264pred.o
 AVCODECOBJS-$(CONFIG_H264QPEL)          += h264qpel.o
@@ -13,6 +14,8 @@ AVCODECOBJS-$(CONFIG_VP8DSP)            += vp8dsp.o
 AVCODECOBJS-$(CONFIG_VIDEODSP)          += videodsp.o
 
 # decoders/encoders
+AVCODECOBJS-$(CONFIG_AAC_DECODER)       += aacpsdsp.o \
+                                           sbrdsp.o
 AVCODECOBJS-$(CONFIG_ALAC_DECODER)      += alacdsp.o
 AVCODECOBJS-$(CONFIG_DCA_DECODER)       += synth_filter.o
 AVCODECOBJS-$(CONFIG_JPEG2000_DECODER)  += jpeg2000dsp.o
@@ -29,10 +32,14 @@ AVFILTEROBJS-$(CONFIG_COLORSPACE_FILTER) += vf_colorspace.o
 
 CHECKASMOBJS-$(CONFIG_AVFILTER) += $(AVFILTEROBJS-yes)
 
+AVUTILOBJS                              += fixed_dsp.o
+AVUTILOBJS                              += float_dsp.o
+
+CHECKASMOBJS-$(CONFIG_AVUTIL)  += $(AVUTILOBJS)
 
 CHECKASMOBJS-$(ARCH_AARCH64)            += aarch64/checkasm.o
 CHECKASMOBJS-$(HAVE_ARMV5TE_EXTERNAL)   += arm/checkasm.o
-CHECKASMOBJS-$(HAVE_YASM)               += x86/checkasm.o
+CHECKASMOBJS-$(HAVE_X86ASM)             += x86/checkasm.o
 
 CHECKASMOBJS += $(CHECKASMOBJS-yes) checkasm.o
 CHECKASMOBJS := $(sort $(CHECKASMOBJS:%=tests/checkasm/%))
@@ -47,7 +54,7 @@ tests/checkasm/checkasm.o: CFLAGS += -Umain
 
 CHECKASM := tests/checkasm/checkasm$(EXESUF)
 
-$(CHECKASM): $(EXEOBJS) $(CHECKASMOBJS) $(FF_STATIC_DEP_LIBS)
+$(CHECKASM): $(CHECKASMOBJS) $(FF_STATIC_DEP_LIBS)
 	$(LD) $(LDFLAGS) $(LDEXEFLAGS) $(LD_O) $(CHECKASMOBJS) $(FF_STATIC_DEP_LIBS) $(EXTRALIBS)
 
 checkasm: $(CHECKASM)

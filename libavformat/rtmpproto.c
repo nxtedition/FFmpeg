@@ -341,9 +341,12 @@ static int gen_connect(URLContext *s, RTMPContext *rt)
     ff_amf_write_field_name(&p, "flashVer");
     ff_amf_write_string(&p, rt->flashver);
 
-    if (rt->swfurl) {
+    if (rt->swfurl || rt->swfverify) {
         ff_amf_write_field_name(&p, "swfUrl");
-        ff_amf_write_string(&p, rt->swfurl);
+        if (rt->swfurl)
+            ff_amf_write_string(&p, rt->swfurl);
+        else
+            ff_amf_write_string(&p, rt->swfverify);
     }
 
     ff_amf_write_field_name(&p, "tcUrl");
@@ -2504,7 +2507,7 @@ static int get_packet(URLContext *s, int for_header)
         } else if (rpkt.type == RTMP_PT_METADATA) {
             ret = handle_metadata(rt, &rpkt);
             ff_rtmp_packet_destroy(&rpkt);
-            return 0;
+            return ret;
         }
         ff_rtmp_packet_destroy(&rpkt);
     }

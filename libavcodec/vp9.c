@@ -113,7 +113,7 @@ fail:
 
 static int update_size(AVCodecContext *avctx, int w, int h)
 {
-#define HWACCEL_MAX (CONFIG_VP9_DXVA2_HWACCEL + CONFIG_VP9_D3D11VA_HWACCEL + CONFIG_VP9_VAAPI_HWACCEL)
+#define HWACCEL_MAX (CONFIG_VP9_DXVA2_HWACCEL + CONFIG_VP9_D3D11VA_HWACCEL * 2 + CONFIG_VP9_VAAPI_HWACCEL)
     enum AVPixelFormat pix_fmts[HWACCEL_MAX + 2], *fmtp = pix_fmts;
     VP9Context *s = avctx->priv_data;
     uint8_t *p;
@@ -132,6 +132,7 @@ static int update_size(AVCodecContext *avctx, int w, int h)
 #endif
 #if CONFIG_VP9_D3D11VA_HWACCEL
             *fmtp++ = AV_PIX_FMT_D3D11VA_VLD;
+            *fmtp++ = AV_PIX_FMT_D3D11;
 #endif
 #if CONFIG_VP9_VAAPI_HWACCEL
             *fmtp++ = AV_PIX_FMT_VAAPI;
@@ -458,7 +459,7 @@ static int decode_frame_header(AVCodecContext *avctx,
                 s->bytesperpixel = 1;
                 s->pix_fmt = AV_PIX_FMT_YUV420P;
                 avctx->colorspace = AVCOL_SPC_BT470BG;
-                avctx->color_range = AVCOL_RANGE_JPEG;
+                avctx->color_range = AVCOL_RANGE_MPEG;
             }
             s->s.h.refreshrefmask = get_bits(&s->gb, 8);
             w = get_bits(&s->gb, 16) + 1;

@@ -1,6 +1,7 @@
 /*
  * Blackmagic DeckLink common code
  * Copyright (c) 2013-2014 Ramiro Polla, Luca Barbato, Deti Fliegl
+ * Copyright (c) 2017 Akamai Technologies, Inc.
  *
  * This file is part of FFmpeg.
  *
@@ -24,6 +25,7 @@
 
 #include <DeckLinkAPIVersion.h>
 
+#include "libavutil/thread.h"
 #include "decklink_common_c.h"
 
 class decklink_output_callback;
@@ -37,6 +39,7 @@ typedef struct AVPacketQueue {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     AVFormatContext *avctx;
+    int64_t max_q_size;
 } AVPacketQueue;
 
 struct decklink_ctx {
@@ -89,7 +92,9 @@ struct decklink_ctx {
     int frames_preroll;
     int frames_buffer;
 
-    sem_t semaphore;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int frames_buffer_available_spots;
 
     int channels;
 };

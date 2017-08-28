@@ -48,6 +48,7 @@ DOC_EXAMPLES-$(CONFIG_FILTER_AUDIO_EXAMPLE)      += filter_audio
 DOC_EXAMPLES-$(CONFIG_FILTERING_AUDIO_EXAMPLE)   += filtering_audio
 DOC_EXAMPLES-$(CONFIG_FILTERING_VIDEO_EXAMPLE)   += filtering_video
 DOC_EXAMPLES-$(CONFIG_HTTP_MULTICLIENT_EXAMPLE)  += http_multiclient
+DOC_EXAMPLES-$(CONFIG_HW_DECODE_EXAMPLE)         += hw_decode
 DOC_EXAMPLES-$(CONFIG_METADATA_EXAMPLE)          += metadata
 DOC_EXAMPLES-$(CONFIG_MUXING_EXAMPLE)            += muxing
 DOC_EXAMPLES-$(CONFIG_QSVDEC_EXAMPLE)            += qsvdec
@@ -128,7 +129,7 @@ $(DOC_EXAMPLES:%$(EXESUF)=%.o): | doc/examples
 OBJDIRS += doc/examples
 
 DOXY_INPUT      = $(INSTHEADERS) $(DOC_EXAMPLES:%$(EXESUF)=%.c) $(LIB_EXAMPLES:%$(EXESUF)=%.c)
-DOXY_INPUT_DEPS = $(addprefix $(SRC_PATH)/, $(DOXY_INPUT)) config.mak
+DOXY_INPUT_DEPS = $(addprefix $(SRC_PATH)/, $(DOXY_INPUT)) ffbuild/config.mak
 
 doc/doxy/html: TAG = DOXY
 doc/doxy/html: $(SRC_PATH)/doc/Doxyfile $(SRC_PATH)/doc/doxy-wrapper.sh $(DOXY_INPUT_DEPS)
