@@ -124,8 +124,6 @@ static int nxt_read_header(AVFormatContext *s)
         avio_seek(bc, nxt->position + 4096, SEEK_SET);
     }
 
-    ret = -1;
-
     switch (nxt->format)
     {
     case DNXHD_120_1080i50:
@@ -183,6 +181,9 @@ static int nxt_read_header(AVFormatContext *s)
         // st->duration =
 
         return 0;
+      default:
+        ret = -1;
+        goto fail;
     }
 fail:
     av_free(st);
