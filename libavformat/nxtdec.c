@@ -187,20 +187,78 @@ fail:
     return ret;
 }
 
-static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit)
+#pragma GCC optimize ("O0")
+
+static int64_t nxt_floor(int64_t val)
 {
-    int64_t pos;
-    NXTContext nxt;
+    return (val / 4096) * 4096;
+}
+
+static int64_t nxt_seek_fwd(AVFormatContext *s, NXTContext* nxt, int64_t pos)
+{
+    int ret, end;
     AVIOContext *bc = s->pb;
 
-    for (pos = ((*ppos + 4095) / 4096) * 4096; pos < pos_limit || avio_read(bc, (char*)&nxt, 4096) == 4096; pos += 4096) {
-        if ((nxt.tag & NXT_TAG_MASK) == NXT_TAG) {
-          *ppos = nxt.position;
-          return nxt.pts;
+    end = pos + 4096 * 1024;
+    ret = -1;
+
+    for (; pos < end; pos += 4096) {
+        ret = avio_seek(bc, pos, SEEK_SET);
+
+        if (ret < 0)
+            goto fail;
+
+        ret = avio_read(bc, (char*)nxt, sizeof(NXTContext));
+
+        if (ret < 0)
+            goto fail;
+
+        if (ret < sizeof(NXTContext)) {
+            ret = -1;
+            goto fail;
+        }
+
+        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+          return 0;
         }
     }
 
-    return AV_NOPTS_VALUE;
+fail:
+    return ret;
+}
+
+static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
+{
+    int ret;
+    int64_t pos = 0, step;
+    NXTContext nxt, nxt2;
+    AVIOContext *bc = s->pb;
+
+    ret = avio_size(bc);
+
+    if (ret < 0)
+        goto fail;
+
+    step = ret > 0 ? ret / 2 : 1e11;
+
+    memset(&nxt, 0, sizeof(NXTContext));
+
+    while (step >= 4096) {
+        ret = nxt_seek_fwd(s, &nxt2, nxt.position + nxt_floor(step));
+
+        if (ret < 0 || nxt2.index < nxt.index || nxt2.pts > timestamp) {
+            step /= 2;
+        } else if (nxt2.index == nxt.index) {
+            break;
+        } else {
+            memcpy(&nxt, &nxt2, sizeof(NXTContext));
+        }
+    }
+
+    return avio_seek(bc, nxt.position, SEEK_SET);
+
+fail:
+    return ret;
 }
 
 AVInputFormat ff_nxt_demuxer = {
@@ -209,7 +267,7 @@ AVInputFormat ff_nxt_demuxer = {
     .read_probe     = nxt_probe,
     .read_header    = nxt_read_header,
     .read_packet    = nxt_read_packet,
-    .read_timestamp = nxt_read_timestamp,
+    .read_seek      = nxt_read_seek,
     .extensions     = "nxt",
     .flags          = AVFMT_GENERIC_INDEX,
     .priv_data_size = 4096,
