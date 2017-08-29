@@ -2,6 +2,7 @@
 #include "internal.h"
 #include "avio_internal.h"
 #include "libavutil/avassert.h"
+#include "libavutil/common.h"
 #include "nxt.h"
 
 static int nxt_probe(AVProbeData *p)
@@ -64,6 +65,7 @@ static int nxt_read_header(AVFormatContext *s)
                 return 0;
             } else {
                 memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
+                step = FFMIN(step, size - (nxt1.position - offset) - NXT_ALIGN);
             }
         }
 
@@ -193,13 +195,14 @@ fail:
 static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
     int64_t ret;
-    int64_t step, offset, pos;
+    int64_t step, offset, pos, size;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
 
     pos = avio_tell(bc) - NXT_ALIGN;
-    step = avio_size(bc) - NXT_MAX_FRAME_SIZE;
+    size = avio_size(bc);
+    step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     offset = nxt->position - pos;
 
     while (step >= NXT_ALIGN) {
@@ -216,6 +219,7 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
             return 0;
         } else {
             memcpy(nxt, &nxt2, sizeof(NXTHeader));
+            step = FFMIN(step, size - (nxt1.position - offset) - NXT_ALIGN);
         }
     }
 
