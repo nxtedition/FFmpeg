@@ -20,7 +20,7 @@ static int nxt_probe(AVProbeData *p)
 
 static int nxt_read_header(AVFormatContext *s)
 {
-    int64_t ret, step, pos, size;
+    int64_t ret, step, pos, size, offset;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt1, nxt2;
     AVStream *st = NULL;
@@ -42,11 +42,16 @@ static int nxt_read_header(AVFormatContext *s)
 
     size = avio_size(bc);
 
-    if (step > 0) {
-        pos = avio_tell(bc);
+    if (size > 0) {
+        step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
+        pos = avio_tell(bc) - NXT_ALIGN;
 
-        for (step = size - NXT_MAX_FRAME_SIZE; step >= NXT_ALIGN; step /= 2) {
-            ret = avio_seek(bc, step, SEEK_CUR);
+        memcpy(&nxt1, nxt, sizeof(NXTHeader));
+
+        offset = nxt1.position - pos;
+
+        while (step >= NXT_ALIGN) {
+            ret = avio_seek(bc, (nxt1.position - offset) + nxt_floor(step), SEEK_SET);
 
             if (ret < 0)
                 return ret;
@@ -54,18 +59,17 @@ static int nxt_read_header(AVFormatContext *s)
             ret = nxt_seek_fwd(s, &nxt2);
 
             if (ret < 0) {
-                step = -nxt_abs(step);
-            } else if (nxt2.index != nxt1.index) {
-                step = nxt_abs(step);
-                memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
+                step /= 2;
+            } else if (nxt2.index == nxt1.index) {
+                return 0;
             } else {
-                break;
+                memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
             }
         }
 
         st->duration = nxt1.pts - nxt->pts;
 
-        ret = avio_seek(bc, pos, SEEK_SET);
+        ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
 
         if (ret < 0)
             return ret;
@@ -189,13 +193,16 @@ fail:
 static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
     int64_t ret;
-    int64_t step, pos;
+    int64_t step, offset;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
 
-    for (step = avio_size(bc) - NXT_MAX_FRAME_SIZE; step >= NXT_ALIGN; step /= 2) {
-        ret = avio_seek(bc, step, SEEK_CUR);
+    step = avio_size(bc) - NXT_MAX_FRAME_SIZE;
+    offset = nxt->position - avio_tell(bc) - NXT_ALIGN;
+
+    while (step >= NXT_ALIGN) {
+        ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
 
         if (ret < 0)
             return ret;
@@ -203,12 +210,11 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
         ret = nxt_seek_fwd(s, &nxt2);
 
         if (ret < 0 || nxt2.pts > timestamp) {
-            step = -nxt_abs(step);
-        } else if (nxt2.index != nxt->index) {
-            step = nxt_abs(step);
-            memcpy(nxt, &nxt2, sizeof(NXTHeader));
-        } else {
+            step /= 2;
+        } else if (nxt2.index == nxt->index) {
             return 0;
+        } else {
+            memcpy(nxt, &nxt2, sizeof(NXTHeader));
         }
     }
 
