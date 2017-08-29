@@ -193,13 +193,14 @@ fail:
 static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t timestamp, int flags)
 {
     int64_t ret;
-    int64_t step, offset;
+    int64_t step, offset, pos;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
 
+    pos = avio_tell(bc) - NXT_ALIGN;
     step = avio_size(bc) - NXT_MAX_FRAME_SIZE;
-    offset = nxt->position - avio_tell(bc) - NXT_ALIGN;
+    offset = nxt->position - pos;
 
     while (step >= NXT_ALIGN) {
         ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
@@ -217,6 +218,11 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
             memcpy(nxt, &nxt2, sizeof(NXTHeader));
         }
     }
+
+    ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
+
+    if (ret < 0)
+        return ret;
 
     return -1;
 }
