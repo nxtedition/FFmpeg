@@ -65,7 +65,7 @@ static int nxt_read_header(AVFormatContext *s)
                 return 0;
             } else {
                 memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
-                step = FFMIN(step, size - (nxt1.position - offset) - NXT_ALIGN);
+                step = FFMIN(step, (size - (nxt1.position - offset)) / 2);
             }
         }
 
@@ -219,7 +219,7 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
             return 0;
         } else {
             memcpy(nxt, &nxt2, sizeof(NXTHeader));
-            step = FFMIN(step, size - (nxt->position - offset) - NXT_ALIGN);
+            step = FFMIN(step, (size - (nxt->position - offset)) / 2);
         }
     }
 
