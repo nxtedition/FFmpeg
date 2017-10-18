@@ -3,6 +3,7 @@ FATE_CHECKASM = fate-checkasm-aacpsdsp                                  \
                 fate-checkasm-audiodsp                                  \
                 fate-checkasm-blockdsp                                  \
                 fate-checkasm-bswapdsp                                  \
+                fate-checkasm-exrdsp                                    \
                 fate-checkasm-fixed_dsp                                 \
                 fate-checkasm-flacdsp                                   \
                 fate-checkasm-float_dsp                                 \
@@ -27,7 +28,7 @@ FATE_CHECKASM = fate-checkasm-aacpsdsp                                  \
 
 $(FATE_CHECKASM): tests/checkasm/checkasm$(EXESUF)
 $(FATE_CHECKASM): CMD = run tests/checkasm/checkasm --test=$(@:fate-checkasm-%=%)
-$(FATE_CHECKASM): REF = /dev/null
+$(FATE_CHECKASM): CMP = null
 
 FATE-$(CONFIG_STATIC) += $(FATE_CHECKASM)
 fate-checkasm: $(FATE_CHECKASM)

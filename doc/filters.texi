@@ -311,6 +311,39 @@ See @code{ffmpeg -filters} to view which filters have timeline support.
 
 @c man end FILTERGRAPH DESCRIPTION
 
+@anchor{framesync}
+@chapter Options for filters with several inputs (framesync)
+@c man begin OPTIONS FOR FILTERS WITH SEVERAL INPUTS
+
+Some filters with several inputs support a common set of options.
+These options can only be set by name, not with the short notation.
+
+@table @option
+@item eof_action
+The action to take when EOF is encountered on the secondary input; it accepts
+one of the following values:
+
+@table @option
+@item repeat
+Repeat the last frame (the default).
+@item endall
+End both streams.
+@item pass
+Pass the main input through.
+@end table
+
+@item shortest
+If set to 1, force the output to terminate when the shortest input
+terminates. Default value is 0.
+
+@item repeatlast
+If set to 1, force the filter to extend the last frame of secondary streams
+until the end of the primary stream. A value of 0 disables this behavior.
+Default value is 1.
+@end table
+
+@c man end OPTIONS FOR FILTERS WITH SEVERAL INPUTS
+
 @chapter Audio Filters
 @c man begin AUDIO FILTERS
 
@@ -518,7 +551,6 @@ The filter accepts the following option:
 @table @option
 @item delays
 Set list of delays in milliseconds for each channel separated by '|'.
-At least one delay greater than 0 should be provided.
 Unused delays will be silently ignored. If number of given delays is
 smaller than number of channels all remaining channels will not be delayed.
 If you want to delay exact number of samples, append 'S' to number.
@@ -569,7 +601,7 @@ separated by '|'. Allowed range for each @code{delay} is @code{(0 - 90000.0]}.
 Default is @code{1000}.
 
 @item decays
-Set list of loudnesses of reflected signals separated by '|'.
+Set list of loudness of reflected signals separated by '|'.
 Allowed range for each @code{decay} is @code{(0 - 1.0]}.
 Default is @code{0.5}.
 @end table
@@ -2712,7 +2744,7 @@ The filter accepts the following options:
 Set base delay in milliseconds. Range from 0 to 30. Default value is 0.
 
 @item depth
-Set added swep delay in milliseconds. Range from 0 to 10. Default value is 2.
+Set added sweep delay in milliseconds. Range from 0 to 10. Default value is 2.
 
 @item regen
 Set percentage regeneration (delayed signal feedback). Range from -95 to 95.
@@ -2738,6 +2770,70 @@ Set delay-line interpolation, @var{linear} or @var{quadratic}.
 Default is @var{linear}.
 @end table
 
+@section haas
+Apply Haas effect to audio.
+
+Note that this makes most sense to apply on mono signals.
+With this filter applied to mono signals it give some directionality and
+stretches its stereo image.
+
+The filter accepts the following options:
+
+@table @option
+@item level_in
+Set input level. By default is @var{1}, or 0dB
+
+@item level_out
+Set output level. By default is @var{1}, or 0dB.
+
+@item side_gain
+Set gain applied to side part of signal. By default is @var{1}.
+
+@item middle_source
+Set kind of middle source. Can be one of the following:
+
+@table @samp
+@item left
+Pick left channel.
+
+@item right
+Pick right channel.
+
+@item mid
+Pick middle part signal of stereo image.
+
+@item side
+Pick side part signal of stereo image.
+@end table
+
+@item middle_phase
+Change middle phase. By default is disabled.
+
+@item left_delay
+Set left channel delay. By default is @var{2.05} milliseconds.
+
+@item left_balance
+Set left channel balance. By default is @var{-1}.
+
+@item left_gain
+Set left channel gain. By default is @var{1}.
+
+@item left_phase
+Change left phase. By default is disabled.
+
+@item right_delay
+Set right channel delay. By defaults is @var{2.12} milliseconds.
+
+@item right_balance
+Set right channel balance. By default is @var{1}.
+
+@item right_gain
+Set right channel gain. By default is @var{1}.
+
+@item right_phase
+Change right phase. By default is enabled.
+@end table
+
 @section hdcd
 
 Decodes High Definition Compatible Digital (HDCD) data. A 16-bit PCM stream with
@@ -2755,7 +2851,7 @@ so the resulting 20-bit stream will be truncated back to 16-bit. Use something
 like @command{-acodec pcm_s24le} after the filter to get 24-bit PCM output.
 @example
 ffmpeg -i HDCD16.wav -af hdcd OUT16.wav
-ffmpeg -i HDCD16.wav -af hdcd -acodec pcm_s24le OUT24.wav
+ffmpeg -i HDCD16.wav -af hdcd -c:a pcm_s24le OUT24.wav
 @end example
 
 The filter accepts the following options:
@@ -3654,7 +3750,7 @@ Default is @var{freq}.
 Set custom positions of virtual loudspeakers. Syntax for this option is:
 <CH> <AZIM> <ELEV>[|<CH> <AZIM> <ELEV>|...].
 Each virtual loudspeaker is described with short channel name following with
-azimuth and elevation in degreees.
+azimuth and elevation in degrees.
 Each virtual loudspeaker description is separated by '|'.
 For example to override front left and front right channel positions use:
 'speakers=FL 45 15|FR 345 15'.
@@ -4416,7 +4512,7 @@ Synthesize a voice utterance using the libflite library.
 To enable compilation of this filter you need to configure FFmpeg with
 @code{--enable-libflite}.
 
-Note that the flite library is not thread-safe.
+Note that versions of the flite library prior to 2.0 are not thread-safe.
 
 The filter accepts the following options:
 
@@ -4471,7 +4567,7 @@ ffplay -f lavfi flite=text='No more be grieved for which that thou hast done.'
 @end itemize
 
 For more information about libflite, check:
-@url{http://www.speech.cs.cmu.edu/flite/}
+@url{http://www.festvox.org/flite/}
 
 @section anoisesrc
 
@@ -4949,16 +5045,9 @@ Value of pixel component at current location for first video frame (top layer).
 @item BOTTOM, B
 Value of pixel component at current location for second video frame (bottom layer).
 @end table
-
-@item shortest
-Force termination when the shortest input terminates. Default is
-@code{0}. This option is only defined for the @code{blend} filter.
-
-@item repeatlast
-Continue applying the last bottom frame after the end of the stream. A value of
-@code{0} disable the filter after the last frame of the bottom layer is reached.
-Default is @code{1}. This option is only defined for the @code{blend} filter.
 @end table
+
+The @code{blend} filter also supports the @ref{framesync} options.
 
 @subsection Examples
 
@@ -4967,6 +5056,12 @@ Default is @code{1}. This option is only defined for the @code{blend} filter.
 Apply transition from bottom layer to top layer in first 10 seconds:
 @example
 blend=all_expr='A*(if(gte(T,10),1,T/10))+B*(1-(if(gte(T,10),1,T/10)))'
+@end example
+
+@item
+Apply linear horizontal transition from top layer to bottom layer:
+@example
+blend=all_expr='A*(X/W)+B*(1-X/W)'
 @end example
 
 @item
@@ -4996,7 +5091,7 @@ blend=all_expr='if(gte(T*SH*40+Y,H)*gte((T*40*SW+X)*W/H,W),A,B)'
 @item
 Split diagonally video and shows top and bottom layer on each side:
 @example
-blend=all_expr=if(gt(X,Y*(W/H)),A,B)
+blend=all_expr='if(gt(X,Y*(W/H)),A,B)'
 @end example
 
 @item
@@ -5172,7 +5267,7 @@ the more similar the pixels color is to the key color.
 @item yuv
 Signals that the color passed is already in YUV instead of RGB.
 
-Litteral colors like "green" or "red" don't make sense with this enabled anymore.
+Literal colors like "green" or "red" don't make sense with this enabled anymore.
 This can be used to pass exact YUV values as hexadecimal numbers.
 @end table
 
@@ -5909,6 +6004,24 @@ Apply emboss:
 convolution="-2 -1 0 -1 1 1 0 1 2:-2 -1 0 -1 1 1 0 1 2:-2 -1 0 -1 1 1 0 1 2:-2 -1 0 -1 1 1 0 1 2"
 @end example
 @end itemize
+
+@section convolve
+
+Apply 2D convolution of video stream in frequency domain using second stream
+as impulse.
+
+The filter accepts the following options:
+
+@table @option
+@item planes
+Set which planes to process.
+
+@item impulse
+Set which impulse video frames will be processed, can be @var{first}
+or @var{all}. Default is @var{all}.
+@end table
+
+The @code{convolve} filter also supports the @ref{framesync} options.
 
 @section copy
 
@@ -6780,6 +6893,41 @@ FFmpeg was configured with @code{--enable-opencl}. Default value is 0.
 
 @end table
 
+@section despill
+
+Remove unwanted contamination of foreground colors, caused by reflected color of
+greenscreen or bluescreen.
+
+This filter accepts the following options:
+
+@table @option
+@item type
+Set what type of despill to use.
+
+@item mix
+Set how spillmap will be generated.
+
+@item expand
+Set how much to get rid of still remaining spill.
+
+@item red
+Controls amount of red in spill area.
+
+@item green
+Controls amount of green in spill area.
+Should be -1 for greenscreen.
+
+@item blue
+Controls amount of blue in spill area.
+Should be -1 for bluescreen.
+
+@item brightness
+Controls brightness of spill area, preserving colors.
+
+@item alpha
+Modify alpha from generated spillmap.
+@end table
+
 @section detelecine
 
 Apply an exact inverse of the telecine operation. It requires a predefined
@@ -6865,6 +7013,9 @@ Adjacent pixels will spread out to replace missing pixels.
 
 @item wrap
 Out of range pixels are wrapped so they point to pixels of other side.
+
+@item mirror
+Out of range pixels will be replaced with mirrored pixels.
 @end table
 Default is @samp{smear}.
 
@@ -7892,6 +8043,20 @@ Set the frequency domain weight expression for the 1st chroma plane.
 @item weight_V
 Set the frequency domain weight expression for the 2nd chroma plane.
 
+@item eval
+Set when the expressions are evaluated.
+
+It accepts the following values:
+@table @samp
+@item init
+Only evaluate expressions once during the filter initialization.
+
+@item frame
+Evaluate expressions for each incoming frame.
+@end table
+
+Default value is @samp{init}.
+
 The filter accepts the following variables:
 @item X
 @item Y
@@ -7900,6 +8065,9 @@ The coordinates of the current sample.
 @item W
 @item H
 The width and height of the image.
+
+@item N
+The number of input frame, starting from 0.
 @end table
 
 @subsection Examples
@@ -8501,13 +8669,21 @@ It accepts the following parameters:
 @item fps
 The desired output frame rate. The default is @code{25}.
 
+@item start_time
+Assume the first PTS should be the given value, in seconds. This allows for
+padding/trimming at the start of stream. By default, no assumption is made
+about the first frame's expected PTS, so no padding or trimming is done.
+For example, this could be set to 0 to pad the beginning with duplicates of
+the first frame if a video stream starts after the audio stream or to trim any
+frames with a negative PTS.
+
 @item round
-Rounding method.
+Timestamp (PTS) rounding method.
 
 Possible values are:
 @table @option
 @item zero
-zero round towards 0
+round towards 0
 @item inf
 round away from 0
 @item down
@@ -8519,18 +8695,22 @@ round to nearest
 @end table
 The default is @code{near}.
 
-@item start_time
-Assume the first PTS should be the given value, in seconds. This allows for
-padding/trimming at the start of stream. By default, no assumption is made
-about the first frame's expected PTS, so no padding or trimming is done.
-For example, this could be set to 0 to pad the beginning with duplicates of
-the first frame if a video stream starts after the audio stream or to trim any
-frames with a negative PTS.
+@item eof_action
+Action performed when reading the last frame.
+
+Possible values are:
+@table @option
+@item round
+Use same timestamp rounding method as used for other frames.
+@item pass
+Pass through last frame if input duration has not been reached yet.
+@end table
+The default is @code{round}.
 
 @end table
 
 Alternatively, the options can be specified as a flat string:
-@var{fps}[:@var{round}].
+@var{fps}[:@var{start_time}[:@var{round}]].
 
 See also the @ref{setpts} filter.
 
@@ -9757,6 +9937,8 @@ Enables computing ms_ssim along with vmaf.
 Set the pool method to be used for computing vmaf.
 @end table
 
+This filter also supports the @ref{framesync} options.
+
 For example:
 @example
 ffmpeg -i main.mpg -i ref.mpg -lavfi libvmaf -f null -
@@ -9837,6 +10019,8 @@ Interpolate values using the 8 points defining a cube.
 Interpolate values using a tetrahedron.
 @end table
 @end table
+
+This filter also supports the @ref{framesync} options.
 
 @section lumakey
 
@@ -10381,7 +10565,7 @@ A description of the accepted options follows.
 @item max
 Set the maximum number of consecutive frames which can be dropped (if
 positive), or the minimum interval between dropped frames (if
-negative). If the value is 0, the frame is dropped unregarding the
+negative). If the value is 0, the frame is dropped disregarding the
 number of previous sequentially dropped frames.
 
 Default value is 0.
@@ -10503,7 +10687,7 @@ Can be one of the following:
 @end table
 
 @item nns
-Set the number of neurons in predicctor neural network.
+Set the number of neurons in predictor neural network.
 Can be one of the following:
 
 @table @samp
@@ -10566,7 +10750,7 @@ It accepts the following parameters:
 
 @item pix_fmts
 A '|'-separated list of pixel format names, such as
-apix_fmts=yuv420p|monow|rgb24".
+pix_fmts=yuv420p|monow|rgb24".
 
 @end table
 
@@ -10867,17 +11051,7 @@ the expression is invalid, it is set to a huge value (meaning that the
 overlay will not be displayed within the output visible area).
 
 @item eof_action
-The action to take when EOF is encountered on the secondary input; it accepts
-one of the following values:
-
-@table @option
-@item repeat
-Repeat the last frame (the default).
-@item endall
-End both streams.
-@item pass
-Pass the main input through.
-@end table
+See @ref{framesync}.
 
 @item eval
 Set when the expressions for @option{x}, and @option{y} are evaluated.
@@ -10895,8 +11069,7 @@ evaluate expressions for each incoming frame
 Default value is @samp{frame}.
 
 @item shortest
-If set to 1, force the output to terminate when the shortest input
-terminates. Default value is 0.
+See @ref{framesync}.
 
 @item format
 Set the format for the output video.
@@ -10925,9 +11098,7 @@ automatically pick format
 Default value is @samp{yuv420}.
 
 @item repeatlast
-If set to 1, force the filter to draw the last overlay frame over the
-main input until the end of the stream. A value of 0 disables this
-behavior. Default value is 1.
+See @ref{framesync}.
 @end table
 
 The @option{x}, and @option{y} expressions can contain the following
@@ -10963,6 +11134,8 @@ the position in the file of the input frame, NAN if unknown
 The timestamp, expressed in seconds. It's NAN if the input timestamp is unknown.
 
 @end table
+
+This filter also supports the @ref{framesync} options.
 
 Note that the @var{n}, @var{pos}, @var{t} variables are available only
 when evaluation is done @emph{per frame}, and will evaluate to NAN
@@ -11538,7 +11711,8 @@ can be used to test the monowhite pixel format descriptor definition.
 
 @section pixscope
 
-Display sample values of color channels. Mainly useful for checking color and levels.
+Display sample values of color channels. Mainly useful for checking color
+and levels. Minimum supported resolution is 640x480.
 
 The filters accept the following options:
 
@@ -11902,6 +12076,8 @@ Requires stats_version >= 2. If this is set and stats_version < 2,
 the filter will return an error.
 @end table
 
+This filter also supports the @ref{framesync} options.
+
 The file printed if @var{stats_file} is selected, contains a sequence of
 key/value pairs of the form @var{key}:@var{value} for each compared
 couple of frames.
@@ -12036,7 +12212,7 @@ the following constants:
 1 if index is not 129, 0 otherwise.
 
 @item qp
-Sequentional index starting from -129 to 128.
+Sequential index starting from -129 to 128.
 @end table
 
 @subsection Examples
@@ -13655,6 +13831,8 @@ SSIM of the compared frames for the whole frame.
 Same as above but in dB representation.
 @end table
 
+This filter also supports the @ref{framesync} options.
+
 For example:
 @example
 movie=ref_movie.mpg, setpts=PTS-STARTPTS [main];
@@ -13991,6 +14169,9 @@ correctly scale the fonts if the aspect ratio has been changed.
 @item fontsdir
 Set a directory path containing fonts that can be used by the filter.
 These fonts will be used in addition to whatever the font provider uses.
+
+@item alpha
+Process alpha channel, by default alpha channel is untouched.
 
 @item charenc
 Set subtitles input character encoding. @code{subtitles} filter only. Only
@@ -14555,7 +14736,7 @@ Preserve overall image brightness with a simple curve, using nonlinear
 contrast, which results in flattening details and degrading color accuracy.
 
 @item hable
-Peserve both dark and bright details better than @var{reinhard}, at the cost
+Preserve both dark and bright details better than @var{reinhard}, at the cost
 of slightly darkening everything. Use it when detail preservation is more
 important than color and brightness accuracy.
 
@@ -14898,7 +15079,7 @@ This filter accepts the following options:
 @item threshold
 The filtering strength. The higher, the more filtered the video will be.
 Hard thresholding can use a higher threshold than soft thresholding
-before the video looks overfiltered.
+before the video looks overfiltered. Default value is 2.
 
 @item method
 The filtering method the filter will use.
@@ -14917,13 +15098,15 @@ Scales or nullifies coefficients - intermediary between (more) soft and
 (less) hard thresholding.
 @end table
 
+Default is garrote.
+
 @item nsteps
 Number of times, the wavelet will decompose the picture. Picture can't
 be decomposed beyond a particular point (typically, 8 for a 640x480
-frame - as 2^9 = 512 > 480)
+frame - as 2^9 = 512 > 480). Valid values are integers between 1 and 32. Default value is 6.
 
 @item percent
-Partial of full denoising (limited coefficients shrinking), from 0 to 100.
+Partial of full denoising (limited coefficients shrinking), from 0 to 100. Default value is 85.
 
 @item planes
 A list of the planes to process. By default all planes are processed.
@@ -15399,6 +15582,20 @@ vignette='PI/4+random(1)*PI/50':eval=frame
 @end example
 
 @end itemize
+
+@section vmafmotion
+
+Obtain the average vmaf motion score of a video.
+It is one of the component filters of VMAF.
+
+The obtained average motion score is printed through the logging system.
+
+In the below example the input file @file{ref.mpg} is being processed and score
+is computed.
+
+@example
+ffmpeg -i ref.mpg -lavfi vmafmotion -f null -
+@end example
 
 @section vstack
 Stack input videos vertically.
@@ -16965,7 +17162,8 @@ Specify the red, green, blue and alpha fade. Default values are @code{15},
 Allowed range is @code{[0, 255]}.
 
 @item zoom
-Set the zoom factor. Default value is @code{1}. Allowed range is @code{[1, 10]}.
+Set the zoom factor. Default value is @code{1}. Allowed range is @code{[0, 10]}.
+Values lower than @var{1} will auto adjust zoom factor to maximal possible value.
 
 @item draw
 Set the vectorscope drawing mode.
@@ -17481,7 +17679,7 @@ with AV_LOG_INFO loglevel.
 
 @itemize
 @item
-Print all metadata values for frames with key @code{lavfi.singnalstats.YDIF} with values
+Print all metadata values for frames with key @code{lavfi.signalstats.YDIF} with values
 between 0 and 1.
 @example
 signalstats,metadata=print:key=lavfi.signalstats.YDIF:value=0:function=expr:expr='between(VALUE1,0,1)'
@@ -17539,7 +17737,7 @@ perms/aperms filter can avoid this problem.
 
 @section realtime, arealtime
 
-Slow down filtering to match real time approximatively.
+Slow down filtering to match real time approximately.
 
 These filters will pause the filtering for a variable amount of time to
 match the output rate with the input timestamps.
@@ -17609,7 +17807,7 @@ The PTS of the previously filtered video frame. It's NAN if undefined.
 The PTS of the last previously filtered video frame. It's NAN if undefined.
 
 @item prev_selected_t
-The PTS of the last previously selected video frame. It's NAN if undefined.
+The PTS of the last previously selected video frame, expressed in seconds. It's NAN if undefined.
 
 @item start_pts
 The PTS of the first video frame in the video. It's NAN if undefined.

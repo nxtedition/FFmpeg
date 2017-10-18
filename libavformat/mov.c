@@ -1890,14 +1890,14 @@ static void mov_parse_stsd_video(MOVContext *c, AVIOContext *pb,
         av_dict_set(&st->metadata, "encoder", codec_name, 0);
 
     /* codec_tag YV12 triggers an UV swap in rawdec.c */
-    if (!memcmp(codec_name, "Planar Y'CbCr 8-bit 4:2:0", 25)) {
+    if (!strncmp(codec_name, "Planar Y'CbCr 8-bit 4:2:0", 25)) {
         st->codecpar->codec_tag = MKTAG('I', '4', '2', '0');
         st->codecpar->width &= ~1;
         st->codecpar->height &= ~1;
     }
     /* Flash Media Server uses tag H.263 with Sorenson Spark */
     if (st->codecpar->codec_tag == MKTAG('H','2','6','3') &&
-        !memcmp(codec_name, "Sorenson H263", 13))
+        !strncmp(codec_name, "Sorenson H263", 13))
         st->codecpar->codec_id = AV_CODEC_ID_FLV1;
 
     st->codecpar->bits_per_coded_sample = avio_rb16(pb); /* depth */
@@ -2371,9 +2371,11 @@ static int mov_read_stsd(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     }
 
     if (sc->extradata) {
-        av_log(c->fc, AV_LOG_ERROR, "Duplicate STSD\n");
+        av_log(c->fc, AV_LOG_ERROR,
+               "Duplicate stsd found in this track.\n");
         return AVERROR_INVALIDDATA;
     }
+
     /* Prepare space for hosting multiple extradata. */
     sc->extradata = av_mallocz_array(entries, sizeof(*sc->extradata));
     sc->extradata_size = av_mallocz_array(entries, sizeof(*sc->extradata_size));
@@ -2447,10 +2449,13 @@ static int mov_read_stsc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return 0;
 }
 
-#define mov_stsc_index_valid(index, count) ((index) < (count) - 1)
+static inline int mov_stsc_index_valid(unsigned int index, unsigned int count)
+{
+    return index < count - 1;
+}
 
 /* Compute the samples value for the stsc entry at the given index. */
-static inline int mov_get_stsc_samples(MOVStreamContext *sc, int index)
+static inline int mov_get_stsc_samples(MOVStreamContext *sc, unsigned int index)
 {
     int chunk_count;
 
@@ -2658,15 +2663,11 @@ static int mov_read_stts(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     for (i = 0; i < entries && !pb->eof_reached; i++) {
         int sample_duration;
-        int sample_count;
+        unsigned int sample_count;
 
         sample_count=avio_rb32(pb);
         sample_duration = avio_rb32(pb);
 
-        if (sample_count < 0) {
-            av_log(c->fc, AV_LOG_ERROR, "Invalid sample_count=%d\n", sample_count);
-            return AVERROR_INVALIDDATA;
-        }
         sc->stts_data[i].count= sample_count;
         sc->stts_data[i].duration= sample_duration;
 
@@ -3755,8 +3756,9 @@ static int mov_read_trak(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     c->trak_index = -1;
 
     /* sanity checks */
-    if (sc->chunk_count && (!sc->stts_count || !sc->stsc_count ||
-                            (!sc->sample_size && !sc->sample_count))) {
+    if ((sc->chunk_count && (!sc->stts_count || !sc->stsc_count ||
+                            (!sc->sample_size && !sc->sample_count))) ||
+        (!sc->chunk_count && sc->sample_count)) {
         av_log(c->fc, AV_LOG_ERROR, "stream %d, missing mandatory atoms, broken header\n",
                st->index);
         return 0;
@@ -4284,26 +4286,6 @@ static int mov_read_trun(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     entries = avio_rb32(pb);
     av_log(c->fc, AV_LOG_TRACE, "flags 0x%x entries %u\n", flags, entries);
 
-    /* Always assume the presence of composition time offsets.
-     * Without this assumption, for instance, we cannot deal with a track in fragmented movies that meet the following.
-     *  1) in the initial movie, there are no samples.
-     *  2) in the first movie fragment, there is only one sample without composition time offset.
-     *  3) in the subsequent movie fragments, there are samples with composition time offset. */
-    if (!sc->ctts_count && sc->sample_count)
-    {
-        /* Complement ctts table if moov atom doesn't have ctts atom. */
-        ctts_data = av_fast_realloc(NULL, &sc->ctts_allocated_size, sizeof(*sc->ctts_data) * sc->sample_count);
-        if (!ctts_data)
-            return AVERROR(ENOMEM);
-        /* Don't use a count greater than 1 here since it will leave a gap in
-         * the ctts index which the code below relies on being sequential. */
-        sc->ctts_data = ctts_data;
-        for (i = 0; i < sc->sample_count; i++) {
-            sc->ctts_data[sc->ctts_count].count = 1;
-            sc->ctts_data[sc->ctts_count].duration = 0;
-            sc->ctts_count++;
-        }
-    }
     if ((uint64_t)entries+sc->ctts_count >= UINT_MAX/sizeof(*sc->ctts_data))
         return AVERROR_INVALIDDATA;
     if (flags & MOV_TRUN_DATA_OFFSET)        data_offset        = avio_rb32(pb);
@@ -4364,13 +4346,19 @@ static int mov_read_trun(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             unsigned int size_needed = st->nb_index_entries * sizeof(*sc->ctts_data);
             unsigned int request_size = size_needed > sc->ctts_allocated_size ?
                 FFMAX(size_needed, 2 * sc->ctts_allocated_size) : size_needed;
+            unsigned int old_ctts_size = sc->ctts_allocated_size;
             ctts_data = av_fast_realloc(sc->ctts_data, &sc->ctts_allocated_size, request_size);
             if (!ctts_data) {
                 av_freep(&sc->ctts_data);
                 return AVERROR(ENOMEM);
             }
-
             sc->ctts_data = ctts_data;
+
+            // In case there were samples without ctts entries, ensure they get
+            // zero valued entries. This ensures clips which mix boxes with and
+            // without ctts entries don't pickup uninitialized data.
+            memset((uint8_t*)(sc->ctts_data) + old_ctts_size, 0, sc->ctts_allocated_size - old_ctts_size);
+
             if (ctts_index != old_nb_index_entries) {
                 memmove(sc->ctts_data + ctts_index + 1, sc->ctts_data + ctts_index,
                         sizeof(*sc->ctts_data) * (sc->ctts_count - ctts_index));
@@ -4835,7 +4823,7 @@ static int mov_read_sv3d(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     AVStream *st;
     MOVStreamContext *sc;
-    int size, layout;
+    int size, version, layout;
     int32_t yaw, pitch, roll;
     uint32_t l = 0, t = 0, r = 0, b = 0;
     uint32_t tag, padding = 0;
@@ -4861,7 +4849,13 @@ static int mov_read_sv3d(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         av_log(c->fc, AV_LOG_ERROR, "Missing spherical video header\n");
         return 0;
     }
-    avio_skip(pb, 4); /*  version + flags */
+    version = avio_r8(pb);
+    if (version != 0) {
+        av_log(c->fc, AV_LOG_WARNING, "Unknown spherical version %d\n",
+               version);
+        return 0;
+    }
+    avio_skip(pb, 3); /* flags */
     avio_skip(pb, size - 12); /* metadata_source */
 
     size = avio_rb32(pb);
@@ -4883,7 +4877,13 @@ static int mov_read_sv3d(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         av_log(c->fc, AV_LOG_ERROR, "Missing projection header box\n");
         return 0;
     }
-    avio_skip(pb, 4); /*  version + flags */
+    version = avio_r8(pb);
+    if (version != 0) {
+        av_log(c->fc, AV_LOG_WARNING, "Unknown spherical version %d\n",
+               version);
+        return 0;
+    }
+    avio_skip(pb, 3); /* flags */
 
     /* 16.16 fixed point */
     yaw   = avio_rb32(pb);
@@ -4895,7 +4895,13 @@ static int mov_read_sv3d(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         return AVERROR_INVALIDDATA;
 
     tag = avio_rl32(pb);
-    avio_skip(pb, 4); /*  version + flags */
+    version = avio_r8(pb);
+    if (version != 0) {
+        av_log(c->fc, AV_LOG_WARNING, "Unknown spherical version %d\n",
+               version);
+        return 0;
+    }
+    avio_skip(pb, 3); /* flags */
     switch (tag) {
     case MKTAG('c','b','m','p'):
         layout = avio_rb32(pb);
@@ -4965,7 +4971,8 @@ static int mov_parse_uuid_spherical(MOVStreamContext *sc, AVIOContext *pb, size_
         goto out;
 
     /* Check for mandatory keys and values, try to support XML as best-effort */
-    if (av_stristr(buffer, "<GSpherical:StitchingSoftware>") &&
+    if (!sc->spherical &&
+        av_stristr(buffer, "<GSpherical:StitchingSoftware>") &&
         (val = av_stristr(buffer, "<GSpherical:Spherical>")) &&
         av_stristr(val, "true") &&
         (val = av_stristr(buffer, "<GSpherical:Stitched>")) &&
@@ -4978,7 +4985,7 @@ static int mov_parse_uuid_spherical(MOVStreamContext *sc, AVIOContext *pb, size_
 
         sc->spherical->projection = AV_SPHERICAL_EQUIRECTANGULAR;
 
-        if (av_stristr(buffer, "<GSpherical:StereoMode>")) {
+        if (av_stristr(buffer, "<GSpherical:StereoMode>") && !sc->stereo3d) {
             enum AVStereo3DType mode;
 
             if (av_stristr(buffer, "left-right"))
@@ -6107,6 +6114,13 @@ static int read_tfra(MOVContext *mov, AVIOContext *f)
     }
     for (i = 0; i < index->item_count; i++) {
         int64_t time, offset;
+
+        if (avio_feof(f)) {
+            index->item_count = 0;
+            av_freep(&index->items);
+            return AVERROR_INVALIDDATA;
+        }
+
         if (version == 1) {
             time   = avio_rb64(f);
             offset = avio_rb64(f);
@@ -6375,6 +6389,13 @@ static int mov_read_header(AVFormatContext *s)
         }
     }
     ff_configure_buffers_for_index(s, AV_TIME_BASE);
+
+    for (i = 0; i < mov->fragment_index_count; i++) {
+        MOVFragmentIndex *idx = mov->fragment_index_data[i];
+        for (j = 0; j < idx->item_count; j++)
+            if (idx->items[j].moof_offset <= mov->fragment.moof_offset)
+                idx->items[j].headers_read = 1;
+    }
 
     return 0;
 }
@@ -6646,7 +6667,7 @@ static int mov_seek_stream(AVFormatContext *s, AVStream *st, int64_t timestamp, 
 {
     MOVStreamContext *sc = st->priv_data;
     int sample, time_sample;
-    int i;
+    unsigned int i;
 
     int ret = mov_seek_fragment(s, st, timestamp);
     if (ret < 0)

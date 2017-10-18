@@ -307,8 +307,10 @@ static void get_id3_tag(AVFormatContext *s, int len)
     ID3v2ExtraMeta *id3v2_extra_meta = NULL;
 
     ff_id3v2_read(s, ID3v2_DEFAULT_MAGIC, &id3v2_extra_meta, len);
-    if (id3v2_extra_meta)
+    if (id3v2_extra_meta) {
         ff_id3v2_parse_apic(s, &id3v2_extra_meta);
+        ff_id3v2_parse_chapters(s, &id3v2_extra_meta);
+    }
     ff_id3v2_free_extra_meta(&id3v2_extra_meta);
 }
 
@@ -1609,6 +1611,11 @@ static int asf_build_simple_index(AVFormatContext *s, int stream_index)
             int pktct         = avio_rl16(s->pb);
             int64_t pos       = s->internal->data_offset + s->packet_size * (int64_t)pktnum;
             int64_t index_pts = FFMAX(av_rescale(itime, i, 10000) - asf->hdr.preroll, 0);
+
+            if (avio_feof(s->pb)) {
+                ret = AVERROR_INVALIDDATA;
+                goto end;
+            }
 
             if (pos != last_pos) {
                 av_log(s, AV_LOG_DEBUG, "pktnum:%d, pktct:%d  pts: %"PRId64"\n",

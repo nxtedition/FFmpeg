@@ -140,7 +140,7 @@ static inline void decode_subband_slice_buffered(SnowContext *s, SubBand *b, sli
         v = b->x_coeff[new_index].coeff;
         x = b->x_coeff[new_index++].x;
         while(x < w){
-            register int t= ( (v>>1)*qmul + qadd)>>QEXPSHIFT;
+            register int t= (int)( (v>>1)*(unsigned)qmul + qadd)>>QEXPSHIFT;
             register int u= -(v&1);
             line[x] = (t^u) - u;
 
@@ -394,9 +394,10 @@ static int decode_header(SnowContext *s){
     s->mv_scale       += get_symbol(&s->c, s->header_state, 1);
     s->qbias          += get_symbol(&s->c, s->header_state, 1);
     s->block_max_depth+= get_symbol(&s->c, s->header_state, 1);
-    if(s->block_max_depth > 1 || s->block_max_depth < 0){
+    if(s->block_max_depth > 1 || s->block_max_depth < 0 || s->mv_scale > 256U){
         av_log(s->avctx, AV_LOG_ERROR, "block_max_depth= %d is too large\n", s->block_max_depth);
         s->block_max_depth= 0;
+        s->mv_scale = 0;
         return AVERROR_INVALIDDATA;
     }
     if (FFABS(s->qbias) > 127) {
