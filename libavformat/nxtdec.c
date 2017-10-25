@@ -237,7 +237,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
 
         ret = nxt_seek_fwd(s, &nxt2);
 
-        if (ret < 0 || nxt2.pts > timestamp) {
+        if (ret < 0 || nxt2.pts > pts) {
             step /= 2;
         } else if (nxt2.index == nxt->index) {
             return 0;
