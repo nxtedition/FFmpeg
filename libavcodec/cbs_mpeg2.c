@@ -54,7 +54,7 @@
         xui(width, name, current->name)
 
 #define marker_bit() do { \
-        av_unused int one = 1; \
+        av_unused uint32_t one; \
         CHECK(ff_cbs_read_unsigned(ctx, rw, 1, "marker_bit", &one, 1, 1)); \
     } while (0)
 
@@ -220,7 +220,7 @@ static int cbs_mpeg2_read_unit(CodedBitstreamContext *ctx,
             START(0xb8, MPEG2RawGroupOfPicturesHeader, group_of_pictures_header);
 #undef START
         default:
-            av_log(ctx->log_ctx, AV_LOG_ERROR, "Unknown start code %02x.\n",
+            av_log(ctx->log_ctx, AV_LOG_ERROR, "Unknown start code %"PRIx32".\n",
                    unit->type);
             return AVERROR_INVALIDDATA;
         }

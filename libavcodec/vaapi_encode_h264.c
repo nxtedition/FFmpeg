@@ -211,7 +211,9 @@ static int vaapi_encode_h264_write_extra_header(AVCodecContext *avctx,
 
     if (priv->sei_needed) {
         if (priv->aud_needed) {
-            vaapi_encode_h264_add_nal(avctx, au, &priv->aud);
+            err = vaapi_encode_h264_add_nal(avctx, au, &priv->aud);
+            if (err < 0)
+                goto fail;
             priv->aud_needed = 0;
         }
 
@@ -254,7 +256,7 @@ static int vaapi_encode_h264_write_extra_header(AVCodecContext *avctx,
 
         ff_cbs_fragment_uninit(priv->cbc, au);
 
-        *type = VAEncPackedHeaderH264_SEI;
+        *type = VAEncPackedHeaderRawData;
         return 0;
     } else {
         return AVERROR_EOF;
@@ -439,7 +441,7 @@ static int vaapi_encode_h264_init_sequence_params(AVCodecContext *avctx)
     sps->vui.log2_max_mv_length_horizontal = 16;
     sps->vui.log2_max_mv_length_vertical   = 16;
     sps->vui.max_num_reorder_frames        = (ctx->b_per_p > 0);
-    sps->vui.max_dec_frame_buffering       = vseq->max_num_ref_frames;
+    sps->vui.max_dec_frame_buffering       = sps->max_num_ref_frames;
 
     pps->nal_unit_header.nal_ref_idc = 3;
     pps->nal_unit_header.nal_unit_type = H264_NAL_PPS;
