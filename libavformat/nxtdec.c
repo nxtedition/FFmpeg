@@ -140,7 +140,7 @@ static int nxt_read_header(AVFormatContext *s)
 
         return 0;
       default:
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid format %" PRId64 "\n", nxt->format);
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid format %d\n", nxt->format);
         ret = -1;
         goto fail;
     }
