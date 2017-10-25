@@ -14,22 +14,20 @@
 #define YUV422P_720p50      5
 
 typedef struct NXTHeader {
-  int64_t     tag;
-  int32_t     crc;
-  int64_t     index;
-  int64_t     position;
-  int32_t     next;
-  int32_t     prev;
-
-  int32_t     size;
-  int32_t     flags;
-  int32_t     format;
-  int64_t     pts;
-  int64_t     dts;
-  int64_t     ltc;
-  int32_t     duration;
-
-  char        pad[4005];
+  int64_t tag;
+  int32_t crc;
+  int64_t index;
+  int64_t position;
+  int32_t next;
+  int32_t prev;
+  int32_t size;
+  int32_t flags;
+  int32_t format;
+  int64_t pts;
+  int64_t dts;
+  int64_t ltc;
+  int32_t duration;
+  char    pad[4005];
 } NXTHeader;
 
 _Static_assert(sizeof(NXTHeader) == NXT_ALIGN, "sizeof NXTHeader != NXT_ALIGN");
