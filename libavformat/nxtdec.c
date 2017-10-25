@@ -28,20 +28,27 @@ static int nxt_read_header(AVFormatContext *s)
     AVIOContext *bc = s->pb;
 
     ret = avio_read(bc, (char*)nxt, NXT_ALIGN);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
+        return ret;        
+    }
 
-    if (ret < 0)
-        return ret;
-
-    if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG)
-        return -1;
+    if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag %d\n", nxt->tag);
+        return -1;        
+    }
 
     st = avformat_new_stream(s, NULL);
-
     if (!st) {
-      return AVERROR(ENOMEM);
+        av_log(NULL, AV_LOG_ERROR, "nxt: avformat_new_stream failed");
+        return AVERROR(ENOMEM);
     }
 
     size = avio_size(bc);
+    if (size < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %d\n", size);
+        return ret;
+    }
 
     if (size > 0) {
         step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
@@ -53,12 +60,12 @@ static int nxt_read_header(AVFormatContext *s)
 
         while (step >= NXT_ALIGN) {
             ret = avio_seek(bc, (nxt1.position - offset) + nxt_floor(step), SEEK_SET);
-
-            if (ret < 0)
+            if (ret < 0) {
+                av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
                 return ret;
+            }
 
             ret = nxt_seek_fwd(s, &nxt2);
-
             if (ret < 0) {
                 step /= 2;
             } else if (nxt2.index == nxt1.index) {
@@ -72,9 +79,10 @@ static int nxt_read_header(AVFormatContext *s)
         st->duration = nxt1.pts - nxt->pts;
 
         ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
-
-        if (ret < 0)
+        if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
             return ret;
+        }
     }
 
     st->start_time = nxt->pts;
@@ -132,6 +140,7 @@ static int nxt_read_header(AVFormatContext *s)
 
         return 0;
       default:
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid format %d\n", nxt->fmt);
         ret = -1;
         goto fail;
     }
@@ -148,24 +157,29 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     size = nxt->size;
 
     if (avio_feof(bc)) {
-      return AVERROR_EOF;
+        av_log(NULL, AV_LOG_VERBOSE , "nxt: eof");
+        return AVERROR_EOF;
     }
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag %d\n", nxt->tag);
         return -1;
     }
 
     ret = av_new_packet(pkt, nxt->next);
-
-    if (ret < 0)
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: av_new_packet failed %d\n", ret);
         goto fail;
+    }
 
     ret = avio_read(bc, pkt->data, pkt->size);
-
-    if (ret < 0)
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
         goto fail;
+    }
 
     if (ret < size) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read returned unexpected size %d\n", ret);
         ret = -1;
         goto fail;
     }
@@ -180,6 +194,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     } else if (ret == size) {
         memset(nxt, 0, NXT_ALIGN);
     } else {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read returned unexpected size %d\n", ret);
         ret = -1;
         goto fail;
     }
@@ -201,15 +216,24 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
     AVIOContext *bc = s->pb;
 
     pos = avio_tell(bc) - NXT_ALIGN;
+    if (pos < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %d\n", pos);
+    }
+
     size = avio_size(bc);
+    if (size < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %d\n", size);
+    }
+
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     offset = nxt->position - pos;
 
     while (step >= NXT_ALIGN) {
         ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
-
-        if (ret < 0)
+        if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
             return ret;
+        }
 
         ret = nxt_seek_fwd(s, &nxt2);
 
@@ -224,9 +248,10 @@ static int64_t nxt_read_seek(AVFormatContext *s, int stream_index, int64_t times
     }
 
     ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
-
-    if (ret < 0)
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
         return ret;
+    }
 
     return -1;
 }
