@@ -37,11 +37,6 @@ static int64_t nxt_floor(int64_t val)
     return (val / NXT_ALIGN) * NXT_ALIGN;
 }
 
-static int64_t nxt_abs(int64_t val)
-{
-    return val < 0 ? -val : val;
-}
-
 static int64_t nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
 {
     int i;
