@@ -184,6 +184,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
         goto fail;
     }
 
+    pkt->pos = avio_tell(bc);
     pkt->stream_index = 0;
     pkt->flags |= (nxt->flags & NXT_FLAG_KEY) != 0 ? AV_PKT_FLAG_KEY : 0;
     pkt->duration = nxt->duration;
