@@ -210,8 +210,7 @@ fail:
 
 static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int flags)
 {
-    int64_t ret;
-    int64_t step, offset, pos, size;
+    int64_t ret, step, offset, pos, size;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
