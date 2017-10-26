@@ -100,11 +100,11 @@ static int nxt_read_header(AVFormatContext *s)
         st->codecpar->width = 1920;
         st->codecpar->height = 1080;
 
+        st->time_base.num = 1;
+        st->time_base.den = 2500;
+
         st->avg_frame_rate.num = 25;
         st->avg_frame_rate.den = 1;
-
-        st->time_base.num = 1;
-        st->time_base.den = 25;
 
         return 0;
     case PCM_S32LE_48000c8:
@@ -133,7 +133,7 @@ static int nxt_read_header(AVFormatContext *s)
         st->codecpar->height = 720;
 
         st->time_base.num = 1;
-        st->time_base.den = 50;
+        st->time_base.den = 5000;
 
         st->avg_frame_rate.num = 50;
         st->avg_frame_rate.den = 1;
