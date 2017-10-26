@@ -44,11 +44,12 @@ static int nxt_read_header(AVFormatContext *s)
         return AVERROR(ENOMEM);
     }
 
-    size = avio_size(bc);
-    if (size < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %" PRId64 "\n", size);
+    ret = avio_size(bc);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %" PRId64 "\n", ret);
         return ret;
     }
+    size = ret;
 
     if (size > 0) {
         step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
@@ -215,15 +216,17 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
 
-    pos = avio_tell(bc) - NXT_ALIGN;
-    if (pos < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %" PRId64 "\n", pos);
+    ret = avio_tell(bc);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %" PRId64 "\n", ret);
     }
+    pos = ret - NXT_ALIGN;
 
-    size = avio_size(bc);
-    if (size < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %" PRId64 "\n", size);
+    ret = avio_size(bc);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %" PRId64 "\n", ret);
     }
+    size = ret
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     offset = nxt->position - pos;
