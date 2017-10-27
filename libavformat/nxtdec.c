@@ -72,6 +72,8 @@ static int nxt_read_duration(AVFormatContext *s)
 
 static int nxt_read_header(AVFormatContext *s)
 {
+    av_log(NULL, AV_LOG_VERBOSE, "nxt: nxt_read_header");
+
     int64_t ret;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt1, nxt2;
@@ -227,6 +229,8 @@ fail:
 
 static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int flags)
 {
+    av_log(NULL, AV_LOG_VERBOSE, "nxt: nxt_read_seek");
+
     int64_t ret, step, offset, pos, size;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
@@ -250,13 +254,17 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     while (step >= NXT_ALIGN) {
         ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
         if (ret < 0) {
-            av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %" PRId64 "\n", ret);
-            return ret;
+            step /= 2;
+            continue;
         }
 
         ret = nxt_seek_fwd(s, &nxt2);
+        if (ret < 0) {
+            step /= 2;
+            continue;
+        }
 
-        if (ret < 0 || nxt2.pts > pts) {
+        if (nxt2.pts > pts) {
             step /= 2;
         } else if (nxt2.index == nxt->index) {
             return 0;
