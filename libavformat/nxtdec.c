@@ -131,7 +131,7 @@ static int nxt_read_header(AVFormatContext *s)
     }
 
     ret = nxt_read_duration(s);
-    if (ret < 0) {
+    if (ret <= 0) {
         av_log(NULL, AV_LOG_WARNING, "nxt: nxt_read_duration failed %" PRId64 "\n", ret);
     } else {
         st->duration = ret;
