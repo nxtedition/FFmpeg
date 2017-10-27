@@ -46,13 +46,14 @@ static int nxt_read_duration(AVFormatContext *s)
     while (step >= NXT_ALIGN) {
         ret = avio_seek(bc, (nxt1.position - offset) + nxt_floor(step), SEEK_SET);
         if (ret < 0) {
-            av_log(NULL, AV_LOG_DEBUG, "nxt: avio_seek failed %" PRId64 "\n", ret);
-            return ret;
+            step /= 2;
+            continue;
         }
 
         ret = nxt_seek_fwd(s, &nxt2);
         if (ret < 0) {
             step /= 2;
+            continue;
         } else if (nxt2.index == nxt1.index) {
             break;
         } else {
@@ -263,10 +264,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         ret = nxt_seek_fwd(s, &nxt2);
         if (ret < 0) {
             step /= 2;
-            continue;
-        }
-
-        if (nxt2.pts > pts) {
+        } else if (nxt2.pts > pts) {
             step /= 2;
         } else if (nxt2.index == nxt->index) {
             return 0;
