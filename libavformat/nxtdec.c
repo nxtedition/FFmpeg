@@ -195,7 +195,7 @@ fail:
 
 static int nxt_read_seek_binary(AVFormatContext *s, int stream_index, int pts, int flags)
 {
-    int ret, step, offset, pos, size = 0;
+    int ret, step, offset, size = 0;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
@@ -205,7 +205,7 @@ static int nxt_read_seek_binary(AVFormatContext *s, int stream_index, int pts, i
         av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %d\n", ret);
         return ret;
     }
-    pos = ret - NXT_ALIGN;
+    offset = nxt->position - ret - NXT_ALIGN;
 
     ret = avio_size(bc);
     if (ret < 0) {
@@ -213,9 +213,7 @@ static int nxt_read_seek_binary(AVFormatContext *s, int stream_index, int pts, i
     } else {
         size = ret;
     }
-
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
-    offset = nxt->position - pos;
 
     while (step > NXT_ALIGN) {
         ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
