@@ -53,7 +53,13 @@ static int nxt_read_header(AVFormatContext *s)
 
     if (size > 0) {
         step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
-        pos = avio_tell(bc) - NXT_ALIGN;
+        
+        ret = avio_tell(bc);
+        if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %" PRId64 "\n", ret);
+            return ret;
+        }
+        pos = ret - NXT_ALIGN;
 
         memcpy(&nxt1, nxt, sizeof(NXTHeader));
 
