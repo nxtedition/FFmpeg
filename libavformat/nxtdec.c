@@ -217,12 +217,6 @@ static int nxt_read_seek_binary(AVFormatContext *s, int stream_index, int pts, i
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     offset = nxt->position - pos;
 
-    if (nxt->pts > pts) {
-        // TODO
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: seek backwards is not implemented");
-        return -1;
-    }
-
     while (step > NXT_ALIGN) {
         ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
         if (ret < 0) {
@@ -256,6 +250,16 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     AVIOContext *bc = s->pb;
 
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
+
+    if (nxt->pts == pts) {
+        return 0;
+    }
+
+    if (nxt->pts > pts) {
+        // TODO
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: seek backwards is not implemented");
+        return -1;
+    }
 
     if (bc->seekable & AVIO_SEEKABLE_NORMAL) {
         ret = nxt_read_seek_binary(s, stream_index, pts, flags);
