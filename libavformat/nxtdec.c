@@ -36,7 +36,7 @@ static int64_t nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
         if (ret < 0)
             return ret;
 
-        if (ret < sizeof(NXTHeader))
+        if (ret < NXT_ALIGN)
             return -1;
 
         if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG)
@@ -70,7 +70,7 @@ static int nxt_read_duration(AVFormatContext *s)
     }
     pos = ret - NXT_ALIGN;
 
-    memcpy(&nxt1, nxt, sizeof(NXTHeader));
+    memcpy(&nxt1, nxt, NXT_ALIGN);
 
     offset = nxt1.position - pos;
 
@@ -90,7 +90,7 @@ static int nxt_read_duration(AVFormatContext *s)
         if (nxt2.index == nxt1.index) {
             break;
         } else {
-            memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
+            memcpy(&nxt1, &nxt2, NXT_ALIGN);
             step = FFMIN(step, (size - (nxt1.position - offset)) / 2);
         }
     }
@@ -301,7 +301,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         } else if (nxt2.index == nxt->index) {
             return 0;
         } else {
-            memcpy(nxt, &nxt2, sizeof(NXTHeader));
+            memcpy(nxt, &nxt2, NXT_ALIGN);
             step = FFMIN(step, (size - (nxt->position - offset)) / 2);
         }
     }
