@@ -267,7 +267,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         }
     }
 
-    while (nxt->pts < pts) {
+    while (nxt->pts + nxt->duration < pts) {
         ret = nxt_seek_fwd(s, nxt);
         if (ret < 0) {
             return -1;
