@@ -21,15 +21,14 @@ static int nxt_probe(AVProbeData *p)
 
 static int nxt_read_duration(AVFormatContext *s)
 {
-    int64_t ret, step, pos, size, offset;
+    int64_t ret, step, pos, size = INT64_MAX, offset;
 
     ret = avio_size(bc);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_DEBUG, "nxt: avio_size failed %" PRId64 "\n", ret);
-        return ret;
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %" PRId64 "\n", ret);
+    } else {
+        size = ret;
     }
-
-    size = ret;
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     
@@ -55,7 +54,9 @@ static int nxt_read_duration(AVFormatContext *s)
         if (ret < 0) {
             step /= 2;
             continue;
-        } else if (nxt2.index == nxt1.index) {
+        } 
+        
+        if (nxt2.index == nxt1.index) {
             break;
         } else {
             memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
@@ -235,7 +236,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
 {
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
 
-    int64_t ret, step, offset, pos, size, reset = 0;
+    int64_t ret, step, offset, pos, size = INT64_MAX, reset = 0;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
@@ -248,8 +249,9 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
 
     ret = avio_size(bc);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %" PRId64 "\n", ret);
-        return ret;
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %" PRId64 "\n", ret);
+    } else {
+        size = ret;        
     }
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
@@ -267,7 +269,10 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         ret = nxt_seek_fwd(s, &nxt2);
         if (ret < 0) {
             step /= 2;
-        } else if (nxt2.pts > pts) {
+            continue;
+        } 
+        
+        if (nxt2.pts > pts) {
             step /= 2;
         } else if (nxt2.index == nxt->index) {
             return 0;
