@@ -32,31 +32,4 @@ typedef struct NXTHeader {
 
 _Static_assert(sizeof(NXTHeader) == NXT_ALIGN, "sizeof NXTHeader != NXT_ALIGN");
 
-static int64_t nxt_floor(int64_t val)
-{
-    return (val / NXT_ALIGN) * NXT_ALIGN;
-}
-
-static int64_t nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
-{
-    int i;
-    int64_t ret;
-    AVIOContext *bc = s->pb;
-
-    for (i = 0; i < NXT_MAX_FRAME_SIZE; i += NXT_ALIGN) {
-        ret = avio_read(bc, (char*)nxt, NXT_ALIGN);
-
-        if (ret < 0)
-            return ret;
-
-        if (ret < sizeof(NXTHeader))
-            return -1;
-
-        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG)
-            return 0;
-    }
-
-    return -1;
-}
-
 #endif
