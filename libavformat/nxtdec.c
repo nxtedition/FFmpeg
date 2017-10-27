@@ -230,12 +230,6 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
         goto fail;
     }
 
-    if (ret < size) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read returned unexpected size %" PRId64 "\n", ret);
-        ret = -1;
-        goto fail;
-    }
-
     pkt->pos = avio_tell(bc);
     pkt->stream_index = 0;
     pkt->flags |= (nxt->flags & NXT_FLAG_KEY) != 0 ? AV_PKT_FLAG_KEY : 0;
