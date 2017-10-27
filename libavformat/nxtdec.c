@@ -53,6 +53,10 @@ static int nxt_read_duration(AVFormatContext *s)
     NXTHeader nxt1, nxt2;
     AVIOContext *bc = s->pb;
 
+    if (!(bc->seekable & AVIO_SEEKABLE_NORMAL)) {
+        return -1;
+    }
+
     ret = avio_size(bc);
     if (ret < 0) {
         av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %" PRId64 "\n", ret);
@@ -260,49 +264,51 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
 {
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
 
-    int64_t ret, step, offset, pos, size = INT64_MAX;
+    int64_t ret, step, offset, pos, size = 0;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
 
-    ret = avio_tell(bc);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %" PRId64 "\n", ret);
-    }
-    pos = ret - NXT_ALIGN;
-
-    ret = avio_size(bc);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %" PRId64 "\n", ret);
-    } else {
-        size = ret;
-    }
-
-    step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
-    offset = nxt->position - pos;
-
-    // TODO seek backwards
-
-    while (step > NXT_ALIGN) {
-        ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
+    if (bc->seekable & AVIO_SEEKABLE_NORMAL) {
+        ret = avio_tell(bc);
         if (ret < 0) {
-            step /= 2;
-            continue;
+            av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %" PRId64 "\n", ret);
         }
-
-        ret = nxt_seek_fwd(s, &nxt2);
+        pos = ret - NXT_ALIGN;
+    
+        ret = avio_size(bc);
         if (ret < 0) {
-            step /= 2;
-            continue;
-        }
-        
-        if (nxt2.pts > pts) {
-            step /= 2;
-        } else if (nxt2.index == nxt->index) {
-            return 0;
+            av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %" PRId64 "\n", ret);
         } else {
-            memcpy(nxt, &nxt2, NXT_ALIGN);
-            step = FFMIN(step, (size - (nxt->position - offset)) / 2);
+            size = ret;
+        }
+    
+        step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
+        offset = nxt->position - pos;
+    
+        // TODO seek backwards
+    
+        while (step > NXT_ALIGN) {
+            ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
+            if (ret < 0) {
+                step /= 2;
+                continue;
+            }
+    
+            ret = nxt_seek_fwd(s, &nxt2);
+            if (ret < 0) {
+                step /= 2;
+                continue;
+            }
+            
+            if (nxt2.pts > pts) {
+                step /= 2;
+            } else if (nxt2.index == nxt->index) {
+                return 0;
+            } else {
+                memcpy(nxt, &nxt2, NXT_ALIGN);
+                step = FFMIN(step, (size - (nxt->position - offset)) / 2);
+            }
         }
     }
 
