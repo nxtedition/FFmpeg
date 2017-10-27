@@ -72,7 +72,7 @@ static int nxt_read_duration(AVFormatContext *s)
 
 static int nxt_read_header(AVFormatContext *s)
 {
-    av_log(NULL, AV_LOG_VERBOSE, "nxt: nxt_read_header");
+    av_log(NULL, AV_LOG_VERBOSE, "nxt: read_header \n");
 
     int64_t ret;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
@@ -105,6 +105,8 @@ static int nxt_read_header(AVFormatContext *s)
     }
 
     st->start_time = nxt->pts;
+
+    av_log(NULL, AV_LOG_VERBOSE, "nxt: start_time %" PRId64 "\n", st->start_time);
 
     switch (nxt->format)
     {
@@ -229,7 +231,7 @@ fail:
 
 static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int flags)
 {
-    av_log(NULL, AV_LOG_VERBOSE, "nxt: nxt_read_seek");
+    av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
 
     int64_t ret, step, offset, pos, size;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
