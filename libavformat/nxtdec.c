@@ -68,6 +68,7 @@ static int nxt_read_duration(AVFormatContext *s)
             return ret;
         }
     }
+    return 0;
 }
 
 static int nxt_read_header(AVFormatContext *s)
