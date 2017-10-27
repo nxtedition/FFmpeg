@@ -246,9 +246,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     } else if (ret == nxt->size) {
         memset(nxt, 0, NXT_ALIGN);
     } else {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read returned unexpected size %" PRId64 "\n", ret);
-        ret = -1;
-        goto fail;
+        av_log(NULL, AV_LOG_WARN, "nxt: avio_read returned unexpected size %" PRId64 "\n", ret);
     }
 
     av_shrink_packet(pkt, size);
@@ -278,7 +276,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     if (ret < 0) {
         av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %" PRId64 "\n", ret);
     } else {
-        size = ret;        
+        size = ret;
     }
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
@@ -287,7 +285,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     // TODO seek backwards
 
     while (step > NXT_ALIGN) {
-        ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);         
+        ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
         if (ret < 0) {
             step /= 2;
             continue;
