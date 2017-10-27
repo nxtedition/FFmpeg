@@ -246,6 +246,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     } else if (ret == nxt->size) {
         memset(nxt, 0, NXT_ALIGN);
     } else {
+        memset(nxt, 0, NXT_ALIGN);
         av_log(NULL, AV_LOG_WARN, "nxt: avio_read returned unexpected size %" PRId64 "\n", ret);
     }
 
