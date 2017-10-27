@@ -21,20 +21,21 @@ static int nxt_probe(AVProbeData *p)
 
 static int nxt_read_duration(AVFormatContext *s)
 {
-    int64_t ret, step, pos, size = INT64_MAX, offset;
+    int64_t ret, step, pos, size, offset;
 
     ret = avio_size(bc);
     if (ret < 0) {
         av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %" PRId64 "\n", ret);
-    } else {
-        size = ret;
+        return ret;
     }
+
+    size = ret;
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     
     ret = avio_tell(bc);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_DEBUG, "nxt: avio_tell failed %" PRId64 "\n", ret);
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_tell failed %" PRId64 "\n", ret);
         return ret;
     }
     pos = ret - NXT_ALIGN;
@@ -46,8 +47,8 @@ static int nxt_read_duration(AVFormatContext *s)
     while (step >= NXT_ALIGN) {
         ret = avio_seek(bc, (nxt1.position - offset) + nxt_floor(step), SEEK_SET);
         if (ret < 0) {
-            step /= 2;
-            continue;
+            av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_seek failed %" PRId64 "\n", ret);
+            return ret;
         }
 
         ret = nxt_seek_fwd(s, &nxt2);
@@ -66,7 +67,7 @@ static int nxt_read_duration(AVFormatContext *s)
 
     ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_DEBUG, "nxt: avio_seek failed %" PRId64 "\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %" PRId64 "\n", ret);
         return ret;
     }
 
@@ -236,7 +237,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
 {
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
 
-    int64_t ret, step, offset, pos, size = INT64_MAX, reset = 0;
+    int64_t ret, step, offset, pos, pos2, size = INT64_MAX;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
@@ -264,8 +265,6 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
             continue;
         }
 
-        reset = 1;
-
         ret = nxt_seek_fwd(s, &nxt2);
         if (ret < 0) {
             step /= 2;
@@ -282,7 +281,13 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         }
     }
 
-    if (reset) {
+    ret = avio_tell(bc);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %" PRId64 "\n", ret);
+    }
+    pos2 = ret - NXT_ALIGN;
+
+    if (pos2 != pos) {
         ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %" PRId64 "\n", ret);
