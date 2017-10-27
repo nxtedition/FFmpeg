@@ -19,6 +19,33 @@ static int nxt_probe(AVProbeData *p)
     return 0;
 }
 
+static int64_t nxt_floor(int64_t val)
+{
+    return (val / NXT_ALIGN) * NXT_ALIGN;
+}
+
+static int64_t nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
+{
+    int i;
+    int64_t ret;
+    AVIOContext *bc = s->pb;
+
+    for (i = 0; i < NXT_MAX_FRAME_SIZE; i += NXT_ALIGN) {
+        ret = avio_read(bc, (char*)nxt, NXT_ALIGN);
+
+        if (ret < 0)
+            return ret;
+
+        if (ret < sizeof(NXTHeader))
+            return -1;
+
+        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG)
+            return 0;
+    }
+
+    return -1;
+}
+
 static int nxt_read_duration(AVFormatContext *s)
 {
     int64_t ret, step, pos, size, offset;
@@ -258,8 +285,10 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     offset = nxt->position - pos;
 
-    while (step >= NXT_ALIGN) {
-        ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
+    // TODO seek backwards
+
+    while (step > NXT_ALIGN) {
+        ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);         
         if (ret < 0) {
             step /= 2;
             continue;
@@ -269,7 +298,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         if (ret < 0) {
             step /= 2;
             continue;
-        } 
+        }
         
         if (nxt2.pts > pts) {
             step /= 2;
@@ -281,17 +310,19 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         }
     }
 
-    ret = avio_tell(bc);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %" PRId64 "\n", ret);
-    }
-    pos2 = ret - NXT_ALIGN;
-
-    if (pos2 != pos) {
-        ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
+    while (true) {
+        ret = nxt_seek_fwd(s, &nxt2);
         if (ret < 0) {
-            av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %" PRId64 "\n", ret);
-            return ret;
+            break;
+        }
+
+        // TODO: Should it read past?
+        if (nxt2.pts < pts) {
+            continue;
+        } else if (nxt2.index == nxt->index) {
+            return 0;
+        } else {
+            memcpy(nxt, &nxt2, sizeof(NXTHeader));
         }
     }
 
