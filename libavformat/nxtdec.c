@@ -21,59 +21,58 @@ static int nxt_probe(AVProbeData *p)
 
 static int nxt_read_duration(AVFormatContext *s)
 {
+    int64_t ret, step, pos, size, offset;
+
     ret = avio_size(bc);
-    if (ret < 0) {
+    if (ret <= 0) {
         av_log(NULL, AV_LOG_DEBUG, "nxt: avio_size failed %" PRId64 "\n", ret);
         return ret;
     }
     size = ret;
 
-    if (size > 0) {
-        step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
-        
-        ret = avio_tell(bc);
-        if (ret < 0) {
-            av_log(NULL, AV_LOG_DEBUG, "nxt: avio_tell failed %" PRId64 "\n", ret);
-            return ret;
-        }
-        pos = ret - NXT_ALIGN;
+    step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
+    
+    ret = avio_tell(bc);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_DEBUG, "nxt: avio_tell failed %" PRId64 "\n", ret);
+        return ret;
+    }
+    pos = ret - NXT_ALIGN;
 
-        memcpy(&nxt1, nxt, sizeof(NXTHeader));
+    memcpy(&nxt1, nxt, sizeof(NXTHeader));
 
-        offset = nxt1.position - pos;
+    offset = nxt1.position - pos;
 
-        while (step >= NXT_ALIGN) {
-            ret = avio_seek(bc, (nxt1.position - offset) + nxt_floor(step), SEEK_SET);
-            if (ret < 0) {
-                av_log(NULL, AV_LOG_DEBUG, "nxt: avio_seek failed %" PRId64 "\n", ret);
-                return ret;
-            }
-
-            ret = nxt_seek_fwd(s, &nxt2);
-            if (ret < 0) {
-                step /= 2;
-            } else if (nxt2.index == nxt1.index) {
-                return 0;
-            } else {
-                memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
-                step = FFMIN(step, (size - (nxt1.position - offset)) / 2);
-            }
-        }
-
-        st->duration = nxt1.pts - nxt->pts;
-
-        ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
+    while (step >= NXT_ALIGN) {
+        ret = avio_seek(bc, (nxt1.position - offset) + nxt_floor(step), SEEK_SET);
         if (ret < 0) {
             av_log(NULL, AV_LOG_DEBUG, "nxt: avio_seek failed %" PRId64 "\n", ret);
             return ret;
         }
+
+        ret = nxt_seek_fwd(s, &nxt2);
+        if (ret < 0) {
+            step /= 2;
+        } else if (nxt2.index == nxt1.index) {
+            break;
+        } else {
+            memcpy(&nxt1, &nxt2, sizeof(NXTHeader));
+            step = FFMIN(step, (size - (nxt1.position - offset)) / 2);
+        }
     }
-    return 0;
+
+    ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_DEBUG, "nxt: avio_seek failed %" PRId64 "\n", ret);
+        return ret;
+    }
+
+    return nxt1.pts - nxt->pts;
 }
 
 static int nxt_read_header(AVFormatContext *s)
 {
-    int64_t ret, step, pos, size, offset;
+    int64_t ret;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt1, nxt2;
     AVStream *st = NULL;
@@ -99,6 +98,8 @@ static int nxt_read_header(AVFormatContext *s)
     ret = nxt_read_duration(s);
     if (ret < 0) {
         av_log(NULL, AV_LOG_WARN, "nxt: nxt_read_duration failed %" PRId64 "\n", ret);
+    } else {
+        st->duration = ret;
     }
 
     st->start_time = nxt->pts;
