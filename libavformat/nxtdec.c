@@ -309,19 +309,16 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         }
     }
 
+    // TODO: Should it read past?
     while (true) {
-        ret = nxt_seek_fwd(s, &nxt2);
-        if (ret < 0) {
-            break;
+        // TODO
+        if (nxt->pts > pts) {
+            return 0;
         }
 
-        // TODO: Should it read past?
-        if (nxt2.pts < pts) {
-            continue;
-        } else if (nxt2.index == nxt->index) {
-            return 0;
-        } else {
-            memcpy(nxt, &nxt2, sizeof(NXTHeader));
+        ret = nxt_seek_fwd(s, nxt);
+        if (ret < 0) {
+            break;
         }
     }
 
