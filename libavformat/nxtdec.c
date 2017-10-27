@@ -206,7 +206,10 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     int64_t ret, size;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     AVIOContext *bc = s->pb;
-    size = nxt->size;
+
+    if (nxt->next < nxt->size) {
+        av_log(NULL, AV_LOG_WARN , "nxt: next < size");
+    }
 
     if (avio_feof(bc)) {
         av_log(NULL, AV_LOG_VERBOSE , "nxt: eof");
@@ -236,9 +239,11 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->duration = nxt->duration;
     pkt->pts = nxt->pts;
 
+    size = nxt->size;
+
     if (ret == pkt->size) {
         memcpy(nxt, pkt->data + nxt->next - NXT_ALIGN, NXT_ALIGN);
-    } else if (ret == size) {
+    } else if (ret == nxt->size) {
         memset(nxt, 0, NXT_ALIGN);
     } else {
         av_log(NULL, AV_LOG_ERROR, "nxt: avio_read returned unexpected size %" PRId64 "\n", ret);
