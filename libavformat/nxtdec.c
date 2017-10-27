@@ -249,10 +249,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     ret = avio_size(bc);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %" PRId64 "\n", ret);
-        // TODO: max seek?
-        size = 1e11;
-    } else {
-        size = ret        
+        return ret;
     }
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
