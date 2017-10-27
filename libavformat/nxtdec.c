@@ -49,6 +49,9 @@ static int64_t nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
 static int nxt_read_duration(AVFormatContext *s)
 {
     int64_t ret, step, pos, size, offset;
+    NXTHeader *nxt = (NXTHeader*)s->priv_data;
+    NXTHeader nxt1, nxt2;
+    AVIOContext *bc = s->pb;
 
     ret = avio_size(bc);
     if (ret < 0) {
@@ -107,7 +110,6 @@ static int nxt_read_header(AVFormatContext *s)
 
     int64_t ret;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
-    NXTHeader nxt1, nxt2;
     AVStream *st = NULL;
     AVIOContext *bc = s->pb;
 
@@ -130,7 +132,7 @@ static int nxt_read_header(AVFormatContext *s)
 
     ret = nxt_read_duration(s);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_WARN, "nxt: nxt_read_duration failed %" PRId64 "\n", ret);
+        av_log(NULL, AV_LOG_WARNING, "nxt: nxt_read_duration failed %" PRId64 "\n", ret);
     } else {
         st->duration = ret;
     }
@@ -207,10 +209,6 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     AVIOContext *bc = s->pb;
 
-    if (nxt->next < nxt->size) {
-        av_log(NULL, AV_LOG_WARN , "nxt: next < size");
-    }
-
     if (avio_feof(bc)) {
         av_log(NULL, AV_LOG_VERBOSE , "nxt: eof");
         return AVERROR_EOF;
@@ -247,7 +245,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
         memset(nxt, 0, NXT_ALIGN);
     } else {
         memset(nxt, 0, NXT_ALIGN);
-        av_log(NULL, AV_LOG_WARN, "nxt: avio_read returned unexpected size %" PRId64 "\n", ret);
+        av_log(NULL, AV_LOG_WARNING, "nxt: avio_read returned unexpected size %" PRId64 "\n", ret);
     }
 
     av_shrink_packet(pkt, size);
@@ -262,7 +260,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
 {
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
 
-    int64_t ret, step, offset, pos, pos2, size = INT64_MAX;
+    int64_t ret, step, offset, pos, size = INT64_MAX;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
@@ -309,7 +307,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     }
 
     // TODO: Should it read past?
-    while (true) {
+    for (;;) {
         // TODO
         if (nxt->pts > pts) {
             return 0;
