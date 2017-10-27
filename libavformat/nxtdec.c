@@ -102,7 +102,7 @@ static int nxt_read_header(AVFormatContext *s)
         st->codecpar->codec_id = AV_CODEC_ID_PCM_S32LE;
         st->codecpar->codec_tag = 0;
         st->codecpar->format = AV_SAMPLE_FMT_S32;
-        st->codecpar->block_align = 32;
+        st->codecpar->block_align = 8 * 4;
         st->codecpar->channels = 8;
         st->codecpar->sample_rate = 48000;
         st->codecpar->bits_per_coded_sample = 32;
