@@ -24,10 +24,11 @@ static int nxt_read_duration(AVFormatContext *s)
     int64_t ret, step, pos, size, offset;
 
     ret = avio_size(bc);
-    if (ret <= 0) {
+    if (ret < 0) {
         av_log(NULL, AV_LOG_DEBUG, "nxt: avio_size failed %" PRId64 "\n", ret);
         return ret;
     }
+
     size = ret;
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
@@ -234,7 +235,7 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
 {
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
 
-    int64_t ret, step, offset, pos, size;
+    int64_t ret, step, offset, pos, size, reset = 0;
     NXTHeader *nxt = (NXTHeader*)s->priv_data;
     NXTHeader nxt2;
     AVIOContext *bc = s->pb;
@@ -248,8 +249,11 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
     ret = avio_size(bc);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "nxt: avio_size failed %" PRId64 "\n", ret);
+        // TODO: max seek?
+        size = 1e11;
+    } else {
+        size = ret        
     }
-    size = ret
 
     step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
     offset = nxt->position - pos;
@@ -260,6 +264,8 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
             step /= 2;
             continue;
         }
+
+        reset = 1;
 
         ret = nxt_seek_fwd(s, &nxt2);
         if (ret < 0) {
@@ -274,10 +280,12 @@ static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int 
         }
     }
 
-    ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %" PRId64 "\n", ret);
-        return ret;
+    if (reset) {
+        ret = avio_seek(bc, pos + NXT_ALIGN, SEEK_SET);
+        if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %" PRId64 "\n", ret);
+            return ret;
+        }
     }
 
     return -1;
