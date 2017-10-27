@@ -106,6 +106,7 @@ static int nxt_read_header(AVFormatContext *s)
         st->codecpar->channels = 8;
         st->codecpar->sample_rate = 48000;
         st->codecpar->bits_per_coded_sample = 32;
+        st->codecpar->bits_per_raw_sample = 32;
 
         st->time_base.num = 1;
         st->time_base.den = 48000;
