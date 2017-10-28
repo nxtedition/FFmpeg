@@ -10,7 +10,7 @@ static int nxt_probe(AVProbeData *p)
     int i;
     NXTHeader *nxt;
 
-    for (i = 0; i < p->buf_size - sizeof(nxt->tag); i++) {
+    for (i = 0; i < p->buf_size - sizeof(nxt->tag); i += NXT_ALIGN) {
       nxt = (NXTHeader*)(p->buf + i);
       if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG)
           return AVPROBE_SCORE_MAX;
@@ -19,18 +19,12 @@ static int nxt_probe(AVProbeData *p)
     return 0;
 }
 
-static int nxt_floor(int val)
-{
-    return (val / NXT_ALIGN) * NXT_ALIGN;
-}
-
 static int nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
 {
     int ret, i;
-    AVIOContext *bc = s->pb;
 
     for (i = 0; i < NXT_MAX_FRAME_SIZE; i += NXT_ALIGN) {
-        ret = avio_read(bc, (char*)nxt, NXT_ALIGN);
+        ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
 
         if (ret < 0)
             return ret;
@@ -38,8 +32,9 @@ static int nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
         if (ret < NXT_ALIGN)
             return -1;
 
-        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG)
+        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
             return 0;
+        }
     }
 
     return -1;
@@ -48,20 +43,21 @@ static int nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
 static int nxt_read_header(AVFormatContext *s)
 {
     int ret;
-    NXTHeader *nxt = (NXTHeader*)s->priv_data;
+    char buf[NXT_ALIGN];
+    NXTHeader *nxt = (NXTHeader*)buf;
     AVStream *st = NULL;
-    AVIOContext *bc = s->pb;
 
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_header \n");
-    
-    if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag %" PRId64 "\n", nxt->tag);
-        return -1;        
+
+    ret = nxt_seek_fwd(s, nxt);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: seek_fwd failed %d\n", ret);
+        return ret;        
     }
 
-    ret = avio_read(bc, (char*)nxt, NXT_ALIGN);
+    ret = avio_seek(s->pb, -NXT_ALIGN, SEEK_CUR);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
         return ret;        
     }
 
@@ -142,139 +138,45 @@ fail:
 
 static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
-    int ret, size;
-    NXTHeader *nxt = (NXTHeader*)s->priv_data;
-    AVIOContext *bc = s->pb;
-    size = nxt->size;
+    int ret;
+    char buf[NXT_ALIGN];
+    NXTHeader *nxt = (NXTHeader*)buf;
 
-    if (avio_feof(bc)) {
+    if (avio_feof(s->pb)) {
         av_log(NULL, AV_LOG_VERBOSE , "nxt: eof");
         return AVERROR_EOF;
     }
 
-    if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag %" PRId64 "\n", nxt->tag);
-        return -1;
+    ret = nxt_seek_fwd(s, nxt);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: seek_fwd failed %d\n", ret);
+        return ret;
     }
 
-    ret = av_new_packet(pkt, nxt->next);
+    ret = av_new_packet(pkt, nxt->next - NXT_ALIGN);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "nxt: av_new_packet failed %d\n", ret);
         goto fail;
     }
 
-    ret = avio_read(bc, pkt->data, pkt->size);
-    if (ret < 0) {
+    ret = avio_read(s->pb, pkt->data, pkt->size);
+    if (ret < nxt->size) {
         av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
         goto fail;
     }
 
-    pkt->pos = avio_tell(bc);
+    pkt->pos = avio_tell(s->pb) - nxt->next;
     pkt->stream_index = 0;
-    pkt->flags |= (nxt->flags & NXT_FLAG_KEY) != 0 ? AV_PKT_FLAG_KEY : 0;
+    pkt->flags = AV_PKT_FLAG_KEY;
     pkt->duration = nxt->duration;
     pkt->pts = nxt->pts;
-    pkt->dts = pkt->pts;
 
-    if (ret == pkt->size) {
-        memcpy(nxt, pkt->data + nxt->next - NXT_ALIGN, NXT_ALIGN);
-    } else if (ret >= size) {
-        memset(nxt, 0, NXT_ALIGN);
-    } else {
-        av_log(NULL, AV_LOG_WARNING, "nxt: avio_read returned unexpected size %d\n", ret);
-        ret = -1;
-        goto fail;
-    }
-
-    av_shrink_packet(pkt, size);
+    av_shrink_packet(pkt, nxt->size);
 
     return 0;
 fail:
     av_packet_unref(pkt);
     return ret;
-}
-
-static int nxt_read_seek_binary(AVFormatContext *s, int stream_index, int pts, int flags)
-{
-    int ret, step, offset, size = 0;
-    NXTHeader *nxt = (NXTHeader*)s->priv_data;
-    NXTHeader nxt2;
-    AVIOContext *bc = s->pb;
-
-    ret = avio_tell(bc);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %d\n", ret);
-        return ret;
-    }
-    offset = nxt->position - ret - NXT_ALIGN;
-
-    ret = avio_size(bc);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: avio_size failed %d\n", ret);
-    } else {
-        size = ret;
-    }
-    step = size - NXT_MAX_FRAME_SIZE - NXT_ALIGN;
-
-    while (step > NXT_ALIGN) {
-        ret = avio_seek(bc, (nxt->position - offset) + nxt_floor(step), SEEK_SET);
-        if (ret < 0) {
-            step /= 2;
-            continue;
-        }
-
-        ret = nxt_seek_fwd(s, &nxt2);
-        if (ret < 0) {
-            step /= 2;
-            continue;
-        }
-        
-        if (nxt2.pts > pts) {
-            step /= 2;
-        } else if (nxt2.index == nxt->index) {
-            return 0;
-        } else {
-            memcpy(nxt, &nxt2, NXT_ALIGN);
-            step = FFMIN(step, (size - (nxt->position - offset)) / 2);
-        }
-    }
-
-    return -1;
-}
-
-static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int flags)
-{
-    int ret;
-    NXTHeader *nxt = (NXTHeader*)s->priv_data;
-    AVIOContext *bc = s->pb;
-
-    av_log(NULL, AV_LOG_VERBOSE, "nxt: read_seek %" PRId64 "\n", pts);
-
-    if (nxt->pts == pts) {
-        return 0;
-    }
-
-    if (nxt->pts > pts) {
-        // TODO
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: seek backwards is not implemented");
-        return -1;
-    }
-
-    if (bc->seekable & AVIO_SEEKABLE_NORMAL) {
-        ret = nxt_read_seek_binary(s, stream_index, pts, flags);
-        if (ret < 0) {
-            av_log(NULL, AV_LOG_VERBOSE, "nxt: nxt_read_seek_binary failed %d\n", ret);
-        }
-    }
-
-    while (nxt->pts + nxt->duration < pts) {
-        ret = nxt_seek_fwd(s, nxt);
-        if (ret < 0) {
-            return -1;
-        }
-    }
-
-    return 0;
 }
 
 AVInputFormat ff_nxt_demuxer = {
@@ -283,8 +185,5 @@ AVInputFormat ff_nxt_demuxer = {
     .read_probe     = nxt_probe,
     .read_header    = nxt_read_header,
     .read_packet    = nxt_read_packet,
-    .read_seek      = nxt_read_seek,
-    .extensions     = "nxt",
-    .flags          = AVFMT_SEEK_TO_PTS,
-    .priv_data_size = sizeof(NXTHeader),
+    .extensions     = "nxt"
 };
