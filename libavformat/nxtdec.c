@@ -17,6 +17,10 @@ static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t 
     NXTHeader *nxt = (NXTHeader*)buf;
     int64_t pos = *ppos;
 
+    if (stream_index > 0) {
+        return AV_NOPTS_VALUE;
+    }
+
     if (pos % NXT_ALIGN > 0) {
         pos += NXT_ALIGN - (pos % NXT_ALIGN);
     }
@@ -196,6 +200,10 @@ fail:
 
 static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int flags)
 {
+    if (stream_index > 0) {
+        return -1;
+    }
+
     return ff_seek_frame_binary(s, stream_index, pts, flags);
 }
 
