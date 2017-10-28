@@ -71,8 +71,9 @@ static int nxt_read_header(AVFormatContext *s)
 
     st = avformat_new_stream(s, NULL);
     if (!st) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avformat_new_stream failed");
-        return AVERROR(ENOMEM);
+        ret = AVERROR(ENOMEM);
+        av_log(NULL, AV_LOG_ERROR, "nxt: avformat_new_stream failed %d\n", ret);
+        return ret;
     }
 
     // TODO
