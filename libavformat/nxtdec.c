@@ -7,37 +7,8 @@
 
 static int nxt_probe(AVProbeData *p)
 {
-    int i;
-    NXTHeader *nxt;
-
-    for (i = 0; i < p->buf_size - sizeof(nxt->tag); i += NXT_ALIGN) {
-      nxt = (NXTHeader*)(p->buf + i);
-      if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG)
-          return AVPROBE_SCORE_MAX;
-    }
-
-    return 0;
-}
-
-static int nxt_seek_fwd(AVFormatContext *s, NXTHeader* nxt)
-{
-    int ret, i;
-
-    for (i = 0; i < NXT_MAX_FRAME_SIZE; i += NXT_ALIGN) {
-        ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
-
-        if (ret < 0)
-            return ret;
-
-        if (ret < NXT_ALIGN)
-            return -1;
-
-        if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
-            return 0;
-        }
-    }
-
-    return -1;
+    NXTHeader *nxt = (NXTHeader*)p->buf;
+    return (nxt->tag & NXT_TAG_MASK) == NXT_TAG ? AVPROBE_SCORE_MAX : 0;
 }
 
 static int nxt_read_header(AVFormatContext *s)
@@ -49,10 +20,15 @@ static int nxt_read_header(AVFormatContext *s)
 
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_header \n");
 
-    ret = nxt_seek_fwd(s, nxt);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: seek_fwd failed %d\n", ret);
-        return ret;        
+    ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
+    if (ret < NXT_ALIGN) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
+        return ret;
+    }
+
+    if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag");
+        return ret;
     }
 
     ret = avio_seek(s->pb, -NXT_ALIGN, SEEK_CUR);
@@ -147,9 +123,14 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
         return AVERROR_EOF;
     }
 
-    ret = nxt_seek_fwd(s, nxt);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: seek_fwd failed %d\n", ret);
+    ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
+    if (ret < NXT_ALIGN) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
+        return ret;
+    }
+
+    if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag");
         return ret;
     }
 
