@@ -11,6 +11,34 @@ static int nxt_probe(AVProbeData *p)
     return (nxt->tag & NXT_TAG_MASK) == NXT_TAG ? AVPROBE_SCORE_MAX : 0;
 }
 
+static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit)
+{
+    char buf[NXT_ALIGN];
+    NXTHeader *nxt = (NXTHeader*)buf;
+    int64_t pos = *ppos;
+
+    if (pos % NXT_ALIGN > 0) {
+        pos += NXT_ALIGN - (pos % NXT_ALIGN);
+    }
+
+    if (avio_seek(s->pb, pos, SEEK_SET) < 0) {
+        return AV_NOPTS_VALUE;
+    }
+
+    while (pos < pos_limit) {
+        if (avio_read(s->pb, (char*)nxt, NXT_ALIGN) < NXT_ALIGN) {
+            return AV_NOPTS_VALUE;
+        } else if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+            *ppos = pos;
+            return nxt->pts;
+        } else {
+            pos += NXT_ALIGN;
+        }
+    }
+
+    return AV_NOPTS_VALUE;
+}
+
 static int nxt_read_header(AVFormatContext *s)
 {
     int ret;
@@ -68,6 +96,8 @@ static int nxt_read_header(AVFormatContext *s)
         st->avg_frame_rate.num = 25;
         st->avg_frame_rate.den = 1;
 
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_120_1080i50");
+
         return 0;
     case PCM_S32LE_48000c8:
         st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
@@ -82,6 +112,8 @@ static int nxt_read_header(AVFormatContext *s)
 
         st->time_base.num = 1;
         st->time_base.den = 48000;
+
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: PCM_S32LE_48000c8");
 
         return 0;
     case DNXHD_115_720p50:
@@ -100,6 +132,8 @@ static int nxt_read_header(AVFormatContext *s)
 
         st->avg_frame_rate.num = 50;
         st->avg_frame_rate.den = 1;
+
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_115_720p50");
 
         return 0;
       default:
@@ -160,11 +194,19 @@ fail:
     return ret;
 }
 
+static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int flags)
+{
+    return ff_seek_frame_binary(s, stream_index, pts, flags);
+}
+
 AVInputFormat ff_nxt_demuxer = {
     .name           = "nxt",
     .long_name      = NULL_IF_CONFIG_SMALL("NXT"),
     .read_probe     = nxt_probe,
     .read_header    = nxt_read_header,
     .read_packet    = nxt_read_packet,
+    .read_timestamp = nxt_read_timestamp,
+    .read_seek      = nxt_read_seek,
+    .flags          = AVFMT_SEEK_TO_PTS,
     .extensions     = "nxt"
 };
