@@ -27,9 +27,6 @@ typedef struct NXTHeader {
   int64_t dts;
   int64_t ltc;
   int32_t duration;
-  char    pad[4005];
 } NXTHeader;
-
-_Static_assert(sizeof(NXTHeader) == NXT_ALIGN, "sizeof NXTHeader != NXT_ALIGN");
 
 #endif
