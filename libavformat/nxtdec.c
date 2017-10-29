@@ -192,7 +192,6 @@ static int nxt_read_header(AVFormatContext *s)
 
     if (av_timecode_init(&tc, tc_rate, tc_flags, ltc, NULL) == 0) {
         nxt_add_timecode_metadata(&st->metadata, "timecode", &tc);
-        return 0;
     }
 
     return 0;
