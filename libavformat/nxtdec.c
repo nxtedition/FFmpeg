@@ -3,6 +3,7 @@
 #include "avio_internal.h"
 #include "libavutil/avassert.h"
 #include "libavutil/common.h"
+#include "libavutil/timecode.h"
 #include "nxt.h"
 
 static int nxt_probe(AVProbeData *p)
@@ -47,10 +48,20 @@ static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t 
     return AV_NOPTS_VALUE;
 }
 
+static int nxt_add_timecode_metadata(AVDictionary **pm, const char *key, AVTimecode *tc)
+{
+    char buf[AV_TIMECODE_STR_SIZE];
+    av_dict_set(pm, key, av_timecode_make_string(tc, buf, 0), 0);
+
+    return 0;
+}
+
 static int nxt_read_header(AVFormatContext *s)
 {
+    int ret, tc_flags = 0;
     int64_t last_ts = 0, pos;
-    int ret;
+    AVTimecode tc;
+    AVRational tc_rate = { 0 };
     char buf[NXT_ALIGN];
     NXTHeader *nxt = (NXTHeader*)buf;
     AVStream *st = NULL;
@@ -117,7 +128,7 @@ static int nxt_read_header(AVFormatContext *s)
 
         av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_120_1080i50");
 
-        return 0;
+        break;
     case PCM_S32LE_48000c8:
         st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
         st->codecpar->codec_id = AV_CODEC_ID_PCM_S32LE;
@@ -134,7 +145,7 @@ static int nxt_read_header(AVFormatContext *s)
 
         av_log(NULL, AV_LOG_VERBOSE, "nxt: PCM_S32LE_48000c8");
 
-        return 0;
+        break;
     case DNXHD_115_720p50:
         st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
         st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
@@ -154,12 +165,30 @@ static int nxt_read_header(AVFormatContext *s)
 
         av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_115_720p50");
 
-        return 0;
+        break;
       default:
         av_log(NULL, AV_LOG_ERROR, "nxt: invalid format %d\n", nxt->format);
         ret = -1;
         goto fail;
     }
+
+    switch (nxt->ltc_format) {
+        case LTC_50:
+            tc_rate.num = 50;
+            tc_rate.den = 1;
+        break;
+        case LTC_25:
+            tc_rate.num = 25;
+            tc_rate.den = 1;
+        break;
+    }
+
+    if (av_timecode_init(&tc, tc_rate, tc_flags, nxt->ltc, NULL) == 0) {
+        nxt_add_timecode_metadata(&st->metadata, "timecode", &tc);
+        return 0;
+    }
+
+    return 0;
 fail:
     av_free(st);
     return ret;
