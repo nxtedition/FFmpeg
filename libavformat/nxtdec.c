@@ -58,7 +58,7 @@ static int nxt_add_timecode_metadata(AVDictionary **pm, const char *key, AVTimec
 
 static int nxt_read_header(AVFormatContext *s)
 {
-    int ret, tc_flags = 0;
+    int ret, tc_flags = 0, ltc;
     int64_t last_ts = 0, pos;
     AVTimecode tc;
     AVRational tc_rate = { 0 };
@@ -172,6 +172,8 @@ static int nxt_read_header(AVFormatContext *s)
         goto fail;
     }
 
+    ltc = nxt->ltc;
+
     switch (nxt->ltc_format) {
         case LTC_50:
             tc_rate.num = 50;
@@ -181,9 +183,14 @@ static int nxt_read_header(AVFormatContext *s)
             tc_rate.num = 25;
             tc_rate.den = 1;
         break;
+        default:
+            tc_rate.num = 50;
+            tc_rate.den = 1;
+            ltc /= 100;
+        break;
     }
 
-    if (av_timecode_init(&tc, tc_rate, tc_flags, nxt->ltc, NULL) == 0) {
+    if (av_timecode_init(&tc, tc_rate, tc_flags, ltc, NULL) == 0) {
         nxt_add_timecode_metadata(&st->metadata, "timecode", &tc);
         return 0;
     }
