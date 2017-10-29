@@ -214,11 +214,6 @@ fail:
     return ret;
 }
 
-static int nxt_read_seek(AVFormatContext *s, int stream_index, int64_t pts, int flags)
-{
-    return ff_seek_frame_binary(s, stream_index, pts, flags);
-}
-
 AVInputFormat ff_nxt_demuxer = {
     .name           = "nxt",
     .long_name      = NULL_IF_CONFIG_SMALL("NXT"),
@@ -226,7 +221,5 @@ AVInputFormat ff_nxt_demuxer = {
     .read_header    = nxt_read_header,
     .read_packet    = nxt_read_packet,
     .read_timestamp = nxt_read_timestamp,
-    .read_seek      = nxt_read_seek,
-    .flags          = AVFMT_SEEK_TO_PTS,
     .extensions     = "nxt"
 };
