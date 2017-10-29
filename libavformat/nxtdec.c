@@ -48,22 +48,13 @@ static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t 
     return AV_NOPTS_VALUE;
 }
 
-static int nxt_add_timecode_metadata(AVDictionary **pm, const char *key, AVTimecode *tc)
-{
-    char buf[AV_TIMECODE_STR_SIZE];
-    av_dict_set(pm, key, av_timecode_make_string(tc, buf, 0), 0);
-
-    return 0;
-}
-
 static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
 {
-    int tc_flags = 0, ltc;
+    char buf[AV_TIMECODE_STR_SIZE];
+    int tc_flags = 0;
     AVTimecode tc;
     AVRational tc_rate = { 0 };
     
-    ltc = nxt->ltc;
-
     switch (nxt->ltc_format) {
         case LTC_50:
             tc_rate.num = 50;
@@ -75,9 +66,8 @@ static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
         break;
     }
     
-
-    if (av_timecode_init(&tc, tc_rate, tc_flags, ltc, NULL) == 0) {
-        nxt_add_timecode_metadata(&st->metadata, "timecode", &tc);
+    if (av_timecode_init(&tc, tc_rate, tc_flags, nxt->ltc, NULL) == 0) {
+        av_dict_set(&st->metadata, "timecode", av_timecode_make_string(&tc, buf, 0), 0);
     }
 
     return 0;
