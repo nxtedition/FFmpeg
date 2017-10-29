@@ -25,6 +25,10 @@ static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t 
         pos += NXT_ALIGN - (pos % NXT_ALIGN);
     }
 
+    if (pos >= avio_size(s->pb)) {
+        return AV_NOPTS_VALUE;
+    }
+
     if (avio_seek(s->pb, pos, SEEK_SET) < 0) {
         return AV_NOPTS_VALUE;
     }
