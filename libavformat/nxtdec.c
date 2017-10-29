@@ -204,6 +204,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->flags = AV_PKT_FLAG_KEY;
     pkt->duration = nxt->duration;
     pkt->pts = nxt->pts;
+    pkt->dts = nxt->dts;
 
     av_shrink_packet(pkt, nxt->size);
 
