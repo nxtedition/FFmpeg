@@ -58,8 +58,8 @@ static int nxt_read_header(AVFormatContext *s)
         return ret;
     }
 
-    if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag");
+    if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag \n");
         return ret;
     }
 
@@ -80,6 +80,7 @@ static int nxt_read_header(AVFormatContext *s)
     // st->duration = ???;
     st->start_time = nxt->pts;
 
+    av_log(NULL, AV_LOG_VERBOSE , "nxt: frame_size %" PRId64 "\n", nxt->next);
     av_log(NULL, AV_LOG_VERBOSE, "nxt: start_time %" PRId64 "\n", st->start_time);
 
     switch (nxt->format)
@@ -168,7 +169,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
         return ret;
     }
 
-    if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+    if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
         av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag");
         return ret;
     }
