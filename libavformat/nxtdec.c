@@ -59,12 +59,12 @@ static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
         case LTC_50:
             tc_rate.num = 50;
             tc_rate.den = 1;
-            av_log(NULL, AV_LOG_VERBOSE, "nxt: LTC_50");
+            av_log(NULL, AV_LOG_VERBOSE, "[nxt] LTC_50");
         break;
         case LTC_25:
             tc_rate.num = 25;
             tc_rate.den = 1;
-            av_log(NULL, AV_LOG_VERBOSE, "nxt: LTC_25");
+            av_log(NULL, AV_LOG_VERBOSE, "[nxt] LTC_25");
         break;
     }
     
@@ -96,7 +96,7 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->avg_frame_rate.num = 25;
         st->avg_frame_rate.den = 1;
 
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_120_1080i50");
+        av_log(NULL, AV_LOG_VERBOSE, "[nxt] DNXHD_120_1080i50");
 
         return 0;
     case PCM_S32LE_48000c8:
@@ -113,7 +113,7 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->time_base.num = 1;
         st->time_base.den = 48000;
 
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: PCM_S32LE_48000c8");
+        av_log(NULL, AV_LOG_VERBOSE, "[nxt] PCM_S32LE_48000c8");
 
         return 0;
     case DNXHD_115_720p50:
@@ -133,11 +133,11 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->avg_frame_rate.num = 50;
         st->avg_frame_rate.den = 1;
 
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_115_720p50");
+        av_log(NULL, AV_LOG_VERBOSE, "[nxt] DNXHD_115_720p50");
 
         return 0;
       default:
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid format %d\n", nxt->format);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] invalid format %d\n", nxt->format);
         return -1;
     }
 }
@@ -145,37 +145,37 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
 static int nxt_read_header(AVFormatContext *s)
 {
     int ret;
-    int64_t last_ts = 0, pos, lastpos = 0;
+    int64_t last_ts = 0, pos, lastpos = -1;
     char buf[NXT_ALIGN];
     NXTHeader *nxt = (NXTHeader*)buf;
     AVStream *st = NULL;
 
-    av_log(NULL, AV_LOG_VERBOSE, "nxt: read_header \n");
+    av_log(NULL, AV_LOG_VERBOSE, "[nxt] read_header \n");
 
     ret = avio_tell(s->pb);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_tell failed %d\n", ret);
         return ret;
     }
     pos = ret;
 
-    av_log(NULL, AV_LOG_INFO, "nxt: startpos %" PRId64 "\n", lastpos);    
+    av_log(NULL, AV_LOG_INFO, "[nxt] startpos: %" PRId64 "\n", pos);    
 
     ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
     if (ret < NXT_ALIGN) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_read failed %d\n", ret);
         return ret;
     }
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag \n");
+        av_log(NULL, AV_LOG_ERROR, "[nxt] invalid tag \n");
         return ret;
     }
 
     st = avformat_new_stream(s, NULL);
     if (!st) {
         ret = AVERROR(ENOMEM);
-        av_log(NULL, AV_LOG_ERROR, "nxt: avformat_new_stream failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avformat_new_stream failed %d\n", ret);
         return ret;
     }
 
@@ -183,13 +183,13 @@ static int nxt_read_header(AVFormatContext *s)
     if (last_ts > 0) {
         s->duration_estimation_method = AVFMT_DURATION_FROM_PTS;
         st->duration = last_ts - nxt->pts;
-
-        av_log(NULL, AV_LOG_INFO, "nxt: endpos %" PRId64 "\n", lastpos);
     }
+
+    av_log(NULL, AV_LOG_INFO, "[nxt] endpos: %" PRId64 "\n", lastpos);
     
     ret = avio_seek(s->pb, pos, SEEK_SET);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_seek failed %d\n", ret);
         return ret;        
     }
 
@@ -215,30 +215,30 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     NXTHeader *nxt = (NXTHeader*)buf;
 
     if (avio_feof(s->pb)) {
-        av_log(NULL, AV_LOG_VERBOSE , "nxt: eof");
+        av_log(NULL, AV_LOG_VERBOSE , "[nxt] eof");
         return AVERROR_EOF;
     }
 
     ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
     if (ret < NXT_ALIGN) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_read failed %d\n", ret);
         return ret;
     }
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag\n");
+        av_log(NULL, AV_LOG_ERROR, "[nxt] invalid tag\n");
         return ret;
     }
 
     ret = av_new_packet(pkt, nxt->next - NXT_ALIGN);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: av_new_packet failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] av_new_packet failed %d\n", ret);
         goto fail;
     }
 
     ret = avio_read(s->pb, pkt->data, pkt->size);
     if (ret < nxt->size) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_read failed %d\n", ret);
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_read failed %d\n", ret);
         goto fail;
     }
 
