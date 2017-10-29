@@ -13,6 +13,9 @@
 #define YUV422P_1080i50     4
 #define YUV422P_720p50      5
 
+#define LTC_50 1
+#define LTC_25 2
+
 typedef struct NXTHeader {
   int64_t tag;
   int32_t crc;
@@ -25,7 +28,8 @@ typedef struct NXTHeader {
   int32_t format;
   int64_t pts;
   int64_t dts;
-  int64_t ltc;
+  int32_t ltc;
+  int32_t ltc_format;
   int32_t duration;
 } NXTHeader;
 
