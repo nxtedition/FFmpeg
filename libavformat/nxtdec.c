@@ -145,7 +145,7 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
 static int nxt_read_header(AVFormatContext *s)
 {
     int ret;
-    int64_t last_ts = 0, pos;
+    int64_t last_ts = 0, pos, lastpos = 0;
     char buf[NXT_ALIGN];
     NXTHeader *nxt = (NXTHeader*)buf;
     AVStream *st = NULL;
@@ -158,6 +158,8 @@ static int nxt_read_header(AVFormatContext *s)
         return ret;
     }
     pos = ret;
+
+    av_log(NULL, AV_LOG_INFO, "nxt: startpos %" PRId64 "\n", lastpos);    
 
     ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
     if (ret < NXT_ALIGN) {
@@ -177,10 +179,12 @@ static int nxt_read_header(AVFormatContext *s)
         return ret;
     }
 
-    ff_find_last_ts(s, -1, &last_ts, NULL, nxt_read_timestamp);
+    ff_find_last_ts(s, -1, &last_ts, &lastpos, nxt_read_timestamp);
     if (last_ts > 0) {
         s->duration_estimation_method = AVFMT_DURATION_FROM_PTS;
-        st->duration = last_ts - nxt->pts;        
+        st->duration = last_ts - nxt->pts;
+
+        av_log(NULL, AV_LOG_INFO, "nxt: endpos %" PRId64 "\n", lastpos);
     }
     
     ret = avio_seek(s->pb, pos, SEEK_SET);
