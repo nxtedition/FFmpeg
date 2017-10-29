@@ -59,10 +59,12 @@ static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
         case LTC_50:
             tc_rate.num = 50;
             tc_rate.den = 1;
+            av_log(NULL, AV_LOG_VERBOSE, "nxt: LTC_50");
         break;
         case LTC_25:
             tc_rate.num = 25;
             tc_rate.den = 1;
+            av_log(NULL, AV_LOG_VERBOSE, "nxt: LTC_25");
         break;
     }
     
