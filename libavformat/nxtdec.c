@@ -80,7 +80,7 @@ static int nxt_read_header(AVFormatContext *s)
     // st->duration = ???;
     st->start_time = nxt->pts;
 
-    av_log(NULL, AV_LOG_VERBOSE , "nxt: frame_size %" PRId64 "\n", nxt->next);
+    av_log(NULL, AV_LOG_VERBOSE, "nxt: frame_size %" PRId64 "\n", nxt->next);
     av_log(NULL, AV_LOG_VERBOSE, "nxt: start_time %" PRId64 "\n", st->start_time);
 
     switch (nxt->format)
