@@ -56,12 +56,109 @@ static int nxt_add_timecode_metadata(AVDictionary **pm, const char *key, AVTimec
     return 0;
 }
 
-static int nxt_read_header(AVFormatContext *s)
+static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
 {
-    int ret, tc_flags = 0, ltc;
-    int64_t last_ts = 0, pos;
+    int tc_flags = 0, ltc;
     AVTimecode tc;
     AVRational tc_rate = { 0 };
+    
+    ltc = nxt->ltc;
+
+    switch (nxt->ltc_format) {
+        case LTC_50:
+            tc_rate.num = 50;
+            tc_rate.den = 1;
+        break;
+        case LTC_25:
+            tc_rate.num = 25;
+            tc_rate.den = 1;
+        break;
+        default:
+            tc_rate.num = 50;
+            tc_rate.den = 1;
+            ltc /= 100;
+        break;
+    }
+    
+
+    if (av_timecode_init(&tc, tc_rate, tc_flags, ltc, NULL) == 0) {
+        nxt_add_timecode_metadata(&st->metadata, "timecode", &tc);
+    }
+
+    return 0;
+}
+
+static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
+{
+    switch (nxt->format)
+    {
+    case DNXHD_120_1080i50:
+        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+        st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
+        st->codecpar->format = AV_PIX_FMT_YUV422P;
+        st->codecpar->field_order = AV_FIELD_TB;
+        st->codecpar->sample_aspect_ratio.num = 1;
+        st->codecpar->sample_aspect_ratio.den = 1;
+        st->codecpar->bit_rate = 120000000;
+        st->codecpar->width = 1920;
+        st->codecpar->height = 1080;
+
+        st->time_base.num = 1;
+        st->time_base.den = 2500;
+
+        st->avg_frame_rate.num = 25;
+        st->avg_frame_rate.den = 1;
+
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_120_1080i50");
+
+        return 0;
+    case PCM_S32LE_48000c8:
+        st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
+        st->codecpar->codec_id = AV_CODEC_ID_PCM_S32LE;
+        st->codecpar->codec_tag = 0;
+        st->codecpar->format = AV_SAMPLE_FMT_S32;
+        st->codecpar->block_align = 8 * 4;
+        st->codecpar->channels = 8;
+        st->codecpar->sample_rate = 48000;
+        st->codecpar->bits_per_coded_sample = 32;
+        st->codecpar->bits_per_raw_sample = 32;
+
+        st->time_base.num = 1;
+        st->time_base.den = 48000;
+
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: PCM_S32LE_48000c8");
+
+        return 0;
+    case DNXHD_115_720p50:
+        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+        st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
+        st->codecpar->format = AV_PIX_FMT_YUV422P;
+        st->codecpar->field_order = AV_FIELD_PROGRESSIVE;
+        st->codecpar->sample_aspect_ratio.num = 1;
+        st->codecpar->sample_aspect_ratio.den = 1;
+        st->codecpar->bit_rate = 115000000;
+        st->codecpar->width = 1280;
+        st->codecpar->height = 720;
+
+        st->time_base.num = 1;
+        st->time_base.den = 5000;
+
+        st->avg_frame_rate.num = 50;
+        st->avg_frame_rate.den = 1;
+
+        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_115_720p50");
+
+        return 0;
+      default:
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid format %d\n", nxt->format);
+        return -1;
+    }
+}
+
+static int nxt_read_header(AVFormatContext *s)
+{
+    int ret;
+    int64_t last_ts = 0, pos;
     char buf[NXT_ALIGN];
     NXTHeader *nxt = (NXTHeader*)buf;
     AVStream *st = NULL;
@@ -107,92 +204,12 @@ static int nxt_read_header(AVFormatContext *s)
 
     st->start_time = nxt->pts;
 
-    switch (nxt->format)
-    {
-    case DNXHD_120_1080i50:
-        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-        st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
-        st->codecpar->format = AV_PIX_FMT_YUV422P;
-        st->codecpar->field_order = AV_FIELD_TB;
-        st->codecpar->sample_aspect_ratio.num = 1;
-        st->codecpar->sample_aspect_ratio.den = 1;
-        st->codecpar->bit_rate = 120000000;
-        st->codecpar->width = 1920;
-        st->codecpar->height = 1080;
-
-        st->time_base.num = 1;
-        st->time_base.den = 2500;
-
-        st->avg_frame_rate.num = 25;
-        st->avg_frame_rate.den = 1;
-
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_120_1080i50");
-
-        break;
-    case PCM_S32LE_48000c8:
-        st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
-        st->codecpar->codec_id = AV_CODEC_ID_PCM_S32LE;
-        st->codecpar->codec_tag = 0;
-        st->codecpar->format = AV_SAMPLE_FMT_S32;
-        st->codecpar->block_align = 8 * 4;
-        st->codecpar->channels = 8;
-        st->codecpar->sample_rate = 48000;
-        st->codecpar->bits_per_coded_sample = 32;
-        st->codecpar->bits_per_raw_sample = 32;
-
-        st->time_base.num = 1;
-        st->time_base.den = 48000;
-
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: PCM_S32LE_48000c8");
-
-        break;
-    case DNXHD_115_720p50:
-        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
-        st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
-        st->codecpar->format = AV_PIX_FMT_YUV422P;
-        st->codecpar->field_order = AV_FIELD_PROGRESSIVE;
-        st->codecpar->sample_aspect_ratio.num = 1;
-        st->codecpar->sample_aspect_ratio.den = 1;
-        st->codecpar->bit_rate = 115000000;
-        st->codecpar->width = 1280;
-        st->codecpar->height = 720;
-
-        st->time_base.num = 1;
-        st->time_base.den = 5000;
-
-        st->avg_frame_rate.num = 50;
-        st->avg_frame_rate.den = 1;
-
-        av_log(NULL, AV_LOG_VERBOSE, "nxt: DNXHD_115_720p50");
-
-        break;
-      default:
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid format %d\n", nxt->format);
-        ret = -1;
+    ret = nxt_read_stream(st, nxt);
+    if (ret < 0) {
         goto fail;
     }
 
-    ltc = nxt->ltc;
-
-    switch (nxt->ltc_format) {
-        case LTC_50:
-            tc_rate.num = 50;
-            tc_rate.den = 1;
-        break;
-        case LTC_25:
-            tc_rate.num = 25;
-            tc_rate.den = 1;
-        break;
-        default:
-            tc_rate.num = 50;
-            tc_rate.den = 1;
-            ltc /= 100;
-        break;
-    }
-
-    if (av_timecode_init(&tc, tc_rate, tc_flags, ltc, NULL) == 0) {
-        nxt_add_timecode_metadata(&st->metadata, "timecode", &tc);
-    }
+    nxt_read_timecode(st, nxt);
 
     return 0;
 fail:
