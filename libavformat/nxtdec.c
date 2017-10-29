@@ -73,11 +73,6 @@ static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
             tc_rate.num = 25;
             tc_rate.den = 1;
         break;
-        default:
-            tc_rate.num = 50;
-            tc_rate.den = 1;
-            ltc /= 100;
-        break;
     }
     
 
