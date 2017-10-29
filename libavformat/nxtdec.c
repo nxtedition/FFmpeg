@@ -45,12 +45,20 @@ static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t 
 
 static int nxt_read_header(AVFormatContext *s)
 {
+    int64_t last_ts = 0, pos;
     int ret;
     char buf[NXT_ALIGN];
     NXTHeader *nxt = (NXTHeader*)buf;
     AVStream *st = NULL;
 
     av_log(NULL, AV_LOG_VERBOSE, "nxt: read_header \n");
+
+    ret = avio_tell(s->pb);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_tell failed %d\n", ret);
+        return ret;
+    }
+    pos = ret;
 
     ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
     if (ret < NXT_ALIGN) {
@@ -63,12 +71,6 @@ static int nxt_read_header(AVFormatContext *s)
         return ret;
     }
 
-    ret = avio_seek(s->pb, -NXT_ALIGN, SEEK_CUR);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
-        return ret;        
-    }
-
     st = avformat_new_stream(s, NULL);
     if (!st) {
         ret = AVERROR(ENOMEM);
@@ -76,11 +78,19 @@ static int nxt_read_header(AVFormatContext *s)
         return ret;
     }
 
-    // TODO
-    // st->duration = ???;
-    st->start_time = nxt->pts;
+    ff_find_last_ts(s, -1, &last_ts, NULL, nxt_read_timestamp);
+    if (last_ts > 0) {
+        s->duration_estimation_method = AVFMT_DURATION_FROM_PTS;
+        st->duration = last_ts - nxt->pts;        
+    }
+    
+    ret = avio_seek(s->pb, pos, SEEK_SET);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "nxt: avio_seek failed %d\n", ret);
+        return ret;        
+    }
 
-    av_log(NULL, AV_LOG_VERBOSE, "nxt: frame_size %" PRId64 "\n", nxt->next);
+    st->start_time = nxt->pts;
     av_log(NULL, AV_LOG_VERBOSE, "nxt: start_time %" PRId64 "\n", st->start_time);
 
     switch (nxt->format)
@@ -170,7 +180,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
-        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag");
+        av_log(NULL, AV_LOG_ERROR, "nxt: invalid tag\n");
         return ret;
     }
 
