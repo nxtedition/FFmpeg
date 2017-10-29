@@ -34,7 +34,7 @@ static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t 
         return AV_NOPTS_VALUE;
     }
 
-    while (pos < pos_limit) {
+    while (pos < FFMIN(pos_limit, NXT_MAX_FRAME_SIZE)) {
         if (avio_read(s->pb, (char*)nxt, NXT_ALIGN) < NXT_ALIGN) {
             return AV_NOPTS_VALUE;
         } else if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
