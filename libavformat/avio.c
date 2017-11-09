@@ -366,7 +366,9 @@ static inline int retry_transfer_wrapper(URLContext *h, uint8_t *buf,
                                                               int size))
 {
     int ret, len;
-    int fast_retries = 5;
+    int fast_retries = 2;
+    int sleep_time = 1000;
+    int sleep_max = 40000;
     int64_t wait_since = 0;
 
     len = 0;
@@ -389,7 +391,8 @@ static inline int retry_transfer_wrapper(URLContext *h, uint8_t *buf,
                     else if (av_gettime_relative() > wait_since + h->rw_timeout)
                         return AVERROR(EIO);
                 }
-                av_usleep(1000);
+                av_usleep(sleep_time);
+                sleep_time = FFMIN(sleep_time * 2, sleep_max);
             }
         } else if (ret == AVERROR_EOF)
             return (len > 0) ? len : AVERROR_EOF;
