@@ -3966,7 +3966,7 @@ static void *input_thread(void *arg)
         ret = av_read_frame(f->ctx, &pkt);
 
         if (ret == AVERROR(EAGAIN)) {
-            av_usleep(10000);
+            av_usleep(20000);
             continue;
         }
         if (ret < 0) {
@@ -4487,7 +4487,7 @@ static int transcode_step(void)
     if (!ost) {
         if (got_eagain()) {
             reset_eagain();
-            av_usleep(10000);
+            av_usleep(20000);
             return 0;
         }
         av_log(NULL, AV_LOG_VERBOSE, "No more inputs to read from, finishing.\n");
