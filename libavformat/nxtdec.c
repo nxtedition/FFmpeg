@@ -136,6 +136,26 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         av_log(NULL, AV_LOG_VERBOSE, "[nxt] DNXHD_115_720p50");
 
         return 0;
+    case DNXHD_85_720p50:
+        st->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+        st->codecpar->codec_id = AV_CODEC_ID_DNXHD;
+        st->codecpar->format = AV_PIX_FMT_YUV422P;
+        st->codecpar->field_order = AV_FIELD_PROGRESSIVE;
+        st->codecpar->sample_aspect_ratio.num = 4;
+        st->codecpar->sample_aspect_ratio.den = 3;
+        st->codecpar->bit_rate = 85000000;
+        st->codecpar->width = 960;
+        st->codecpar->height = 720;
+
+        st->time_base.num = 1;
+        st->time_base.den = 5000;
+
+        st->avg_frame_rate.num = 50;
+        st->avg_frame_rate.den = 1;
+
+        av_log(NULL, AV_LOG_VERBOSE, "[nxt] DNXHD_115_720p50");
+
+        return 0;
       default:
         av_log(NULL, AV_LOG_ERROR, "[nxt] invalid format %d\n", nxt->format);
         return -1;

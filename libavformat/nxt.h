@@ -10,8 +10,7 @@
 #define DNXHD_120_1080i50   1
 #define PCM_S32LE_48000c8   2
 #define DNXHD_115_720p50    3
-#define YUV422P_1080i50     4
-#define YUV422P_720p50      5
+#define DNXHD_85_720p50     4
 
 #define LTC_50 1
 #define LTC_25 2
