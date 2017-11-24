@@ -12,8 +12,26 @@ static int nxt_probe(AVProbeData *p)
     return (nxt->tag & NXT_TAG_MASK) == NXT_TAG ? AVPROBE_SCORE_MAX : 0;
 }
 
+static int nxt_read_frame(AVFormatContext *s, NXTHeader *nxt, int64_t *ppos, int64_t pos_limit) {
+    int64_t pos = *ppos;
+    
+    while (pos < pos_limit) {
+        if (avio_read(s->pb, (char*)nxt, NXT_ALIGN) < NXT_ALIGN) {
+            return -1;
+        } else if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+            *ppos = pos;
+            return 0;
+        } else {
+            pos += NXT_ALIGN;
+        }
+    }
+
+    return -1;
+}
+
 static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit)
 {
+    int ret;
     char buf[NXT_ALIGN];
     NXTHeader *nxt = (NXTHeader*)buf;
     int64_t pos = *ppos;
@@ -34,18 +52,14 @@ static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t 
         return AV_NOPTS_VALUE;
     }
 
-    while (pos < pos_limit) {
-        if (avio_read(s->pb, (char*)nxt, NXT_ALIGN) < NXT_ALIGN) {
-            return AV_NOPTS_VALUE;
-        } else if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
-            *ppos = pos;
-            return nxt->pts;
-        } else {
-            pos += NXT_ALIGN;
-        }
+    ret = nxt_read_frame(s, nxt, &pos, pos_limit);
+
+    if (ret < 0) {
+        return AV_NOPTS_VALUE;
     }
 
-    return AV_NOPTS_VALUE;
+    *ppos = pos;
+    return nxt->pts;
 }
 
 static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
@@ -231,6 +245,7 @@ fail:
 static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     int ret;
+    int64_t pos;
     char buf[NXT_ALIGN];
     NXTHeader *nxt = (NXTHeader*)buf;
 
@@ -239,9 +254,16 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
         return AVERROR_EOF;
     }
 
-    ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
-    if (ret < NXT_ALIGN) {
-        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_read failed %d\n", ret);
+    ret = avio_tell(s->pb);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_tell failed %d\n", ret);
+        return ret;
+    }
+    pos = ret;
+
+    ret = nxt_read_frame(s, nxt, &pos, pos + NXT_MAX_FRAME_SIZE);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[nxt] nxt_read_frame failed %d\n", ret);
         return ret;
     }
 
