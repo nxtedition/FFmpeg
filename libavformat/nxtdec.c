@@ -189,7 +189,7 @@ static int nxt_read_header(AVFormatContext *s)
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
         av_log(NULL, AV_LOG_ERROR, "[nxt] invalid tag \n");
-        return ret;
+        return -1;
     }
 
     st = avformat_new_stream(s, NULL);
@@ -247,7 +247,7 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     if ((nxt->tag & NXT_TAG_MASK) != NXT_TAG) {
         av_log(NULL, AV_LOG_ERROR, "[nxt] invalid tag\n");
-        return ret;
+        return -1;
     }
 
     ret = av_new_packet(pkt, nxt->next - NXT_ALIGN);
