@@ -170,16 +170,7 @@ static int nxt_read_header(AVFormatContext *s)
     NXTHeader *nxt = (NXTHeader*)buf;
     AVStream *st = NULL;
 
-    av_log(NULL, AV_LOG_VERBOSE, "[nxt] read_header \n");
-
-    ret = avio_tell(s->pb);
-    if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_tell failed %d\n", ret);
-        return ret;
-    }
-    pos = ret;
-
-    av_log(NULL, AV_LOG_INFO, "[nxt] startpos: %" PRId64 "\n", pos);    
+    av_log(NULL, AV_LOG_VERBOSE, "[nxt] read_header \n");  
 
     ret = avio_read(s->pb, (char*)nxt, NXT_ALIGN);
     if (ret < NXT_ALIGN) {
@@ -191,6 +182,15 @@ static int nxt_read_header(AVFormatContext *s)
         av_log(NULL, AV_LOG_ERROR, "[nxt] invalid tag \n");
         return -1;
     }
+
+    ret = avio_tell(s->pb);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[nxt] avio_tell failed %d\n", ret);
+        return ret;
+    }
+    pos = ret - NXT_ALIGN;
+
+    av_log(NULL, AV_LOG_INFO, "[nxt] startpos: %" PRId64 "\n", pos);  
 
     st = avformat_new_stream(s, NULL);
     if (!st) {
