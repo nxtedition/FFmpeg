@@ -184,11 +184,11 @@ static int nxt_read_header(AVFormatContext *s)
         return ret;
     }
 
-    ff_find_last_ts(s, -1, &last_ts, &lastpos, nxt_read_timestamp);
-    if (last_ts > 0) {
-        s->duration_estimation_method = AVFMT_DURATION_FROM_PTS;
-        st->duration = last_ts - nxt->pts;
-    }
+    // ff_find_last_ts(s, -1, &last_ts, &lastpos, nxt_read_timestamp);
+    // if (last_ts > 0) {
+    //     s->duration_estimation_method = AVFMT_DURATION_FROM_PTS;
+    //     st->duration = last_ts - nxt->pts;
+    // }
 
     av_log(NULL, AV_LOG_INFO, "[nxt] endpos: %" PRId64 "\n", lastpos);
     
