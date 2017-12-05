@@ -12,43 +12,43 @@ static int nxt_probe(AVProbeData *p)
     return (nxt->tag & NXT_TAG_MASK) == NXT_TAG ? AVPROBE_SCORE_MAX : 0;
 }
 
-static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit)
-{
-    char buf[NXT_ALIGN];
-    NXTHeader *nxt = (NXTHeader*)buf;
-    int64_t pos = *ppos;
+// static int64_t nxt_read_timestamp(AVFormatContext *s, int stream_index, int64_t *ppos, int64_t pos_limit)
+// {
+//     char buf[NXT_ALIGN];
+//     NXTHeader *nxt = (NXTHeader*)buf;
+//     int64_t pos = *ppos;
 
-    if (stream_index > 0) {
-        return AV_NOPTS_VALUE;
-    }
+//     if (stream_index > 0) {
+//         return AV_NOPTS_VALUE;
+//     }
 
-    if (pos % NXT_ALIGN > 0) {
-        pos += NXT_ALIGN - (pos % NXT_ALIGN);
-    }
+//     if (pos % NXT_ALIGN > 0) {
+//         pos += NXT_ALIGN - (pos % NXT_ALIGN);
+//     }
 
-    if (pos >= avio_size(s->pb)) {
-        return AV_NOPTS_VALUE;
-    }
+//     if (pos >= avio_size(s->pb)) {
+//         return AV_NOPTS_VALUE;
+//     }
 
-    if (avio_seek(s->pb, pos, SEEK_SET) < 0) {
-        return AV_NOPTS_VALUE;
-    }
+//     if (avio_seek(s->pb, pos, SEEK_SET) < 0) {
+//         return AV_NOPTS_VALUE;
+//     }
 
-    pos_limit = FFMIN(pos_limit, pos + NXT_MAX_FRAME_SIZE);
+//     pos_limit = FFMIN(pos_limit, pos + NXT_MAX_FRAME_SIZE);
 
-    while (pos < pos_limit) {
-        if (avio_read(s->pb, (char*)nxt, NXT_ALIGN) != NXT_ALIGN) {
-            return AV_NOPTS_VALUE;
-        } else if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
-            *ppos = pos;
-            return nxt->pts;
-        } else {
-            pos += NXT_ALIGN;
-        }
-    }
+//     while (pos < pos_limit) {
+//         if (avio_read(s->pb, (char*)nxt, NXT_ALIGN) != NXT_ALIGN) {
+//             return AV_NOPTS_VALUE;
+//         } else if ((nxt->tag & NXT_TAG_MASK) == NXT_TAG) {
+//             *ppos = pos;
+//             return nxt->pts;
+//         } else {
+//             pos += NXT_ALIGN;
+//         }
+//     }
 
-    return AV_NOPTS_VALUE;
-}
+//     return AV_NOPTS_VALUE;
+// }
 
 static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
 {
@@ -273,6 +273,6 @@ AVInputFormat ff_nxt_demuxer = {
     .read_probe     = nxt_probe,
     .read_header    = nxt_read_header,
     .read_packet    = nxt_read_packet,
-    .read_timestamp = nxt_read_timestamp,
+    // .read_timestamp = nxt_read_timestamp,
     .extensions     = "nxt"
 };
