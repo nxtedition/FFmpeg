@@ -259,8 +259,6 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->duration = nxt->duration;
     pkt->pts = nxt->pts;
 
-    av_shrink_packet(pkt, nxt->size);
-
     return 0;
 fail:
     av_packet_unref(pkt);
