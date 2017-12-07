@@ -175,7 +175,7 @@ static int nxt_read_header(AVFormatContext *s)
     }
     pos = ret - NXT_ALIGN;
 
-    av_log(NULL, AV_LOG_INFO, "[nxt] startpos: %" PRId64 "\n", pos);  
+    av_log(NULL, AV_LOG_INFO, "[nxt] startpos: %" PRId64 "\n", pos);
 
     st = avformat_new_stream(s, NULL);
     if (!st) {
@@ -191,11 +191,11 @@ static int nxt_read_header(AVFormatContext *s)
     // }
 
     av_log(NULL, AV_LOG_INFO, "[nxt] endpos: %" PRId64 "\n", lastpos);
-    
+
     ret = avio_seek(s->pb, pos, SEEK_SET);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "[nxt] avio_seek failed %d\n", ret);
-        return ret;        
+        return ret;
     }
 
     st->start_time = nxt->pts;
