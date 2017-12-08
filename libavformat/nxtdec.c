@@ -190,7 +190,7 @@ static int nxt_read_header(AVFormatContext *s)
     //     st->duration = last_ts - nxt->pts;
     // }
 
-    av_log(NULL, AV_LOG_INFO, "[nxt] endpos: %" PRId64 "\n", lastpos);
+    av_log(NULL, AV_LOG_INFO, "[nxt] endpos: %" PRId64 " startime: %" PRId64 "\n", lastpos, nxt->pts);
 
     ret = avio_seek(s->pb, pos, SEEK_SET);
     if (ret < 0) {
