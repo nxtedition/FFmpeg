@@ -7,14 +7,12 @@
 #define NXT_MAX_FRAME_SIZE  (4096 * 256)
 #define NXT_ALIGN           4096
 
-#define DNXHD_120_1080i50   1
-#define PCM_S32LE_48000c8   2
-#define DNXHD_115_720p50    3
-#define YUV422P_1080i50     4
-#define YUV422P_720p50      5
+#define NXT_DNXHD_120_1080i50   1
+#define NXT_PCM_S32LE_48000c8   2
+#define NXT_DNXHD_115_720p50    3
 
-#define LTC_50 1
-#define LTC_25 2
+#define NXT_LTC_50 1
+#define NXT_LTC_25 2
 
 typedef struct NXTHeader {
   int64_t tag;
