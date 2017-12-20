@@ -89,15 +89,24 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->avg_frame_rate.den = 1;
         st->time_base.num = 1;
         st->time_base.den = 50;
+        av_log(NULL, AV_LOG_INFO, "[nxt] LTC_50");
         break;
     case NXT_LTC_25:
         st->avg_frame_rate.num = 25;
         st->avg_frame_rate.den = 1;
         st->time_base.num = 1;
         st->time_base.den = 25;
+        av_log(NULL, AV_LOG_INFO, "[nxt] LTC_25");
         break;
     default:
-        return -1;
+        // XXX
+        st->avg_frame_rate.num = 50;
+        st->avg_frame_rate.den = 1;
+        st->time_base.num = 1;
+        st->time_base.den = 50;
+        av_log(NULL, AV_LOG_INFO, "[nxt] LTC_50");
+        break;
+        // return -1;
     }
 
     st->start_time = nxt->ltc;
@@ -185,6 +194,9 @@ static int nxt_read_header(AVFormatContext *s)
         return -1;
     }
 
+    av_log(NULL, AV_LOG_INFO, "[nxt] tag: " PRId64 " index: " PRId64 " position " PRId64 " format: %d pts: " PRId64 " ltc: %d ltc_format: %d", 
+        nxt->tag, nxt->index, nxt->position, nxt->format, nxt->pts, nxt->ltc, nxt->ltc_format);
+
     ret = avio_tell(s->pb);
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "[nxt] avio_tell failed %d\n", ret);
@@ -213,12 +225,13 @@ static int nxt_read_header(AVFormatContext *s)
 
     ret = nxt_read_stream(st, nxt);
     if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "[nxt] nxt_read_stream failed %d\n", ret);
         goto fail;
     }
 
     nxt_read_timecode(st, nxt);
 
-    av_log(NULL, AV_LOG_INFO, "[nxt] start_time: %d avg_frame_rate: %d/%d\n", nxt->ltc, st->avg_frame_rate.num, st->avg_frame_rate.den);
+    av_log(NULL, AV_LOG_INFO, "[nxt] start_time: " PRId64 " time_base: %d/%d\n", st->start_time, st->time_base.num, st->time_base.den);
 
     return 0;
 fail:
