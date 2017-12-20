@@ -82,34 +82,7 @@ static int nxt_read_timecode (AVStream *st, NXTHeader *nxt)
 
 static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
 {
-    switch (nxt->ltc_format)
-    {
-    case NXT_LTC_50:
-        st->avg_frame_rate.num = 50;
-        st->avg_frame_rate.den = 1;
-        st->time_base.num = 1;
-        st->time_base.den = 50;
-        av_log(NULL, AV_LOG_INFO, "[nxt] LTC_50");
-        break;
-    case NXT_LTC_25:
-        st->avg_frame_rate.num = 25;
-        st->avg_frame_rate.den = 1;
-        st->time_base.num = 1;
-        st->time_base.den = 25;
-        av_log(NULL, AV_LOG_INFO, "[nxt] LTC_25");
-        break;
-    default:
-        // XXX
-        st->avg_frame_rate.num = 50;
-        st->avg_frame_rate.den = 1;
-        st->time_base.num = 1;
-        st->time_base.den = 50;
-        av_log(NULL, AV_LOG_INFO, "[nxt] LTC_50");
-        break;
-        // return -1;
-    }
-
-    st->start_time = nxt->ltc;
+    st->start_time = nxt->pts;
 
     switch (nxt->format)
     {
@@ -125,8 +98,14 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->codecpar->width = 1920;
         st->codecpar->height = 1080;
 
+        st->time_base.num = 1;
+        st->time_base.den = 2500;
+
+        st->avg_frame_rate.num = 25;
+        st->avg_frame_rate.den = 1;
+
         // XXX
-        st->start_time += 7;
+        st->start_time += 700;
 
         av_log(NULL, AV_LOG_VERBOSE, "[nxt] DNXHD_120_1080i50");
 
@@ -141,6 +120,9 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->codecpar->sample_rate = 48000;
         st->codecpar->bits_per_coded_sample = 32;
         st->codecpar->bits_per_raw_sample = 32;
+
+        st->time_base.num = 1;
+        st->time_base.den = 48000;
 
         av_log(NULL, AV_LOG_VERBOSE, "[nxt] PCM_S32LE_48000c8");
 
@@ -157,8 +139,14 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->codecpar->width = 1280;
         st->codecpar->height = 720;
 
+        st->time_base.num = 1;
+        st->time_base.den = 5000;
+
+        st->avg_frame_rate.num = 50;
+        st->avg_frame_rate.den = 1;
+
         // XXX
-        st->start_time += 4;
+        st->start_time += 400;
 
         av_log(NULL, AV_LOG_VERBOSE, "[nxt] DNXHD_115_720p50");
 
@@ -194,7 +182,7 @@ static int nxt_read_header(AVFormatContext *s)
         return -1;
     }
 
-    av_log(NULL, AV_LOG_INFO, "[nxt] tag: " PRId64 " index: " PRId64 " position " PRId64 " format: %d pts: " PRId64 " ltc: %d ltc_format: %d", 
+    av_log(NULL, AV_LOG_INFO, "[nxt] tag: %" PRId64 " index: %" PRId64 " position %" PRId64 " format: %d pts: %" PRId64 " ltc: %d ltc_format: %d", 
         nxt->tag, nxt->index, nxt->position, nxt->format, nxt->pts, nxt->ltc, nxt->ltc_format);
 
     ret = avio_tell(s->pb);
@@ -231,7 +219,7 @@ static int nxt_read_header(AVFormatContext *s)
 
     nxt_read_timecode(st, nxt);
 
-    av_log(NULL, AV_LOG_INFO, "[nxt] start_time: " PRId64 " time_base: %d/%d\n", st->start_time, st->time_base.num, st->time_base.den);
+    av_log(NULL, AV_LOG_INFO, "[nxt] start_time: %" PRId64 " time_base: %d/%d\n", st->start_time, st->time_base.num, st->time_base.den);
 
     return 0;
 fail:
@@ -278,8 +266,8 @@ static int nxt_read_packet(AVFormatContext *s, AVPacket *pkt)
     pkt->pos = avio_tell(s->pb) - nxt->next;
     pkt->stream_index = 0;
     pkt->flags = AV_PKT_FLAG_KEY;
-    pkt->duration = 1;
-    pkt->pts = nxt->ltc;
+    pkt->duration = nxt->duration;
+    pkt->pts = nxt->pts;
 
     // av_log(NULL, AV_LOG_INFO, "[nxt] pts: %" PRId64 " ltc: %d #%d\n", pkt->pts, nxt->ltc, nxt->format);
 
@@ -296,6 +284,5 @@ AVInputFormat ff_nxt_demuxer = {
     .read_header    = nxt_read_header,
     .read_packet    = nxt_read_packet,
     // .read_timestamp = nxt_read_timestamp,
-    .flags          = AVFMT_TS_DISCONT,
     .extensions     = "nxt"
 };
