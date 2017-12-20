@@ -146,7 +146,7 @@ static int nxt_read_stream(AVStream *st, NXTHeader *nxt)
         st->avg_frame_rate.den = 1;
 
         // XXX
-        st->start_time += 400;
+        st->start_time += 700;
 
         av_log(NULL, AV_LOG_VERBOSE, "[nxt] DNXHD_115_720p50");
 
