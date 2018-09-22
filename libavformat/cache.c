@@ -64,6 +64,7 @@ typedef struct Context {
     URLContext *inner;
     int64_t cache_hit, cache_miss;
     int read_ahead_limit;
+    int read_buf_size;
 } Context;
 
 static int cmp(const void *key, const void *node)
@@ -159,11 +160,92 @@ fail:
     return ret;
 }
 
+static int cache_inner_read(URLContext *h, unsigned char *buf, int size)
+{
+    Context *c= h->priv_data;
+    int64_t r;
+
+    if (c->logical_pos != c->inner_pos) {
+        r = ffurl_seek(c->inner, c->logical_pos, SEEK_SET);
+        if (r<0) {
+            av_log(h, AV_LOG_ERROR, "Failed to perform internal seek\n");
+            return r;
+        }
+        c->inner_pos = r;
+    }
+
+    r = ffurl_read(c->inner, buf, size);
+    if (r == AVERROR_EOF && size>0) {
+        c->is_true_eof = 1;
+        av_assert0(c->end >= c->logical_pos);
+    }
+    if (r<=0)
+        return r;
+    c->inner_pos += r;
+
+    add_entry(h, buf, r);
+    c->logical_pos += r;
+    c->end = FFMAX(c->end, c->logical_pos);
+    return r;
+}
+
+// TODO (perf): Implement as separate thread.
+static int cache_read_ahead(URLContext *h)
+{
+    Context *c= h->priv_data;
+    int64_t r, end, old_pos, size;
+    CacheEntry *entry, *next[2] = {NULL, NULL};
+    uint8_t buf[32768];
+
+    end = c->read_ahead_limit < 0
+        ? INT64_MAX
+        : c->logical_pos + c->read_ahead_limit;
+
+    if (c->is_true_eof) {
+        end = FFMIN(c->end, end);
+    }
+
+    end = FFMIN(c->logical_pos + c->read_buf_size, end);
+
+    old_pos = c->logical_pos;
+
+    while (c->logical_pos < end) {
+        entry = av_tree_find(c->root, &c->logical_pos, cmp, (void**)next);
+
+        if (!entry)
+            entry = next[0];
+
+        if (entry && entry->logical_pos + entry->size > c->logical_pos) {
+            c->logical_pos = entry->logical_pos + entry->size;
+            continue;
+        }
+
+        size = next[1]
+            ? FFMIN(sizeof(buf), next[1]->logical_pos - c->logical_pos)
+            : sizeof(buf);
+
+        // TODO (perf): Avoid creating entries smaller than read_buf_size.
+        r = cache_inner_read(h, buf, size);
+        if (r <= 0)
+            break;
+    }
+
+    if (r >= 0) {
+        r = c->logical_pos - old_pos;
+    }
+
+    c->logical_pos = old_pos;
+
+    return r;
+}
+
 static int cache_read(URLContext *h, unsigned char *buf, int size)
 {
     Context *c= h->priv_data;
     CacheEntry *entry, *next[2] = {NULL, NULL};
     int64_t r;
+
+    cache_read_ahead(h);
 
     entry = av_tree_find(c->root, &c->logical_pos, cmp, (void**)next);
 
@@ -195,33 +277,7 @@ static int cache_read(URLContext *h, unsigned char *buf, int size)
         }
     }
 
-    // Cache miss or some kind of fault with the cache
-
-    if (c->logical_pos != c->inner_pos) {
-        r = ffurl_seek(c->inner, c->logical_pos, SEEK_SET);
-        if (r<0) {
-            av_log(h, AV_LOG_ERROR, "Failed to perform internal seek\n");
-            return r;
-        }
-        c->inner_pos = r;
-    }
-
-    r = ffurl_read(c->inner, buf, size);
-    if (r == AVERROR_EOF && size>0) {
-        c->is_true_eof = 1;
-        av_assert0(c->end >= c->logical_pos);
-    }
-    if (r<=0)
-        return r;
-    c->inner_pos += r;
-
-    c->cache_miss ++;
-
-    add_entry(h, buf, r);
-    c->logical_pos += r;
-    c->end = FFMAX(c->end, c->logical_pos);
-
-    return r;
+    return cache_inner_read(h, buf, size);
 }
 
 static int64_t cache_seek(URLContext *h, int64_t pos, int whence)
@@ -322,6 +378,7 @@ static int cache_close(URLContext *h)
 
 static const AVOption options[] = {
     { "read_ahead_limit", "Amount in bytes that may be read ahead when seeking isn't supported, -1 for unlimited", OFFSET(read_ahead_limit), AV_OPT_TYPE_INT, { .i64 = 65536 }, -1, INT_MAX, D },
+    { "read_buf_size", "Smallest amount of bytes read from inner source at a time before yielding", OFFSET(read_buf_size), AV_OPT_TYPE_INT, { .i64 = 512 * 512 }, -1, INT_MAX, D },
     {NULL},
 };
 
