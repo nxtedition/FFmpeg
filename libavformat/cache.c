@@ -379,7 +379,7 @@ static int cache_close(URLContext *h)
 
 static const AVOption options[] = {
     { "read_ahead_limit", "Amount in bytes that may be read ahead when seeking isn't supported, -1 for unlimited", OFFSET(read_ahead_limit), AV_OPT_TYPE_INT, { .i64 = 65536 }, -1, INT_MAX, D },
-    { "read_buf_size", "Smallest amount of bytes read from inner source at a time before yielding", OFFSET(read_buf_size), AV_OPT_TYPE_INT, { .i64 = 512 * 512 }, -1, INT_MAX, D },
+    { "read_buf_size", "Smallest amount of bytes read from inner source at a time before yielding", OFFSET(read_buf_size), AV_OPT_TYPE_INT, { .i64 = 512 * 512 }, 1, INT_MAX, D },
     {NULL},
 };
 
