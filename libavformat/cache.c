@@ -65,6 +65,7 @@ typedef struct Context {
     int64_t cache_hit, cache_miss;
     int read_ahead_limit;
     int read_buf_size;
+    uint8_t* read_buf;
 } Context;
 
 static int cmp(const void *key, const void *node)
@@ -77,6 +78,11 @@ static int cache_open(URLContext *h, const char *arg, int flags, AVDictionary **
     int ret;
     char *buffername;
     Context *c= h->priv_data;
+
+    c->read_buf = av_mallocz(c->read_buf_size);
+    if (!c->read_buf) {
+        return AVERROR(ENOMEM);
+    }
 
     av_strstart(arg, "cache:", &arg);
 
@@ -174,7 +180,7 @@ static int cache_inner_read(URLContext *h, unsigned char *buf, int size)
         c->inner_pos = r;
     }
 
-    r = ffurl_read(c->inner, buf, size);
+    r = ffurl_read_complete(c->inner, buf, size);
     if (r == AVERROR_EOF && size>0) {
         c->is_true_eof = 1;
         av_assert0(c->end >= c->logical_pos);
@@ -195,7 +201,6 @@ static int cache_read_ahead(URLContext *h)
     Context *c= h->priv_data;
     int64_t r, end, old_pos, size;
     CacheEntry *entry, *next[2] = {NULL, NULL};
-    uint8_t buf[32768];
 
     end = c->read_ahead_limit < 0
         ? INT64_MAX
@@ -221,11 +226,10 @@ static int cache_read_ahead(URLContext *h)
         }
 
         size = next[1]
-            ? FFMIN(sizeof(buf), next[1]->logical_pos - c->logical_pos)
-            : sizeof(buf);
+            ? FFMIN(c->read_buf_size, next[1]->logical_pos - c->logical_pos)
+            : c->read_buf_size;
 
-        // TODO (perf): Avoid creating entries smaller than read_buf_size.
-        r = cache_inner_read(h, buf, size);
+        r = cache_inner_read(h, c->read_buf, size);
         if (r <= 0)
             break;
     }
@@ -369,6 +373,7 @@ static int cache_close(URLContext *h)
     ffurl_close(c->inner);
     av_tree_enumerate(c->root, NULL, NULL, enu_free);
     av_tree_destroy(c->root);
+    av_free(c->read_buf);
 
     return 0;
 }
