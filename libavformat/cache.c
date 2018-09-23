@@ -199,7 +199,7 @@ static int cache_inner_read(URLContext *h, unsigned char *buf, int size)
 static int cache_read_ahead(URLContext *h)
 {
     Context *c= h->priv_data;
-    int64_t r, end, old_pos, size;
+    int64_t r, end, old_pos;
     CacheEntry *entry, *next[2] = {NULL, NULL};
 
     end = c->read_ahead_limit < 0
@@ -225,11 +225,7 @@ static int cache_read_ahead(URLContext *h)
             continue;
         }
 
-        size = next[1]
-            ? FFMIN(c->read_buf_size, next[1]->logical_pos - c->logical_pos)
-            : c->read_buf_size;
-
-        r = cache_inner_read(h, c->read_buf, size);
+        r = cache_inner_read(h, c->read_buf, c->read_buf_size);
         if (r <= 0)
             break;
     }
