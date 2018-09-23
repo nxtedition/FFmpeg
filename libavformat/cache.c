@@ -234,13 +234,9 @@ static int cache_read_ahead(URLContext *h)
             break;
     }
 
-    if (r >= 0) {
-        r = c->logical_pos - old_pos;
-    }
-
     c->logical_pos = old_pos;
 
-    return r;
+    return r < 0 ? r : 0;
 }
 
 static int cache_read(URLContext *h, unsigned char *buf, int size)
