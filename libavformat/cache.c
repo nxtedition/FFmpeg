@@ -171,6 +171,10 @@ static int cache_inner_read(URLContext *h, unsigned char *buf, int size)
     Context *c= h->priv_data;
     int64_t r;
 
+    if (c->is_true_eof && c->logical_pos == c->end) {
+        return AVERROR_EOF;
+    }
+
     if (c->logical_pos != c->inner_pos) {
         r = ffurl_seek(c->inner, c->logical_pos, SEEK_SET);
         if (r<0) {
