@@ -136,6 +136,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     AVFilterLink *outlink = ctx->outputs[0];
     int *hist = s->frames[s->n].histogram;
     const uint8_t *p = frame->data[0];
+    int stride = frame->format == AV_PIX_FMT_BGRA || frame->format == AV_PIX_FMT_RGBA ? 4 : 3;
 
     // keep a reference of each frame
     s->frames[s->n].buf = frame;
@@ -143,9 +144,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     // update current frame RGB histogram
     for (j = 0; j < inlink->h; j++) {
         for (i = 0; i < inlink->w; i++) {
-            hist[0*256 + p[i*3    ]]++;
-            hist[1*256 + p[i*3 + 1]]++;
-            hist[2*256 + p[i*3 + 2]]++;
+            hist[0*256 + p[i*stride    ]]++;
+            hist[1*256 + p[i*stride + 1]]++;
+            hist[2*256 + p[i*stride + 2]]++;
         }
         p += frame->linesize[0];
     }
@@ -197,6 +198,7 @@ static int query_formats(AVFilterContext *ctx)
 {
     static const enum AVPixelFormat pix_fmts[] = {
         AV_PIX_FMT_RGB24, AV_PIX_FMT_BGR24,
+        AV_PIX_FMT_RGBA, AV_PIX_FMT_BGRA,
         AV_PIX_FMT_NONE
     };
     AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
