@@ -36,3 +36,4 @@ int ff_decklink_list_input_devices(AVFormatContext *avctx, struct AVDeviceInfoLi
 #endif
 
 #endif /* AVDEVICE_DECKLINK_DEC_H */
+max_q_size

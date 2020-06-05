@@ -300,6 +300,7 @@ External library support:
   --enable-libzvbi         enable teletext support via libzvbi [no]
   --enable-lv2             enable LV2 audio filtering [no]
   --disable-lzma           disable lzma [autodetect]
+  --enable-ntv2            enable AJA NTV2 I/O support [no]
   --enable-decklink        enable Blackmagic DeckLink I/O support [no]
   --enable-mbedtls         enable mbedTLS, needed for https support
                            if openssl, gnutls or libtls is not used [no]
@@ -1729,6 +1730,7 @@ EXTERNAL_LIBRARY_GPL_LIST="
 "
 
 EXTERNAL_LIBRARY_NONFREE_LIST="
+    ntv2
     decklink
     libfdk_aac
     openssl
@@ -3369,6 +3371,10 @@ avfoundation_indev_suggest="coregraphics applicationservices"
 avfoundation_indev_extralibs="-framework Foundation"
 bktr_indev_deps_any="dev_bktr_ioctl_bt848_h machine_ioctl_bt848_h dev_video_bktr_ioctl_bt848_h dev_ic_bt8xx_h"
 caca_outdev_deps="libcaca"
+ntv2_indev_deps="ntv2"
+ntv2_indev_extralibs="-lstdc++ -lajantv2 -lrt"
+ntv2_outdev_deps="ntv2"
+ntv2_outdev_extralibs="-lstdc++ -lajantv2 -lrt"
 decklink_deps_any="libdl LoadLibrary"
 decklink_indev_deps="decklink threads"
 decklink_indev_extralibs="-lstdc++"
