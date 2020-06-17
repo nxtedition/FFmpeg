@@ -294,7 +294,7 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     st->codecpar->field_order = ::IsProgressivePicture(video_format) ? AV_FIELD_PROGRESSIVE : AV_FIELD_TT;
 
     st->r_frame_rate = av_make_q(tb_den, tb_num);
-    avpriv_set_pts_info(st, 64, tb_num, tb_den);
+    avpriv_set_pts_info(st, 64, 1, 48000);
 
     av_assert0(av_q2d(st->r_frame_rate) >= 24 && av_q2d(st->r_frame_rate) < 120);
     av_assert0(st->codecpar->width > 0);
@@ -374,7 +374,7 @@ static int setup_audio(AVFormatContext *avctx, NTV2Context *ctx)
     st->codecpar->channels = audio_channels;
     st->codecpar->channel_layout = av_get_default_channel_layout(st->codecpar->channels);
     st->codecpar->sample_rate = 48000;
-    avpriv_set_pts_info(st, 64, 1, st->codecpar->sample_rate);
+    avpriv_set_pts_info(st, 64, 1, 48000);
 
     ctx->audio_st = st;
 
@@ -600,8 +600,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
                 audio_pkt.pts = av_rescale_q(audio_pts, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
                 audio_pkt.dts = audio_pkt.pts;
                 audio_pkt.duration = av_rescale_q(audioTime - audio_pts, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
-                audio_pkt.size = audio_pkt.duration * audio_codec->channels * av_get_bytes_per_sample(sample_format);
-                av_assert0(ctx->audio_st->time_base.num == 1 && ctx->audio_st->time_base.den == audio_codec->sample_rate);
+                audio_pkt.size = av_rescale_q(audio_pkt.duration, ctx->audio_st->time_base, {1, audio_codec->sample_rate}) * audio_codec->channels * av_get_bytes_per_sample(sample_format);
                 audio_pkt.buf = av_buffer_allocz(audio_pkt.size);
                 audio_pkt.data = audio_pkt.buf->data;
                 audio_pkt.size = audio_pkt.buf->size;
