@@ -475,7 +475,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
         }
 
         // TODO (fix): Is this the correct way to detect signal?
-        const auto has_video_signal = device->GetInputVideoFormat() == video_format;
+        const auto has_video_signal = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source)) == video_format;
         {
             if (has_video_signal) {
                 if (signal_debounce == 1) {
