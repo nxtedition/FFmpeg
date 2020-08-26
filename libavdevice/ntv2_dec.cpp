@@ -22,6 +22,29 @@ extern "C" {
 
 #define AJA_AUDIO_TIME_BASE_Q {1,10000000}
 
+// from libavcodec/avpacket.c
+int ff_side_data_set_prft(AVPacket *pkt, int64_t timestamp)
+{
+    AVProducerReferenceTime *prft;
+    uint8_t *side_data;
+    int side_data_size;
+
+    side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+    if (!side_data) {
+        side_data_size = sizeof(AVProducerReferenceTime);
+        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_PRFT, side_data_size);
+    }
+
+    if (!side_data || side_data_size < sizeof(AVProducerReferenceTime))
+        return AVERROR(ENOMEM);
+
+    prft = (AVProducerReferenceTime *)side_data;
+    prft->wallclock = timestamp;
+    prft->flags = 0;
+
+    return 0;
+}
+
 static void avpacket_queue_init(AVPacketQueue *q)
 {
     memset(q, 0, sizeof(AVPacketQueue));
@@ -515,7 +538,8 @@ static void capture_thread(AJAThread *thread, void *opaque)
             av_assert0(transfer.SetAudioBuffer(reinterpret_cast<ULWord*>(audio_pkt.buf->data), static_cast<ULWord>(audio_pkt.buf->size)));
             av_assert0(device->AutoCirculateTransfer(channel, transfer));
 
-            const auto audioTime = transfer.GetFrameInfo().acAudioClockCurrentTime - status.acAudioClockStartTime;
+            const auto frameInfo = transfer.GetFrameInfo();
+            const auto audioTime = frameInfo.acAudioClockCurrentTime - status.acAudioClockStartTime;
 
             video_pkt.pts = av_rescale_q(audioTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
             video_pkt.dts = video_pkt.pts;
@@ -530,6 +554,9 @@ static void capture_thread(AJAThread *thread, void *opaque)
             av_assert0(ctx->audio_st->time_base.num == 1 && ctx->audio_st->time_base.den == audio_codec->sample_rate);
 
             audio_pts = av_rescale_q(audio_pkt.pts + audio_pkt.duration, ctx->audio_st->time_base, AJA_AUDIO_TIME_BASE_Q);
+
+            // set producer reference time side data
+            ff_side_data_set_prft(&video_pkt, frameInfo.acFrameTime / 10);
 
             av_log(avctx, AV_LOG_TRACE, "video_pts=%li video_dur=%li audio_pts=%li audio_dur=%li\n",
                 video_pkt.pts,
