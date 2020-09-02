@@ -23,6 +23,7 @@ extern "C" {
 #define AJA_AUDIO_TIME_BASE_Q {1,10000000}
 
 // from libavcodec/avpacket.c
+// timestamp is microseconds since epoch
 int ff_side_data_set_prft(AVPacket *pkt, int64_t timestamp)
 {
     AVProducerReferenceTime *prft;
@@ -558,11 +559,12 @@ static void capture_thread(AJAThread *thread, void *opaque)
             // set producer reference time side data
             ff_side_data_set_prft(&video_pkt, frameInfo.acFrameTime / 10);
 
-            av_log(avctx, AV_LOG_TRACE, "video_pts=%li video_dur=%li audio_pts=%li audio_dur=%li\n",
+            av_log(avctx, AV_LOG_TRACE, "video_pts=%li video_dur=%li audio_pts=%li audio_dur=%li prft=%lu\n",
                 video_pkt.pts,
                 video_pkt.duration,
                 audio_pkt.pts,
-                audio_pkt.duration);
+                audio_pkt.duration,
+                frameInfo.acFrameTime / 10);
 
             if (avpacket_queue_size(&ctx->queue) > ctx->queue_size) {
                 ctx->dropped += 1;
