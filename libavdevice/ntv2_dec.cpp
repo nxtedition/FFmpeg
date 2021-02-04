@@ -22,6 +22,8 @@ extern "C" {
 
 #define AJA_AUDIO_TIME_BASE_Q {1,10000000}
 
+const auto PIXEL_FORMAT = NTV2_FBF_10BIT_YCBCR;
+
 // from libavcodec/avpacket.c
 // timestamp is microseconds since epoch
 int ff_side_data_set_prft(AVPacket *pkt, int64_t timestamp)
@@ -165,13 +167,13 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     const auto channel = ::NTV2InputSourceToChannel(static_cast<NTV2InputSource>(ctx->input_source));
     const auto input_source = static_cast<NTV2InputSource>(ctx->input_source);
     const auto video_format = static_cast<NTV2VideoFormat>(ctx->video_format);
-    const auto pixel_format = NTV2_FBF_8BIT_YCBCR;
     const auto frame_rate = ::GetNTV2FrameRateFromVideoFormat(video_format);
+    const auto pixel_format = PIXEL_FORMAT;
 
     av_assert0(channel < NTV2_CHANNEL_INVALID);
     av_assert0(input_source < NTV2_INPUTSOURCE_INVALID);
     av_assert0(video_format > NTV2_FORMAT_UNKNOWN && video_format < NTV2_MAX_NUM_VIDEO_FORMATS);
-    av_assert0(pixel_format > NTV2_FBF_FIRST && pixel_format < NTV2_FBF_INVALID);
+    av_assert0(pixel_format >= NTV2_FBF_FIRST && pixel_format < NTV2_FBF_INVALID);
     av_assert0(frame_rate > NTV2_FRAMERATE_UNKNOWN);
 
     av_assert0(NTV2_IS_HD_VIDEO_FORMAT(video_format));
@@ -311,10 +313,9 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     st->codecpar->chroma_location = AVCHROMA_LOC_UNSPECIFIED; // TODO
     st->codecpar->width = width;
     st->codecpar->height = height;
-    st->codecpar->codec_id = AV_CODEC_ID_RAWVIDEO;
-    st->codecpar->codec_tag = MKTAG('U', 'Y', 'V', 'Y');
-    st->codecpar->format = AV_PIX_FMT_UYVY422;
-    st->codecpar->bit_rate = av_rescale(width * height * 16, tb_den, tb_num);
+    st->codecpar->codec_id = AV_CODEC_ID_V210;
+    st->codecpar->codec_tag = MKTAG('v', '2', '1', '0');
+    st->codecpar->bit_rate = av_rescale(width * height * 16 * 8 / 6, tb_den, tb_num); // v210
     st->codecpar->field_order = ::IsProgressivePicture(video_format) ? AV_FIELD_PROGRESSIVE : AV_FIELD_TT;
 
     st->r_frame_rate = av_make_q(tb_den, tb_num);
@@ -436,6 +437,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
     const auto device = reinterpret_cast<CNTV2Card*>(ctx->device);
     const auto channel = ::NTV2InputSourceToChannel(static_cast<NTV2InputSource>(ctx->input_source));
     const auto video_format = static_cast<NTV2VideoFormat>(ctx->video_format);
+    const auto pixel_format = PIXEL_FORMAT;
 
     int ret;
 
@@ -443,7 +445,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
     av_assert0(video_format > NTV2_FORMAT_UNKNOWN && video_format < NTV2_MAX_NUM_VIDEO_FORMATS);
 
     // TODO: Assumes resolution <= 1920x1080 && format <= 8bit ycbcr.
-    const auto num_frame_buffers = ::NTV2DeviceGetNumberFrameBuffers(device->GetDeviceID(), NTV2_FG_1920x1080, NTV2_FBF_8BIT_YCBCR);
+    const auto num_frame_buffers = ::NTV2DeviceGetNumberFrameBuffers(device->GetDeviceID(), NTV2_FG_1920x1080, pixel_format);
     const auto num_frames_stores = ::NTV2DeviceGetNumFrameStores(device->GetDeviceID());
     const auto buffer_count =  num_frame_buffers / num_frames_stores;
     av_assert0(buffer_count > 1);
@@ -475,12 +477,12 @@ static void capture_thread(AJAThread *thread, void *opaque)
 
     const auto video_size = ::GetVideoActiveSize(video_format, transfer.acFrameBufferFormat, NTV2_VANCMODE_OFF);
     const auto video_codec = ctx->video_st->codecpar;
-    const auto pixel_format = static_cast<AVPixelFormat>(video_codec->format);
+    const auto av_pixel_format = static_cast<AVPixelFormat>(video_codec->format);
     auto video_pool = av_buffer_pool_init2(video_size, device, aja_pool_alloc, NULL);
 
     const auto audio_size = 8192 * 16 * 4;
     const auto audio_codec = ctx->audio_st->codecpar;
-    const auto sample_format = static_cast<AVSampleFormat>(audio_codec->format);
+    const auto av_sample_format = static_cast<AVSampleFormat>(audio_codec->format);
     auto audio_pool = av_buffer_pool_init2(audio_size, device, aja_pool_alloc, NULL);
 
     auto video_pts = AV_NOPTS_VALUE;
@@ -551,7 +553,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
             audio_pkt.pts = av_rescale_q(audioTime, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
             audio_pkt.dts = audio_pkt.pts;
             av_shrink_packet(&audio_pkt, transfer.GetCapturedAudioByteCount());
-            audio_pkt.duration = audio_pkt.size / (audio_codec->channels * av_get_bytes_per_sample(sample_format));
+            audio_pkt.duration = audio_pkt.size / (audio_codec->channels * av_get_bytes_per_sample(av_sample_format));
             av_assert0(ctx->audio_st->time_base.num == 1 && ctx->audio_st->time_base.den == audio_codec->sample_rate);
 
             audio_pts = av_rescale_q(audio_pkt.pts + audio_pkt.duration, ctx->audio_st->time_base, AJA_AUDIO_TIME_BASE_Q);
@@ -603,7 +605,8 @@ static void capture_thread(AJAThread *thread, void *opaque)
                 video_pkt.data = video_pkt.buf->data;
                 video_pkt.size = video_pkt.buf->size;
 
-                if (ctx->draw_bars && pixel_format == AV_PIX_FMT_UYVY422) {
+                // TODO (fix): This no longer works with V210
+                if (ctx->draw_bars && av_pixel_format == AV_PIX_FMT_UYVY422) {
                     const unsigned bars[8] = {
                         0xEA80EA80, 0xD292D210, 0xA910A9A5, 0x90229035,
                         0x6ADD6ACA, 0x51EF515A, 0x286D28EF, 0x10801080 };
@@ -629,7 +632,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
                 audio_pkt.pts = av_rescale_q(audio_pts, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
                 audio_pkt.dts = audio_pkt.pts;
                 audio_pkt.duration = av_rescale_q(audioTime - audio_pts, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
-                audio_pkt.size = av_rescale_q(audio_pkt.duration, ctx->audio_st->time_base, {1, audio_codec->sample_rate}) * audio_codec->channels * av_get_bytes_per_sample(sample_format);
+                audio_pkt.size = av_rescale_q(audio_pkt.duration, ctx->audio_st->time_base, {1, audio_codec->sample_rate}) * audio_codec->channels * av_get_bytes_per_sample(av_sample_format);
                 audio_pkt.buf = av_buffer_allocz(audio_pkt.size);
                 audio_pkt.data = audio_pkt.buf->data;
                 audio_pkt.size = audio_pkt.buf->size;
