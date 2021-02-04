@@ -6,20 +6,13 @@ extern "C" {
 #endif
 
 #include "libavutil/thread.h"
+#include "libavutil/threadmessage.h"
 
 typedef enum NTV2PtsSource {
     PTS_SRC_WALLCLOCK = 1,
     PTS_SRC_ABS_WALLCLOCK = 2,
     PTS_SRC_NB
 } NTV2PtsSource;
-
-typedef struct AVPacketQueue {
-    struct AVPacketList *first_pkt, *last_pkt;
-    int size;
-    int eof;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-} AVPacketQueue;
 
 typedef struct NTV2Context {
     const struct AVClass *cclass;
@@ -41,7 +34,7 @@ typedef struct NTV2Context {
     struct AVStream *video_st;
     struct AVStream *audio_st;
 
-    AVPacketQueue queue;
+    AVThreadMessageQueue *queue;
 } NTV2Context;
 
 int ff_ntv2_read_header(struct AVFormatContext *avctx);
