@@ -48,119 +48,6 @@ int ff_side_data_set_prft(AVPacket *pkt, int64_t timestamp)
     return 0;
 }
 
-static void avpacket_queue_init(AVPacketQueue *q)
-{
-    memset(q, 0, sizeof(AVPacketQueue));
-    av_assert0(pthread_mutex_init(&q->mutex, NULL) == 0);
-    av_assert0(pthread_cond_init(&q->cond, NULL) == 0);
-}
-
-static void avpacket_queue_flush(AVPacketQueue *q)
-{
-    AVPacketList *pkt, *pkt1;
-
-    av_assert0(pthread_mutex_lock(&q->mutex) == 0);
-    for (pkt = q->first_pkt; pkt != NULL; pkt = pkt1) {
-        pkt1 = pkt->next;
-        av_packet_unref(&pkt->pkt);
-        av_freep(&pkt);
-    }
-    q->last_pkt   = NULL;
-    q->first_pkt  = NULL;
-    q->size       = 0;
-    q->eof        = 1;
-
-    av_assert0(pthread_cond_signal(&q->cond) == 0);
-
-    av_assert0(pthread_mutex_unlock(&q->mutex) == 0);
-}
-
-static void avpacket_queue_close(AVPacketQueue *q)
-{
-    avpacket_queue_flush(q);
-    av_assert0(pthread_mutex_destroy(&q->mutex) == 0);
-    av_assert0(pthread_cond_destroy(&q->cond) == 0);
-}
-
-static int avpacket_queue_size(AVPacketQueue *q)
-{
-    int size;
-    av_assert0(pthread_mutex_lock(&q->mutex) == 0);
-    size = q->size;
-    av_assert0(pthread_mutex_unlock(&q->mutex) == 0);
-    return size;
-}
-
-static int avpacket_queue_put(AVPacketQueue *q, AVPacket *pkt)
-{
-    if (!pkt->buf || pkt->size < 64 || !pkt->data) {
-        return AVERROR(EINVAL);
-    }
-
-    if (av_packet_make_refcounted(pkt) < 0) {
-        av_packet_unref(pkt);
-        return AVERROR(EINVAL);
-    }
-
-    auto pkt1 = (AVPacketList *)av_malloc(sizeof(AVPacketList));
-    if (!pkt1) {
-        av_packet_unref(pkt);
-        return AVERROR(ENOMEM);
-    }
-    av_packet_move_ref(&pkt1->pkt, pkt);
-    pkt1->next = NULL;
-
-    av_assert0(pthread_mutex_lock(&q->mutex) == 0);
-
-    if (!q->last_pkt) {
-        q->first_pkt = pkt1;
-    } else {
-        q->last_pkt->next = pkt1;
-    }
-
-    q->last_pkt = pkt1;
-    q->size++;
-
-    av_assert0(pthread_cond_signal(&q->cond) == 0);
-
-    av_assert0(pthread_mutex_unlock(&q->mutex) == 0);
-    return 0;
-}
-
-static int avpacket_queue_get(AVPacketQueue *q, AVPacket *pkt)
-{
-    AVPacketList *pkt1;
-    int ret;
-
-    if (q->eof) {
-        return AVERROR_EOF;
-    }
-
-    av_assert0(pthread_mutex_lock(&q->mutex) == 0);
-
-    for (;; ) {
-        pkt1 = q->first_pkt;
-        if (pkt1) {
-            q->first_pkt = pkt1->next;
-            if (!q->first_pkt) {
-                q->last_pkt = NULL;
-            }
-            q->size--;
-            *pkt = pkt1->pkt;
-            av_free(pkt1);
-            ret = 1;
-            break;
-        } else if (q->eof) {
-            ret = -1;
-            break;
-        } else {
-            av_assert0(pthread_cond_wait(&q->cond, &q->mutex) == 0);
-        }
-    }
-    av_assert0(pthread_mutex_unlock(&q->mutex) == 0);
-    return ret;
-}
-
 static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
 {
     const auto device = reinterpret_cast<CNTV2Card*>(ctx->device);
@@ -568,28 +455,16 @@ static void capture_thread(AJAThread *thread, void *opaque)
                 audio_pkt.duration,
                 frameInfo.acFrameTime / 10);
 
-            if (avpacket_queue_size(&ctx->queue) > ctx->queue_size) {
+            if (av_thread_message_queue_send(ctx->queue, &video_pkt, AV_THREAD_MESSAGE_NONBLOCK) < 0) {
                 ctx->dropped += 1;
-                av_log(avctx, AV_LOG_WARNING, "input frame dropped: dropped=%i video_pts=%li video_dur=%li audio_pts=%li audio_dur=%li\n",
+                av_log(avctx, AV_LOG_WARNING, "queue full, frame dropped: dropped=%i video_pts=%li audio_pts=%li\n",
                     ctx->dropped,
                     video_pkt.pts,
-                    video_pkt.duration,
-                    audio_pkt.pts,
-                    audio_pkt.duration);
+                    audio_pkt.pts);
+                av_packet_unref(&video_pkt);
+                av_packet_unref(&audio_pkt);
             } else {
-                ret = avpacket_queue_put(&ctx->queue, &video_pkt);
-                if (ret < 0) {
-                    av_log(avctx, AV_LOG_ERROR, "invalid video packet pkt_pts=%li pkt_size=%i\n",
-                        video_pkt.pts,
-                        video_pkt.size);
-                }
-
-                ret = avpacket_queue_put(&ctx->queue, &audio_pkt);
-                if (ret < 0) {
-                    av_log(avctx, AV_LOG_ERROR, "invalid audio packet pkt_pts=%li pkt_size=%i\n",
-                        audio_pkt.pts,
-                        audio_pkt.size);
-                }
+                av_thread_message_queue_send(ctx->queue, &audio_pkt, 0);
             }
         } else {
             const auto audioTime = status.acAudioClockCurrentTime - status.acAudioClockStartTime;
@@ -648,22 +523,21 @@ static void capture_thread(AJAThread *thread, void *opaque)
                     audio_pkt.pts,
                     audio_pkt.duration);
 
-                ret = avpacket_queue_put(&ctx->queue, &video_pkt);
-                if (ret < 0) {
-                    av_log(avctx, AV_LOG_ERROR, "invalid video packet\n");
-                }
-
-                ret = avpacket_queue_put(&ctx->queue, &audio_pkt);
-                if (ret < 0) {
-                    av_log(avctx, AV_LOG_ERROR, "invalid audio packet\n");
+                if (av_thread_message_queue_send(ctx->queue, &video_pkt, AV_THREAD_MESSAGE_NONBLOCK) < 0) {
+                    ctx->dropped += 1;
+                    av_log(avctx, AV_LOG_WARNING, "queue full, frame dropped: dropped=%i video_pts=%li audio_pts=%li\n",
+                        ctx->dropped,
+                        video_pkt.pts,
+                        audio_pkt.pts);
+                    av_packet_unref(&video_pkt);
+                    av_packet_unref(&audio_pkt);
+                } else {
+                    av_thread_message_queue_send(ctx->queue, &audio_pkt, 0);
                 }
             }
 
             device->WaitForInputVerticalInterrupt(channel);
         }
-
-        av_packet_unref(&video_pkt);
-        av_packet_unref(&audio_pkt);
     }
 
     device->AutoCirculateStop(channel);
@@ -679,7 +553,11 @@ av_cold int ff_ntv2_read_header(AVFormatContext *avctx)
     const auto ctx = reinterpret_cast<NTV2Context*>(avctx->priv_data);
     int ret;
 
-    avpacket_queue_init(&ctx->queue);
+    ret = av_thread_message_queue_alloc(&ctx->queue, ctx->queue_size, sizeof(AVPacket));
+    if (ret < 0) {
+        av_log(avctx, AV_LOG_ERROR, "Failed to allocate input queue\n");
+        return ret;
+    }
 
     ctx->device_index = strtol(avctx->url, NULL, 10) - 1;
     if (ctx->device_index < 0 || ctx->device_index > 16) {
@@ -755,7 +633,14 @@ av_cold int ff_ntv2_read_close(AVFormatContext *avctx)
         ctx->thread = NULL;
     }
 
-    avpacket_queue_close(&ctx->queue);
+    if (ctx->queue) {
+        AVPacket pkt;
+        av_thread_message_queue_set_err_send(ctx->queue, AVERROR_EOF);
+        while (av_thread_message_queue_recv(ctx->queue, &pkt, AV_THREAD_MESSAGE_NONBLOCK) >= 0) {
+            av_packet_unref(&pkt);
+        }
+        av_thread_message_queue_free(&ctx->queue);
+    }
 
     if (device) {
         if (device->UnsubscribeInputVerticalEvent(channel)) {
@@ -789,7 +674,19 @@ int ff_ntv2_read_packet(AVFormatContext *avctx, AVPacket *pkt)
 {
     const auto ctx = reinterpret_cast<NTV2Context*>(avctx->priv_data);
 
-    return avpacket_queue_get(&ctx->queue, pkt);
+    int ret;
+
+    if (!ctx->quit) {
+        ret = av_thread_message_queue_recv(ctx->queue, pkt, 0);
+    } else {
+        ret = AVERROR_EOF;
+    }
+
+    if (ret < 0) {
+        return ret;
+    } else {
+        return pkt->size;
+    }
 }
 
 } // extern "C"
