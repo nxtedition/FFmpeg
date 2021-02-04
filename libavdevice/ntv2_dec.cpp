@@ -485,8 +485,13 @@ static void capture_thread(AJAThread *thread, void *opaque)
     const auto av_sample_format = static_cast<AVSampleFormat>(audio_codec->format);
     auto audio_pool = av_buffer_pool_init2(audio_size, device, aja_pool_alloc, NULL);
 
-    auto video_pts = AV_NOPTS_VALUE;
-    auto audio_pts = AV_NOPTS_VALUE;
+    av_assert0(ctx->audio_st->time_base.num == 1 && ctx->audio_st->time_base.den == audio_codec->sample_rate);
+
+    const auto frameDuration = av_rescale_q(1, av_inv_q(ctx->video_st->r_frame_rate), AJA_AUDIO_TIME_BASE_Q);
+    const auto samplesPerFrame = av_rescale_q(1, av_inv_q(ctx->video_st->r_frame_rate), ctx->audio_st->time_base);
+
+    int64_t lastFrameTime = 0;
+    int64_t lastPtrf = 0;
 
     auto signal_debounce = buffer_count;
     ULWord last_frames_dropped = 0;
@@ -542,40 +547,29 @@ static void capture_thread(AJAThread *thread, void *opaque)
             av_assert0(device->AutoCirculateTransfer(channel, transfer));
 
             const auto frameInfo = transfer.GetFrameInfo();
-            const auto audioTime = frameInfo.acAudioClockTimeStamp - status.acAudioClockStartTime;
+            lastFrameTime = frameInfo.acAudioClockTimeStamp - status.acAudioClockStartTime;
+            lastPtrf = av_rescale_q(frameInfo.acFrameTime, AJA_AUDIO_TIME_BASE_Q, AV_TIME_BASE_Q);
 
-            video_pkt.pts = av_rescale_q(audioTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
+            video_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
             video_pkt.dts = video_pkt.pts;
-            video_pkt.duration = ctx->video_st->time_base.num;
 
-            video_pts = av_rescale_q(video_pkt.pts + video_pkt.duration, ctx->video_st->time_base, AJA_AUDIO_TIME_BASE_Q);
-
-            audio_pkt.pts = av_rescale_q(audioTime, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
+            audio_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
             audio_pkt.dts = audio_pkt.pts;
             av_shrink_packet(&audio_pkt, transfer.GetCapturedAudioByteCount());
-            audio_pkt.duration = audio_pkt.size / (audio_codec->channels * av_get_bytes_per_sample(av_sample_format));
-            av_assert0(ctx->audio_st->time_base.num == 1 && ctx->audio_st->time_base.den == audio_codec->sample_rate);
 
-            audio_pts = av_rescale_q(audio_pkt.pts + audio_pkt.duration, ctx->audio_st->time_base, AJA_AUDIO_TIME_BASE_Q);
+            av_assert0(audio_pkt.size == samplesPerFrame * audio_codec->channels * av_get_bytes_per_sample(av_sample_format));
 
             // set producer reference time side data
-            ff_side_data_set_prft(&video_pkt, frameInfo.acFrameTime / 10);
+            ff_side_data_set_prft(&video_pkt, lastPtrf);
 
-            av_log(avctx, AV_LOG_TRACE, "video_pts=%li video_dur=%li audio_pts=%li audio_dur=%li prft=%lu\n",
-                video_pkt.pts,
-                video_pkt.duration,
-                audio_pkt.pts,
-                audio_pkt.duration,
-                frameInfo.acFrameTime / 10);
+            av_log(avctx, AV_LOG_TRACE, "video_pts=%li audio_pts=%li prft=%lu\n", video_pkt.pts, audio_pkt.pts, lastPtrf);
 
             if (avpacket_queue_size(&ctx->queue) > ctx->queue_size) {
                 ctx->dropped += 1;
-                av_log(avctx, AV_LOG_WARNING, "input frame dropped: dropped=%i video_pts=%li video_dur=%li audio_pts=%li audio_dur=%li\n",
+                av_log(avctx, AV_LOG_WARNING, "input frame dropped: dropped=%i video_pts=%li audio_pts=%li\n",
                     ctx->dropped,
                     video_pkt.pts,
-                    video_pkt.duration,
-                    audio_pkt.pts,
-                    audio_pkt.duration);
+                    audio_pkt.pts);
             } else {
                 ret = avpacket_queue_put(&ctx->queue, &video_pkt);
                 if (ret < 0) {
@@ -591,14 +585,15 @@ static void capture_thread(AJAThread *thread, void *opaque)
                         audio_pkt.size);
                 }
             }
-        } else {
-            const auto audioTime = status.acAudioClockCurrentTime - status.acAudioClockStartTime;
+        } else if (!has_video_signal) {
+            const auto currentTime = status.acAudioClockCurrentTime - status.acAudioClockStartTime;
 
-            const auto diff = video_pts == AV_NOPTS_VALUE || audio_pts == AV_NOPTS_VALUE
-                ? 0
-                : av_rescale_q(FFMAX(audioTime - video_pts, audioTime - audio_pts), AJA_AUDIO_TIME_BASE_Q, {1,1000});
+            const auto diff = av_rescale_q(currentTime - lastFrameTime, AJA_AUDIO_TIME_BASE_Q, {1,1000});
 
-            if (diff > 100 && avpacket_queue_size(&ctx->queue) < ctx->queue_size) {
+            if (diff > 300 && avpacket_queue_size(&ctx->queue) < ctx->queue_size) {
+                lastFrameTime += frameDuration;
+                lastPtrf += av_rescale_q(frameDuration, AJA_AUDIO_TIME_BASE_Q, AV_TIME_BASE_Q);
+
                 // Video
 
                 video_pkt.buf = av_buffer_pool_get(video_pool);
@@ -621,32 +616,25 @@ static void capture_thread(AJAThread *thread, void *opaque)
                     }
                 }
 
-                video_pkt.pts = av_rescale_q(video_pts, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
+                video_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
                 video_pkt.dts = video_pkt.pts;
-                video_pkt.duration = av_rescale_q(audioTime - video_pts, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
 
-                video_pts = av_rescale_q(video_pkt.pts + video_pkt.duration, ctx->video_st->time_base, AJA_AUDIO_TIME_BASE_Q);
+                ff_side_data_set_prft(&video_pkt, lastPtrf);
 
                 // Audio
 
-                audio_pkt.pts = av_rescale_q(audio_pts, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
+                audio_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
                 audio_pkt.dts = audio_pkt.pts;
-                audio_pkt.duration = av_rescale_q(audioTime - audio_pts, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
-                audio_pkt.size = av_rescale_q(audio_pkt.duration, ctx->audio_st->time_base, {1, audio_codec->sample_rate}) * audio_codec->channels * av_get_bytes_per_sample(av_sample_format);
-                audio_pkt.buf = av_buffer_allocz(audio_pkt.size);
+                audio_pkt.buf = av_buffer_allocz(samplesPerFrame * audio_codec->channels * av_get_bytes_per_sample(av_sample_format));
                 audio_pkt.data = audio_pkt.buf->data;
                 audio_pkt.size = audio_pkt.buf->size;
 
-                audio_pts = av_rescale_q(audio_pkt.pts + audio_pkt.duration, ctx->audio_st->time_base, AJA_AUDIO_TIME_BASE_Q);
-
                 // Send
 
-                av_log(avctx, AV_LOG_TRACE, "no signal: %0.6f video_pts=%li video_dur=%li audio_pts=%li audio_dur=%li\n",
+                av_log(avctx, AV_LOG_TRACE, "no signal: %0.6f video_pts=%li audio_pts=%li\n",
                     diff / 1000.0,
                     video_pkt.pts,
-                    video_pkt.duration,
-                    audio_pkt.pts,
-                    audio_pkt.duration);
+                    audio_pkt.pts);
 
                 ret = avpacket_queue_put(&ctx->queue, &video_pkt);
                 if (ret < 0) {
