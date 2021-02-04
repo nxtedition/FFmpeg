@@ -443,7 +443,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
     av_assert0(video_format > NTV2_FORMAT_UNKNOWN && video_format < NTV2_MAX_NUM_VIDEO_FORMATS);
 
     // TODO: Assumes resolution <= 1920x1080 && format <= 8bit ycbcr.
-    const auto num_frame_buffers = ::NTV2DeviceGetNumberFrameBuffers(device->GetDeviceID(), NTV2_FG_4x1920x1080, NTV2_FBF_8BIT_YCBCR);
+    const auto num_frame_buffers = ::NTV2DeviceGetNumberFrameBuffers(device->GetDeviceID(), NTV2_FG_1920x1080, NTV2_FBF_8BIT_YCBCR);
     const auto num_frames_stores = ::NTV2DeviceGetNumFrameStores(device->GetDeviceID());
     const auto buffer_count =  num_frame_buffers / num_frames_stores;
     av_assert0(buffer_count > 1);
@@ -540,7 +540,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
             av_assert0(device->AutoCirculateTransfer(channel, transfer));
 
             const auto frameInfo = transfer.GetFrameInfo();
-            const auto audioTime = frameInfo.acAudioClockCurrentTime - status.acAudioClockStartTime;
+            const auto audioTime = frameInfo.acAudioClockTimeStamp - status.acAudioClockStartTime;
 
             video_pkt.pts = av_rescale_q(audioTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
             video_pkt.dts = video_pkt.pts;

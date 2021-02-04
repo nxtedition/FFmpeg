@@ -334,6 +334,7 @@ static int X264_frame(AVCodecContext *ctx, AVPacket *pkt, const AVFrame *frame,
                 x4->reordered_opaque[x4->next_reordered_opaque].wallclock = prft->wallclock;
             } else {
                 x4->reordered_opaque[x4->next_reordered_opaque].wallclock = av_gettime();
+                av_log(ctx, AV_LOG_WARNING, "setting wallclock from av_gettime\n");
             }
         }
         x4->pic.opaque = &x4->reordered_opaque[x4->next_reordered_opaque];
