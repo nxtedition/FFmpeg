@@ -6343,6 +6343,7 @@ enabled libmysofa         && { check_pkg_config libmysofa libmysofa mysofa.h mys
 enabled libnpp            && { check_lib libnpp npp.h nppGetLibVersion -lnppig -lnppicc -lnppc -lnppidei ||
                                check_lib libnpp npp.h nppGetLibVersion -lnppi -lnppc -lnppidei ||
                                die "ERROR: libnpp not found"; }
+enabled ntv2              && add_cppflags -DAJALinux
 enabled libopencore_amrnb && require libopencore_amrnb opencore-amrnb/interf_dec.h Decoder_Interface_init -lopencore-amrnb
 enabled libopencore_amrwb && require libopencore_amrwb opencore-amrwb/dec_if.h D_IF_init -lopencore-amrwb
 enabled libopencv         && { check_headers opencv2/core/core_c.h &&

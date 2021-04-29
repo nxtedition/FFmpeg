@@ -9,8 +9,6 @@ extern "C" {
 
 #include <stdlib.h>
 
-#define AJALinux
-#define AJA_LINUX
 #include <ajabase/system/thread.h>
 #include <ajabase/system/memory.h>
 #include <ajabase/system/systemtime.h>
