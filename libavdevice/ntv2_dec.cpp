@@ -360,6 +360,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
     AUTOCIRCULATE_TRANSFER transfer;
     av_assert0(device->GetFrameBufferFormat(channel, transfer.acFrameBufferFormat));
 
+    const auto expect_progressive = ::IsProgressivePicture(video_format);
     const auto video_size = ::GetVideoActiveSize(video_format, transfer.acFrameBufferFormat, NTV2_VANCMODE_OFF);
     const auto video_codec = ctx->video_st->codecpar;
     const auto av_pixel_format = static_cast<AVPixelFormat>(video_codec->format);
@@ -391,7 +392,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
         }
 
         // TODO (fix): Is this the correct way to detect signal?
-        const auto has_video_signal = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source)) == video_format;
+        const auto has_video_signal = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source), expect_progressive) == video_format;
         {
             if (has_video_signal) {
                 if (signal_debounce == 1) {
