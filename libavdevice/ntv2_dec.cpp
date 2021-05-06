@@ -442,8 +442,6 @@ static void capture_thread(AJAThread *thread, void *opaque)
             audio_pkt.dts = audio_pkt.pts;
             av_shrink_packet(&audio_pkt, transfer.GetCapturedAudioByteCount());
 
-            av_assert0(audio_pkt.size == samplesPerFrame * audio_codec->channels * av_get_bytes_per_sample(av_sample_format));
-
             // set producer reference time side data
             ff_side_data_set_prft(&video_pkt, lastPtrf);
 
