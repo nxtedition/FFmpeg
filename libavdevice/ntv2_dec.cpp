@@ -469,6 +469,10 @@ static void capture_thread(AJAThread *thread, void *opaque)
         } else if (!has_video_signal) {
             const auto currentTime = status.acAudioClockCurrentTime - status.acAudioClockStartTime;
 
+            if (!lastFrameTime) {
+                lastFrameTime = currentTime;
+            }
+
             const auto diff = av_rescale_q(currentTime - lastFrameTime, AJA_AUDIO_TIME_BASE_Q, {1,1000});
 
             if (diff > 300) {
