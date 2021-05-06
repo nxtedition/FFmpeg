@@ -213,7 +213,7 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     st->r_frame_rate = av_make_q(tb_den, tb_num);
     avpriv_set_pts_info(st, 64, 1, 48000);
 
-    av_assert0(av_q2d(st->r_frame_rate) >= 24 && av_q2d(st->r_frame_rate) < 120);
+    av_assert0(av_q2d(st->r_frame_rate) > 23 && av_q2d(st->r_frame_rate) < 120);
     av_assert0(st->codecpar->width > 0);
     av_assert0(st->codecpar->height > 0);
     av_assert0(st->codecpar->bit_rate > 0);
