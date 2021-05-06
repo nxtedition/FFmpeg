@@ -467,7 +467,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
 
             const auto diff = av_rescale_q(currentTime - lastFrameTime, AJA_AUDIO_TIME_BASE_Q, {1,1000});
 
-            if (diff > 300 && avpacket_queue_size(&ctx->queue) < ctx->queue_size) {
+            if (diff > 300) {
                 lastFrameTime += frameDuration;
                 lastPtrf += av_rescale_q(frameDuration, AJA_AUDIO_TIME_BASE_Q, AV_TIME_BASE_Q);
 
