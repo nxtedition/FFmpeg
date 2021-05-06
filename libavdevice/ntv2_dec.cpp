@@ -136,12 +136,19 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
         return AJA_STATUS_FAIL;
     }
 
-    // TODO: IsInput3Gb?
-    if (device->SetSDIInLevelBtoLevelAConversion(channel, video_format == NTV2_FORMAT_1080p_5000_A)) {
-        av_log(avctx, AV_LOG_DEBUG, "SetSDIInLevelBtoLevelAConversion %i %i\n", channel, video_format == NTV2_FORMAT_1080p_5000_A);
-    } else {
-        av_log(avctx, AV_LOG_ERROR, "SetSDIInLevelBtoLevelAConversion %i %i\n", channel, video_format == NTV2_FORMAT_1080p_5000_A);
-        return AJA_STATUS_FAIL;
+    if (::NTV2DeviceCanDo3GLevelConversion(device->GetDeviceID())) {
+        bool is3Gb = false;
+        if (!device->GetSDIInput3GbPresent(is3Gb, channel)) {
+            av_log(avctx, AV_LOG_ERROR, "GetSDIInput3GbPresent %i\n", channel);
+            return AJA_STATUS_FAIL;
+        }
+
+        if (device->SetSDIInLevelBtoLevelAConversion(channel, is3Gb)) {
+            av_log(avctx, AV_LOG_DEBUG, "SetSDIInLevelBtoLevelAConversion %i %i\n", channel, is3Gb);
+        } else {
+            av_log(avctx, AV_LOG_ERROR, "SetSDIInLevelBtoLevelAConversion %i %i\n", channel, is3Gb);
+            return AJA_STATUS_FAIL;
+        }
     }
 
     if (device->SetFrameBufferFormat(channel, pixel_format)) {
