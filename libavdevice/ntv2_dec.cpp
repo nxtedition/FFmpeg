@@ -20,8 +20,6 @@ extern "C" {
 
 #define AJA_AUDIO_TIME_BASE_Q {1,10000000}
 
-const auto PIXEL_FORMAT = NTV2_FBF_10BIT_YCBCR;
-
 // from libavcodec/avpacket.c
 // timestamp is microseconds since epoch
 int ff_side_data_set_prft(AVPacket *pkt, int64_t timestamp)
@@ -53,12 +51,12 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     const auto input_source = static_cast<NTV2InputSource>(ctx->input_source);
     const auto video_format = static_cast<NTV2VideoFormat>(ctx->video_format);
     const auto frame_rate = ::GetNTV2FrameRateFromVideoFormat(video_format);
-    const auto pixel_format = PIXEL_FORMAT;
+    const auto raw_format = static_cast<NTV2FrameBufferFormat>(ctx->video_format);
 
     av_assert0(channel < NTV2_CHANNEL_INVALID);
     av_assert0(input_source < NTV2_INPUTSOURCE_INVALID);
     av_assert0(video_format > NTV2_FORMAT_UNKNOWN && video_format < NTV2_MAX_NUM_VIDEO_FORMATS);
-    av_assert0(pixel_format >= NTV2_FBF_FIRST && pixel_format < NTV2_FBF_INVALID);
+    av_assert0(raw_format >= NTV2_FBF_FIRST && raw_format < NTV2_FBF_INVALID);
     av_assert0(frame_rate > NTV2_FRAMERATE_UNKNOWN);
 
     av_assert0(NTV2_IS_HD_VIDEO_FORMAT(video_format));
@@ -124,8 +122,8 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
         return AJA_STATUS_FAIL;
     }
 
-    if (!::NTV2DeviceCanDoFrameBufferFormat(device->GetDeviceID(), pixel_format)) {
-        av_log(avctx, AV_LOG_ERROR, "NTV2DeviceCanDoFrameBufferFormat %i %i\n", device->GetDeviceID(), pixel_format);
+    if (!::NTV2DeviceCanDoFrameBufferFormat(device->GetDeviceID(), raw_format)) {
+        av_log(avctx, AV_LOG_ERROR, "NTV2DeviceCanDoFrameBufferFormat %i %i\n", device->GetDeviceID(), raw_format);
         return AJA_STATUS_FAIL;
     }
 
@@ -151,10 +149,10 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
         }
     }
 
-    if (device->SetFrameBufferFormat(channel, pixel_format)) {
-        av_log(avctx, AV_LOG_DEBUG, "SetFrameBufferFormat %i %i\n", channel, pixel_format);
+    if (device->SetFrameBufferFormat(channel, raw_format)) {
+        av_log(avctx, AV_LOG_DEBUG, "SetFrameBufferFormat %i %i\n", channel, raw_format);
     } else {
-        av_log(avctx, AV_LOG_ERROR, "SetFrameBufferFormat %i %i\n", channel, pixel_format);
+        av_log(avctx, AV_LOG_ERROR, "SetFrameBufferFormat %i %i\n", channel, raw_format);
         return AJA_STATUS_FAIL;
     }
 
@@ -185,7 +183,7 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     av_log(avctx, AV_LOG_DEBUG, "NTV2 Video:\n  input_source=%s (%i)\n  video_format=%s (%i)\n  pixel_format=%s (%i)\n  frame_rate=%s %i/%i (%i)\n  width=%i \n  height=%i\n",
         ::NTV2InputSourceToString(input_source).c_str(), input_source,
         ::NTV2VideoFormatToString(video_format).c_str(), video_format,
-        ::NTV2FrameBufferFormatToString(pixel_format).c_str(), pixel_format,
+        ::NTV2FrameBufferFormatToString(raw_format).c_str(), raw_format,
         ::NTV2FrameRateToString(frame_rate).c_str(), tb_den, tb_num, frame_rate,
         width,
         height);
@@ -205,10 +203,24 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     st->codecpar->chroma_location = AVCHROMA_LOC_UNSPECIFIED; // TODO
     st->codecpar->width = width;
     st->codecpar->height = height;
-    st->codecpar->codec_id = AV_CODEC_ID_V210;
-    st->codecpar->codec_tag = MKTAG('v', '2', '1', '0');
-    st->codecpar->bit_rate = av_rescale(width * height * 16 * 8 / 6, tb_den, tb_num); // v210
-    st->codecpar->field_order = ::IsProgressivePicture(video_format) ? AV_FIELD_PROGRESSIVE : AV_FIELD_TT;
+
+    switch (raw_format) {
+    case NTV2_FBF_8BIT_YCBCR:
+        st->codecpar->codec_id = AV_CODEC_ID_RAWVIDEO;
+        st->codecpar->codec_tag = MKTAG('U', 'Y', 'V', 'Y');
+        st->codecpar->format = AV_PIX_FMT_UYVY422;
+        st->codecpar->bit_rate = av_rescale(width * height * 16, tb_den, tb_num);
+        break;
+    case NTV2_FBF_10BIT_YCBCR:
+        st->codecpar->codec_id = AV_CODEC_ID_V210;
+        st->codecpar->codec_tag = MKTAG('v', '2', '1', '0');
+        st->codecpar->bit_rate = av_rescale(width * height * 16 * 8 / 6, tb_den, tb_num); // v210
+        st->codecpar->field_order = ::IsProgressivePicture(video_format) ? AV_FIELD_PROGRESSIVE : AV_FIELD_TT;
+        break;
+    default:
+        av_log(avctx, AV_LOG_ERROR, "Raw format not supported\n");
+        return AVERROR(EINVAL);
+    }
 
     st->r_frame_rate = av_make_q(tb_den, tb_num);
     avpriv_set_pts_info(st, 64, 1, 48000);
@@ -329,15 +341,14 @@ static void capture_thread(AJAThread *thread, void *opaque)
     const auto device = reinterpret_cast<CNTV2Card*>(ctx->device);
     const auto channel = ::NTV2InputSourceToChannel(static_cast<NTV2InputSource>(ctx->input_source));
     const auto video_format = static_cast<NTV2VideoFormat>(ctx->video_format);
-    const auto pixel_format = PIXEL_FORMAT;
 
     int ret;
 
     av_assert0(channel < NTV2_CHANNEL_INVALID);
     av_assert0(video_format > NTV2_FORMAT_UNKNOWN && video_format < NTV2_MAX_NUM_VIDEO_FORMATS);
 
-    // TODO: Assumes resolution <= 1920x1080 && format <= 8bit ycbcr.
-    const auto num_frame_buffers = ::NTV2DeviceGetNumberFrameBuffers(device->GetDeviceID(), NTV2_FG_1920x1080, pixel_format);
+    // TODO: Assumes resolution <= 1920x1080 && format <= 10bit ycbcr.
+    const auto num_frame_buffers = ::NTV2DeviceGetNumberFrameBuffers(device->GetDeviceID(), NTV2_FG_1920x1080, NTV2_FBF_10BIT_YCBCR);
     const auto num_frames_stores = ::NTV2DeviceGetNumFrameStores(device->GetDeviceID());
     const auto buffer_count =  num_frame_buffers / num_frames_stores;
     av_assert0(buffer_count > 1);

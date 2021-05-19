@@ -19,6 +19,7 @@ typedef struct NTV2Context {
 
     int device_index;
     int input_source;
+    int raw_format;
     int video_format;
     int audio_source;
     int queue_size;

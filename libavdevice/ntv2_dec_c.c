@@ -6,6 +6,47 @@
 #define OFFSET(x) offsetof(struct NTV2Context, x)
 #define DEC AV_OPT_FLAG_DECODING_PARAM
 
+typedef enum
+{
+    NTV2_FBF_FIRST                  = 0
+    ,NTV2_FBF_10BIT_YCBCR           = NTV2_FBF_FIRST
+    ,NTV2_FBF_8BIT_YCBCR
+    ,NTV2_FBF_ARGB
+    ,NTV2_FBF_RGBA
+    ,NTV2_FBF_10BIT_RGB
+    ,NTV2_FBF_8BIT_YCBCR_YUY2
+    ,NTV2_FBF_ABGR
+    ,NTV2_FBF_LAST_SD_FBF = NTV2_FBF_ABGR
+    ,NTV2_FBF_10BIT_DPX
+    ,NTV2_FBF_10BIT_YCBCR_DPX
+    ,NTV2_FBF_8BIT_DVCPRO
+    ,NTV2_FBF_8BIT_YCBCR_420PL3
+    ,NTV2_FBF_8BIT_HDV
+    ,NTV2_FBF_24BIT_RGB
+    ,NTV2_FBF_24BIT_BGR
+    ,NTV2_FBF_10BIT_YCBCRA
+    ,NTV2_FBF_10BIT_DPX_LE
+    ,NTV2_FBF_48BIT_RGB
+    ,NTV2_FBF_12BIT_RGB_PACKED
+    ,NTV2_FBF_PRORES_DVCPRO
+    ,NTV2_FBF_PRORES_HDV
+    ,NTV2_FBF_10BIT_RGB_PACKED
+    ,NTV2_FBF_10BIT_ARGB
+    ,NTV2_FBF_16BIT_ARGB
+    ,NTV2_FBF_8BIT_YCBCR_422PL3
+    ,NTV2_FBF_10BIT_RAW_RGB
+    ,NTV2_FBF_10BIT_RAW_YCBCR
+    ,NTV2_FBF_10BIT_YCBCR_420PL3_LE
+    ,NTV2_FBF_10BIT_YCBCR_422PL3_LE
+    ,NTV2_FBF_10BIT_YCBCR_420PL2
+    ,NTV2_FBF_10BIT_YCBCR_422PL2
+    ,NTV2_FBF_8BIT_YCBCR_420PL2
+    ,NTV2_FBF_8BIT_YCBCR_422PL2
+    ,NTV2_FBF_LAST
+    ,NTV2_FBF_NUMFRAMEBUFFERFORMATS = NTV2_FBF_LAST
+    ,NTV2_FBF_INVALID               = NTV2_FBF_NUMFRAMEBUFFERFORMATS
+} NTV2FrameBufferFormat;
+
 typedef enum _NTV2VideoFormat
 {
      NTV2_FORMAT_UNKNOWN
@@ -208,6 +249,9 @@ static const AVOption options[] = {
     { "sdi6",           NULL,                       0,                          AV_OPT_TYPE_CONST,      { .i64 = 10 },                      0, 0,              DEC, "input_source" },
     { "sdi7",           NULL,                       0,                          AV_OPT_TYPE_CONST,      { .i64 = 11 },                      0, 0,              DEC, "input_source" },
     { "sdi8",           NULL,                       0,                          AV_OPT_TYPE_CONST,      { .i64 = 12 },                      0, 0,              DEC, "input_source" },
+    { "raw_format",     "frame buffer format",      OFFSET(raw_format),         AV_OPT_TYPE_INT,        { .i64 = NTV2_FBF_8BIT_YCBCR },     NTV2_FBF_FIRST, NTV2_FBF_LAST, DEC, "raw_format" },
+    { "8BIT_YCBCR",     NULL,                       0,                          AV_OPT_TYPE_CONST,      { .i64 = NTV2_FBF_8BIT_YCBCR },     0, 0,              DEC, "raw_format"},
+    { "10BIT_YCBCR",    NULL,                       0,                          AV_OPT_TYPE_CONST,      { .i64 = NTV2_FBF_10BIT_YCBCR },    0, 0,              DEC, "raw_format"},
     { "video_format",   "video format",             OFFSET(video_format),       AV_OPT_TYPE_INT,        { .i64 = 1 },                       0, 414,            DEC, "video_format" },
     // Compat
     { "1080i5000",      NULL,                       0,                          AV_OPT_TYPE_CONST,      { .i64 = 1 },                       0, 0,              DEC, "video_format" },
