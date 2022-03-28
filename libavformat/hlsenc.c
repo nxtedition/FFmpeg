@@ -75,6 +75,7 @@ typedef struct HLSSegment {
     char filename[MAX_URL_SIZE];
     char sub_filename[MAX_URL_SIZE];
     double duration; /* in seconds */
+    int64_t prog_date_time;
     int discont;
     int64_t pos;
     int64_t size;
@@ -154,7 +155,7 @@ typedef struct VariantStream {
     char *vtt_m3u8_name;
     char *m3u8_name;
 
-    double initial_prog_date_time;
+    int64_t prog_date_time;
     char current_segment_final_filename_fmt[MAX_URL_SIZE]; // when renaming segments
 
     char *fmp4_init_filename;
@@ -1073,10 +1074,15 @@ static int hls_append_segment(struct AVFormatContext *s, HLSContext *hls,
     en->duration = duration;
     en->pos      = pos;
     en->size     = size;
+    en->prog_date_time    = vs->prog_date_time;
     en->keyframe_pos      = vs->video_keyframe_pos;
     en->keyframe_size     = vs->video_keyframe_size;
     en->next     = NULL;
     en->discont  = 0;
+
+    if (vs->prog_date_time) {
+        vs->prog_date_time = 0;
+    }
 
     if (vs->discontinuity) {
         en->discont = 1;
@@ -1101,8 +1107,12 @@ static int hls_append_segment(struct AVFormatContext *s, HLSContext *hls,
 
     if (hls->max_nb_segments && vs->nb_entries >= hls->max_nb_segments) {
         en = vs->segments;
-        vs->initial_prog_date_time += en->duration;
         vs->segments = en->next;
+
+        if (en->prog_date_time && vs->segments && !vs->segments->prog_date_time && !vs->segments->discont) {
+            vs->segments->prog_date_time = en->prog_date_time + en->duration * 1000000.0;
+        }
+
         if (en && hls->flags & HLS_DELETE_SEGMENTS &&
 #if FF_API_HLS_WRAP
                 !(hls->flags & HLS_SINGLE_FILE || hls->wrap)) {
@@ -1164,6 +1174,9 @@ static int parse_playlist(AVFormatContext *s, const char *url, VariantStream *vs
         } else if (av_strstart(line, "#EXT-X-DISCONTINUITY", &ptr)) {
             is_segment = 1;
             vs->discontinuity = 1;
+        } else if (av_strstart(line, "#EXT-X-PROGRAM-DATE-TIME:", &ptr)) {
+            is_segment = 1;
+            av_parse_time(&vs->prog_date_time, ptr, 0); // TODO: support timezone and check return value
         } else if (av_strstart(line, "#EXTINF:", &ptr)) {
             is_segment = 1;
             vs->duration = atof(ptr);
@@ -1203,7 +1216,6 @@ static int parse_playlist(AVFormatContext *s, const char *url, VariantStream *vs
                 is_segment = 0;
                 new_start_pos = avio_tell(vs->avf->pb);
                 vs->size = new_start_pos - vs->start_pos;
-                vs->initial_prog_date_time -= vs->duration; // this is a previously existing segment
                 ret = hls_append_segment(s, hls, vs, vs->duration, vs->start_pos, vs->size);
                 if (ret < 0)
                     goto fail;
@@ -1461,8 +1473,7 @@ static int hls_window(AVFormatContext *s, int last, VariantStream *vs)
     char *key_uri = NULL;
     char *iv_string = NULL;
     AVDictionary *options = NULL;
-    double prog_date_time = vs->initial_prog_date_time;
-    double *prog_date_time_p = (hls->flags & HLS_PROGRAM_DATE_TIME) ? &prog_date_time : NULL;
+    double prog_date_time = 0;
     int byterange_mode = (hls->flags & HLS_SINGLE_FILE) || (hls->max_seg_size > 0);
 
     hls->version = 3;
@@ -1522,10 +1533,12 @@ static int hls_window(AVFormatContext *s, int last, VariantStream *vs)
                                    hls->flags & HLS_SINGLE_FILE, vs->init_range_length, 0);
         }
 
+        prog_date_time = en->prog_date_time / 1000000.0;
         ret = ff_hls_write_file_entry(byterange_mode ? hls->m3u8_out : vs->out, en->discont, byterange_mode,
                                       en->duration, hls->flags & HLS_ROUND_DURATIONS,
                                       en->size, en->pos, hls->baseurl,
-                                      en->filename, prog_date_time_p, en->keyframe_size, en->keyframe_pos, hls->flags & HLS_I_FRAMES_ONLY);
+                                      en->filename, prog_date_time ? &prog_date_time : NULL,
+                                      en->keyframe_size, en->keyframe_pos, hls->flags & HLS_I_FRAMES_ONLY);
         if (ret < 0) {
             av_log(s, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
         }
@@ -2314,7 +2327,7 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
             vs->start_pts_from_audio = 1;
     }
-    if (vs->start_pts_from_audio && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && vs->start_pts > pkt->pts) {
+    if (vs->start_pts_from_audio && st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO/* && vs->start_pts > pkt->pts*/) {
         vs->start_pts = pkt->pts;
         vs->start_pts_from_audio = 0;
     }
@@ -2344,6 +2357,20 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
             }
         }
 
+        // set program-date-time from producer-reference-time side data
+        if (hls->flags & HLS_PROGRAM_DATE_TIME && !vs->prog_date_time) {
+            AVProducerReferenceTime *prft;
+            int side_data_size;
+
+            prft = (AVProducerReferenceTime *)av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+            if (prft && side_data_size == sizeof(AVProducerReferenceTime)) {
+                av_log(s, AV_LOG_INFO, "setting program-date-time from prft1 pts=%"PRId64" prft=%"PRId64"\n", pkt->pts, prft->wallclock);
+                vs->prog_date_time = prft->wallclock;
+            } else {
+                av_log(s, AV_LOG_WARNING, "missing prft, using system clock\n");
+                vs->prog_date_time = av_gettime();
+            }
+        }
     }
 
     if (vs->packets_written && can_split && av_compare_ts(pkt->pts - vs->start_pts, st->time_base,
@@ -2456,6 +2483,22 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
         if (vs->start_pos || hls->segment_type != SEGMENT_TYPE_FMP4) {
             double cur_duration =  (double)(pkt->pts - vs->end_pts) * st->time_base.num / st->time_base.den;
             ret = hls_append_segment(s, hls, vs, cur_duration, vs->start_pos, vs->size);
+
+            // set program-date-time from producer-reference-time side data
+            if (hls->flags & HLS_PROGRAM_DATE_TIME) {
+                AVProducerReferenceTime *prft;
+                int side_data_size;
+
+                prft = (AVProducerReferenceTime *)av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+                if (prft && side_data_size == sizeof(AVProducerReferenceTime)) {
+                    av_log(s, AV_LOG_INFO, "setting program-date-time from prft2 pts=%"PRId64" prft=%"PRId64"\n", pkt->pts, prft->wallclock);
+                    vs->prog_date_time = prft->wallclock;
+                } else {
+                    av_log(s, AV_LOG_WARNING, "missing prft, using system clock\n");
+                    vs->prog_date_time = av_gettime();
+                }
+            }
+
             vs->end_pts = pkt->pts;
             vs->duration = 0;
             if (ret < 0) {
@@ -2800,12 +2843,6 @@ static int hls_init(AVFormatContext *s)
         vs->start_pts = AV_NOPTS_VALUE;
         vs->end_pts   = AV_NOPTS_VALUE;
         vs->current_segment_final_filename_fmt[0] = '\0';
-
-        if (hls->flags & HLS_PROGRAM_DATE_TIME) {
-            time_t now0;
-            time(&now0);
-            vs->initial_prog_date_time = now0;
-        }
 
         for (j = 0; j < vs->nb_streams; j++) {
             vs->has_video += vs->streams[j]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
