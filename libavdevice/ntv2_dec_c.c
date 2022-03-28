@@ -440,9 +440,9 @@ static const AVClass ntv2_demuxer_class = {
     .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT,
 };
 
-AVInputFormat ff_ntv2_demuxer = {
+const AVInputFormat ff_ntv2_demuxer = {
     .name           = "ntv2",
-    .long_name      = "AJA NTV2 input",
+    .long_name      = NULL_IF_CONFIG_SMALL("AJA NTV2 input"),
     .flags          = AVFMT_NOFILE,
     .priv_class     = &ntv2_demuxer_class,
     .priv_data_size = sizeof(struct NTV2Context),

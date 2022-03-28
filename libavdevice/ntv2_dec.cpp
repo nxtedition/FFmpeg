@@ -27,7 +27,7 @@ int ff_side_data_set_prft(AVPacket *pkt, int64_t timestamp)
 {
     AVProducerReferenceTime *prft;
     uint8_t *side_data;
-    int side_data_size;
+    size_t side_data_size;
 
     side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
     if (!side_data) {
@@ -208,13 +208,11 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
     switch (raw_format) {
     case NTV2_FBF_8BIT_YCBCR:
         st->codecpar->codec_id = AV_CODEC_ID_RAWVIDEO;
-        st->codecpar->codec_tag = MKTAG('U', 'Y', 'V', 'Y');
         st->codecpar->format = AV_PIX_FMT_UYVY422;
         st->codecpar->bit_rate = av_rescale(width * height * 16, tb_den, tb_num);
         break;
     case NTV2_FBF_10BIT_YCBCR:
         st->codecpar->codec_id = AV_CODEC_ID_V210;
-        st->codecpar->codec_tag = MKTAG('v', '2', '1', '0');
         st->codecpar->bit_rate = av_rescale(width * height * 16 * 8 / 6, tb_den, tb_num); // v210
         st->codecpar->field_order = ::IsProgressivePicture(video_format) ? AV_FIELD_PROGRESSIVE : AV_FIELD_TT;
         break;
@@ -301,8 +299,7 @@ static int setup_audio(AVFormatContext *avctx, NTV2Context *ctx)
     st->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id = AV_CODEC_ID_PCM_S32LE;
     st->codecpar->format = AV_SAMPLE_FMT_S32;
-    st->codecpar->channels = audio_channels;
-    st->codecpar->channel_layout = av_get_default_channel_layout(st->codecpar->channels);
+    st->codecpar->ch_layout.nb_channels = audio_channels;
     st->codecpar->sample_rate = 48000;
     avpriv_set_pts_info(st, 64, 1, 48000);
 
@@ -316,7 +313,7 @@ static void aja_free(void *opaque, uint8_t *data)
     AJAMemory::Free(data);
 }
 
-static AVBufferRef* aja_pool_alloc(void *opaque, int size)
+static AVBufferRef* aja_pool_alloc(void *opaque, size_t size)
 {
     const auto device = reinterpret_cast<CNTV2Card*>(opaque);
 
@@ -428,13 +425,11 @@ static void capture_thread(AJAThread *thread, void *opaque)
             }
         }
 
-        AVPacket video_pkt;
-        av_init_packet(&video_pkt);
+        AVPacket video_pkt = { 0 };
         video_pkt.flags |= AV_PKT_FLAG_KEY;
         video_pkt.stream_index = ctx->video_st->index;
 
-        AVPacket audio_pkt;
-        av_init_packet(&audio_pkt);
+        AVPacket audio_pkt = { 0 };
         audio_pkt.flags |= AV_PKT_FLAG_KEY;
         audio_pkt.stream_index = ctx->audio_st->index;
 
@@ -522,7 +517,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
 
                 audio_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
                 audio_pkt.dts = audio_pkt.pts;
-                audio_pkt.buf = av_buffer_allocz(samplesPerFrame * audio_codec->channels * av_get_bytes_per_sample(av_sample_format));
+                audio_pkt.buf = av_buffer_allocz(samplesPerFrame * audio_codec->ch_layout.nb_channels * av_get_bytes_per_sample(av_sample_format));
                 audio_pkt.data = audio_pkt.buf->data;
                 audio_pkt.size = audio_pkt.buf->size;
 
