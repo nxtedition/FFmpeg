@@ -55,6 +55,30 @@ extern "C" {
 #define MAX_WIDTH_VANC 1920
 const BMDDisplayMode AUTODETECT_DEFAULT_MODE = bmdModeNTSC;
 
+// from libavcodec/avpacket.c
+// timestamp is microseconds since epoch
+int set_prft(AVPacket *pkt, int64_t timestamp)
+{
+    AVProducerReferenceTime *prft;
+    uint8_t *side_data;
+    int side_data_size;
+
+    side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+    if (!side_data) {
+        side_data_size = sizeof(AVProducerReferenceTime);
+        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_PRFT, side_data_size);
+    }
+
+    if (!side_data || side_data_size < sizeof(AVProducerReferenceTime))
+        return AVERROR(ENOMEM);
+
+    prft = (AVProducerReferenceTime *)side_data;
+    prft->wallclock = timestamp;
+    prft->flags = 0;
+
+    return 0;
+}
+
 typedef struct VANCLineNumber {
     BMDDisplayMode mode;
     int vanc_start;
@@ -805,6 +829,9 @@ HRESULT decklink_input_callback::VideoInputFrameArrived(
 
         pkt.pts = get_pkt_pts(videoFrame, audioFrame, wallclock, abs_wallclock, ctx->video_pts_source, ctx->video_st->time_base, &initial_video_pts, cctx->copyts);
         pkt.dts = pkt.pts;
+
+        // set producer reference time side data
+        set_prft(&pkt, av_gettime());
 
         pkt.duration = frameDuration;
         //To be made sure it still applies
