@@ -184,6 +184,13 @@ enum AVFrameSideDataType {
      * Encoding parameters for a video frame, as described by AVVideoEncParams.
      */
     AV_FRAME_DATA_VIDEO_ENC_PARAMS,
+
+    /**
+     * Producer Reference Time data corresponding to the AVProducerReferenceTime struct,
+     * usually exported by some encoders (on demand through the prft flag set in the
+     * AVCodecContext export_side_data field).
+     */
+    AV_FRAME_DATA_PRFT,
 };
 
 enum AVActiveFormatDescription {

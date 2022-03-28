@@ -324,8 +324,19 @@ static int X264_frame(AVCodecContext *ctx, AVPacket *pkt, const AVFrame *frame,
 
         x4->reordered_opaque[x4->next_reordered_opaque].reordered_opaque = frame->reordered_opaque;
         x4->reordered_opaque[x4->next_reordered_opaque].wallclock = wallclock;
-        if (ctx->export_side_data & AV_CODEC_EXPORT_DATA_PRFT)
-            x4->reordered_opaque[x4->next_reordered_opaque].wallclock = av_gettime();
+        if (ctx->export_side_data & AV_CODEC_EXPORT_DATA_PRFT) {
+            AVProducerReferenceTime *prft;
+            AVFrameSideData *side_data;
+
+            side_data = av_frame_get_side_data(frame, AV_FRAME_DATA_PRFT);
+            if (side_data && side_data->size >= sizeof(AVProducerReferenceTime)) {
+                prft = (AVProducerReferenceTime *)side_data->data;
+                x4->reordered_opaque[x4->next_reordered_opaque].wallclock = prft->wallclock;
+            } else {
+                x4->reordered_opaque[x4->next_reordered_opaque].wallclock = av_gettime();
+                av_log(ctx, AV_LOG_WARNING, "setting wallclock from av_gettime\n");
+            }
+        }
         x4->pic.opaque = &x4->reordered_opaque[x4->next_reordered_opaque];
         x4->next_reordered_opaque++;
         x4->next_reordered_opaque %= x4->nb_reordered_opaque;

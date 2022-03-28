@@ -300,6 +300,7 @@ External library support:
   --enable-libzvbi         enable teletext support via libzvbi [no]
   --enable-lv2             enable LV2 audio filtering [no]
   --disable-lzma           disable lzma [autodetect]
+  --enable-ntv2            enable AJA NTV2 I/O support [no]
   --enable-decklink        enable Blackmagic DeckLink I/O support [no]
   --enable-libndi_newtek   enable Newteck NDI I/O support [no]
   --enable-mbedtls         enable mbedTLS, needed for https support
@@ -1730,6 +1731,7 @@ EXTERNAL_LIBRARY_GPL_LIST="
 "
 
 EXTERNAL_LIBRARY_NONFREE_LIST="
+    ntv2
     decklink
     libndi_newtek
     libfdk_aac
@@ -3371,6 +3373,10 @@ avfoundation_indev_suggest="coregraphics applicationservices"
 avfoundation_indev_extralibs="-framework Foundation"
 bktr_indev_deps_any="dev_bktr_ioctl_bt848_h machine_ioctl_bt848_h dev_video_bktr_ioctl_bt848_h dev_ic_bt8xx_h"
 caca_outdev_deps="libcaca"
+ntv2_indev_deps="ntv2"
+ntv2_indev_extralibs="-lstdc++ -lajantv2 -lrt"
+ntv2_outdev_deps="ntv2"
+ntv2_outdev_extralibs="-lstdc++ -lajantv2 -lrt"
 decklink_deps_any="libdl LoadLibrary"
 decklink_indev_deps="decklink threads"
 decklink_indev_extralibs="-lstdc++"
@@ -6344,6 +6350,7 @@ enabled libmysofa         && { check_pkg_config libmysofa libmysofa mysofa.h mys
 enabled libnpp            && { check_lib libnpp npp.h nppGetLibVersion -lnppig -lnppicc -lnppc -lnppidei ||
                                check_lib libnpp npp.h nppGetLibVersion -lnppi -lnppc -lnppidei ||
                                die "ERROR: libnpp not found"; }
+enabled ntv2              && add_cppflags -DAJALinux
 enabled libopencore_amrnb && require libopencore_amrnb opencore-amrnb/interf_dec.h Decoder_Interface_init -lopencore-amrnb
 enabled libopencore_amrwb && require libopencore_amrwb opencore-amrwb/dec_if.h D_IF_init -lopencore-amrwb
 enabled libopencv         && { check_headers opencv2/core/core_c.h &&
