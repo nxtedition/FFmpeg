@@ -433,6 +433,8 @@ static void capture_thread(AJAThread *thread, void *opaque)
         audio_pkt.flags |= AV_PKT_FLAG_KEY;
         audio_pkt.stream_index = ctx->audio_st->index;
 
+        int ret = 0;
+
         if (status.IsRunning() && status.HasAvailableInputFrame()) {
             video_pkt.buf = av_buffer_pool_get(video_pool);
             video_pkt.data = video_pkt.buf->data;
@@ -462,16 +464,11 @@ static void capture_thread(AJAThread *thread, void *opaque)
 
             av_log(avctx, AV_LOG_TRACE, "video_pts=%li audio_pts=%li prft=%lu\n", video_pkt.pts, audio_pkt.pts, lastPtrf);
 
-            if (av_thread_message_queue_send(ctx->queue, &video_pkt, AV_THREAD_MESSAGE_NONBLOCK) < 0) {
-                ctx->dropped += 1;
-                av_log(avctx, AV_LOG_WARNING, "queue full, frame dropped: dropped=%i video_pts=%li audio_pts=%li\n",
-                    ctx->dropped,
-                    video_pkt.pts,
-                    audio_pkt.pts);
+            if ((ret = av_thread_message_queue_send(ctx->queue, &video_pkt, 0)) < 0) {
                 av_packet_unref(&video_pkt);
                 av_packet_unref(&audio_pkt);
-            } else {
-                av_thread_message_queue_send(ctx->queue, &audio_pkt, 0);
+            } else if ((ret = av_thread_message_queue_send(ctx->queue, &audio_pkt, 0)) < 0){
+                av_packet_unref(&audio_pkt);
             }
         } else if (!has_video_signal) {
             const auto currentTime = status.acAudioClockCurrentTime - status.acAudioClockStartTime;
@@ -523,24 +520,27 @@ static void capture_thread(AJAThread *thread, void *opaque)
 
                 // Send
 
-                av_log(avctx, AV_LOG_TRACE, "no signal: %0.6f video_pts=%li audio_pts=%li\n",
+                av_log(avctx, AV_LOG_TRACE, "no signal: %0.6f video_pts=%li audio_pts=%li prft=%lu\n",
                     diff / 1000.0,
                     video_pkt.pts,
-                    audio_pkt.pts);
+                    audio_pkt.pts,
+                    lastPtrf);
 
-                if (av_thread_message_queue_send(ctx->queue, &video_pkt, AV_THREAD_MESSAGE_NONBLOCK) < 0) {
-                    ctx->dropped += 1;
-                    av_log(avctx, AV_LOG_WARNING, "queue full, frame dropped: dropped=%i video_pts=%li audio_pts=%li\n",
-                        ctx->dropped,
-                        video_pkt.pts,
-                        audio_pkt.pts);
+                if ((ret = av_thread_message_queue_send(ctx->queue, &video_pkt, 0)) < 0) {
                     av_packet_unref(&video_pkt);
                     av_packet_unref(&audio_pkt);
-                } else {
-                    av_thread_message_queue_send(ctx->queue, &audio_pkt, 0);
+                } else if ((ret = av_thread_message_queue_send(ctx->queue, &audio_pkt, 0)) < 0){
+                    av_packet_unref(&audio_pkt);
                 }
+            } else {
+                av_usleep(10000);
             }
 
+            if (ret < 0 && ret != AVERROR_EOF) {
+                // TODO: what to do when this happens?
+                av_log(avctx, AV_LOG_ERROR, "failed add packet to queue: %u\n", ret);
+            }
+        } else {
             device->WaitForInputVerticalInterrupt(channel);
         }
     }
@@ -630,6 +630,10 @@ av_cold int ff_ntv2_read_close(AVFormatContext *avctx)
 
     ctx->quit = 1;
 
+    if (ctx->queue) {
+        av_thread_message_queue_set_err_send(ctx->queue, AVERROR_EOF);
+    }
+
     if (thread != NULL) {
         while (thread->Active()) {
             AJATime::Sleep(10);
@@ -640,7 +644,6 @@ av_cold int ff_ntv2_read_close(AVFormatContext *avctx)
 
     if (ctx->queue) {
         AVPacket pkt;
-        av_thread_message_queue_set_err_send(ctx->queue, AVERROR_EOF);
         while (av_thread_message_queue_recv(ctx->queue, &pkt, AV_THREAD_MESSAGE_NONBLOCK) >= 0) {
             av_packet_unref(&pkt);
         }
