@@ -682,7 +682,8 @@ int ff_ntv2_read_packet(AVFormatContext *avctx, AVPacket *pkt)
     int ret;
 
     if (!ctx->quit) {
-        ret = av_thread_message_queue_recv(ctx->queue, pkt, 0);
+        ret = av_thread_message_queue_recv(ctx->queue, pkt,
+                avctx->flags & AVFMT_FLAG_NONBLOCK ? AV_THREAD_MESSAGE_NONBLOCK : 0);
     } else {
         ret = AVERROR_EOF;
     }
