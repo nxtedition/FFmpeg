@@ -197,7 +197,7 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
             mode = MODE_7_1_REAR_SURROUND;
         } else {
             // MODE_1_2_2_2_1 and MODE_7_1_FRONT_CENTER use the same channel layout
-            mode = MODE_7_1_FRONT_CENTER;
+            mode = MODE_1_2_2_2_1;
         }
         break;
 #endif
