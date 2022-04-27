@@ -408,22 +408,30 @@ static void capture_thread(AJAThread *thread, void *opaque)
         }
 
         // TODO (fix): Is this the correct way to detect signal?
-        const auto has_video_signal = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source), expect_progressive) == video_format;
-        {
-            if (has_video_signal) {
-                if (signal_debounce == 1) {
-                    av_log(avctx, AV_LOG_INFO, "signal connected\n");
-                }
-                if (signal_debounce > 0) {
-                    signal_debounce--;
-                }
-            } else {
-                if (signal_debounce == 0) {
-                    av_log(avctx, AV_LOG_WARNING, "signal disconnected\n");
-                }
-                signal_debounce = buffer_count;
+        const auto detected_format = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source), expect_progressive);
+        const auto has_video_signal = detected_format == video_format;
+        if (has_video_signal) {
+            if (signal_debounce == 1) {
+                av_log(avctx, AV_LOG_INFO, "signal connected\n");
             }
+            if (signal_debounce > 0) {
+                signal_debounce--;
+            }
+        } else {
+            if (signal_debounce == 0) {
+                av_log(avctx, AV_LOG_WARNING, "signal disconnected, detected_format=%s (%i)\n",
+                    ::NTV2VideoFormatToString(detected_format).c_str(), detected_format);
+            }
+            signal_debounce = buffer_count;
         }
+
+        av_log(avctx, AV_LOG_TRACE, "Status: processed=%lu dropped=%lu buffer=%lu queue=%i signal=%u (%i)\n",
+            status.acFramesProcessed,
+            status.acFramesDropped,
+            status.acBufferLevel,
+            av_thread_message_queue_nb_elems(ctx->queue),
+            has_video_signal ? 1 : 0,
+            static_cast<int>(detected_format));
 
         AVPacket video_pkt = { 0 };
         video_pkt.flags |= AV_PKT_FLAG_KEY;
