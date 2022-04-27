@@ -403,7 +403,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
         av_assert0(device->AutoCirculateGetStatus(channel, status));
 
         if (last_frames_dropped != status.acFramesDropped) {
-            av_log(avctx, AV_LOG_ERROR, "ac frames dropped: %u %u\n", status.acFramesDropped - last_frames_dropped, status.acFramesDropped);
+            av_log(avctx, AV_LOG_WARNING, "ac frames dropped: %u (total %u)\n", status.acFramesDropped - last_frames_dropped, status.acFramesDropped);
             last_frames_dropped = status.acFramesDropped;
         }
 
