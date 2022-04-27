@@ -398,7 +398,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
     auto signal_debounce = buffer_count;
     ULWord last_frames_dropped = 0;
 
-    while (!ctx->quit) {
+    while (!atomic_load(&ctx->exit)) {
         AUTOCIRCULATE_STATUS status;
         av_assert0(device->AutoCirculateGetStatus(channel, status));
 
@@ -558,6 +558,8 @@ av_cold int ff_ntv2_read_header(AVFormatContext *avctx)
     const auto ctx = reinterpret_cast<NTV2Context*>(avctx->priv_data);
     int ret;
 
+    atomic_init(&ctx->exit, 0);
+
     ret = av_thread_message_queue_alloc(&ctx->queue, ctx->queue_size, sizeof(AVPacket));
     if (ret < 0) {
         av_log(avctx, AV_LOG_ERROR, "Failed to allocate input queue\n");
@@ -628,7 +630,7 @@ av_cold int ff_ntv2_read_close(AVFormatContext *avctx)
     const auto thread = reinterpret_cast<AJAThread*>(ctx->thread);
     const auto channel = ::NTV2InputSourceToChannel(static_cast<NTV2InputSource>(ctx->input_source));
 
-    ctx->quit = 1;
+    atomic_store(&ctx->exit, 1);
 
     if (ctx->queue) {
         av_thread_message_queue_set_err_send(ctx->queue, AVERROR_EOF);
@@ -684,7 +686,7 @@ int ff_ntv2_read_packet(AVFormatContext *avctx, AVPacket *pkt)
 
     int ret;
 
-    if (!ctx->quit) {
+    if (!atomic_load(&ctx->exit)) {
         ret = av_thread_message_queue_recv(ctx->queue, pkt,
                 avctx->flags & AVFMT_FLAG_NONBLOCK ? AV_THREAD_MESSAGE_NONBLOCK : 0);
     } else {

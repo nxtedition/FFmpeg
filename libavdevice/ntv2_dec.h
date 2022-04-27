@@ -2,6 +2,13 @@
 #define AVDEVICE_NTV2_DEC_H
 
 #ifdef __cplusplus
+#include <atomic>
+using namespace std;
+#else
+#include <stdatomic.h>
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 
@@ -24,7 +31,7 @@ typedef struct NTV2Context {
     int audio_source;
     int queue_size;
 
-    int quit;
+    atomic_int exit;
 
     void *device;
     void *thread;
