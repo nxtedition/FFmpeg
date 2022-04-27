@@ -365,7 +365,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
             channel,
             0,
             ::NTV2ChannelToAudioSystem(channel),
-            AUTOCIRCULATE_WITH_RP188,
+            0,
             1,
             buffer_count * channel,
             buffer_count * (channel + 1) - 1
