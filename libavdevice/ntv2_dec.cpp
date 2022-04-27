@@ -488,6 +488,10 @@ static void capture_thread(AJAThread *thread, void *opaque)
                 video_pkt.buf = av_buffer_pool_get(video_pool);
                 video_pkt.data = video_pkt.buf->data;
                 video_pkt.size = video_pkt.buf->size;
+                video_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
+                video_pkt.dts = video_pkt.pts;
+
+                ff_side_data_set_prft(&video_pkt, lastPtrf);
 
                 // TODO (fix): This no longer works with V210
                 if (ctx->draw_bars && av_pixel_format == AV_PIX_FMT_UYVY422) {
@@ -505,18 +509,13 @@ static void capture_thread(AJAThread *thread, void *opaque)
                     }
                 }
 
-                video_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
-                video_pkt.dts = video_pkt.pts;
-
-                ff_side_data_set_prft(&video_pkt, lastPtrf);
-
                 // Audio
 
-                audio_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
-                audio_pkt.dts = audio_pkt.pts;
                 audio_pkt.buf = av_buffer_allocz(samplesPerFrame * audio_codec->ch_layout.nb_channels * av_get_bytes_per_sample(av_sample_format));
                 audio_pkt.data = audio_pkt.buf->data;
                 audio_pkt.size = audio_pkt.buf->size;
+                audio_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->audio_st->time_base);
+                audio_pkt.dts = audio_pkt.pts;
 
                 // Send
 
