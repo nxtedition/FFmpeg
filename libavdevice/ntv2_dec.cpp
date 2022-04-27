@@ -77,7 +77,7 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
         return AJA_STATUS_FAIL;
     }
 
-	if (::NTV2DeviceCanDoMultiFormat(device->GetDeviceID())) {
+    if (::NTV2DeviceCanDoMultiFormat(device->GetDeviceID())) {
         if (device->SetMultiFormatMode(true)) {
             av_log(avctx, AV_LOG_DEBUG, "SetMultiFormatMode %i\n", 0);
         } else {
@@ -100,7 +100,7 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
         return AJA_STATUS_FAIL;
     }
 
-	// The input vertical is not always available so we like to use the output for timing.
+    // The input vertical is not always available so we like to use the output for timing.
     if (device->SubscribeOutputVerticalEvent(channel)) {
         av_log(avctx, AV_LOG_DEBUG, "SubscribeOutputVerticalEvent %i\n", channel);
     } else {
@@ -115,7 +115,7 @@ static int setup_video(AVFormatContext *avctx, NTV2Context *ctx)
         return AJA_STATUS_FAIL;
     }
 
-	// Wait to let the reciever lock...
+    // Wait to let the reciever lock...
     if (device->WaitForOutputVerticalInterrupt(channel, 10)) {
         av_log(avctx, AV_LOG_DEBUG, "WaitForOutputVerticalInterrupt %i\n", channel);
     } else {
@@ -669,7 +669,7 @@ av_cold int ff_ntv2_read_close(AVFormatContext *avctx)
             av_log(avctx, AV_LOG_ERROR, "DisableInputInterrupt %i\n", channel);
         }
 
-	    device->DMABufferUnlockAll();
+        device->DMABufferUnlockAll();
 
         delete device;
         ctx->device = NULL;
