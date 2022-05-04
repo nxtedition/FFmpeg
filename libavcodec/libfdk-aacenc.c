@@ -193,12 +193,7 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
     case 8:
         sce = 2;
         cpe = 3;
-        if (!av_channel_layout_compare(&avctx->ch_layout, &(AVChannelLayout)AV_CHANNEL_LAYOUT_7POINT1)) {
-            mode = MODE_7_1_REAR_SURROUND;
-        } else {
-            // MODE_1_2_2_2_1 and MODE_7_1_FRONT_CENTER use the same channel layout
-            mode = MODE_1_2_2_2_1;
-        }
+        mode = MODE_1_2_2_2_1;
         break;
 #endif
     default:
@@ -211,14 +206,6 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
                                    mode)) != AACENC_OK) {
         av_log(avctx, AV_LOG_ERROR,
                "Unable to set channel mode %d: %s\n", mode, aac_get_error(err));
-        goto error;
-    }
-
-    if ((err = aacEncoder_SetParam(s->handle, AACENC_CHANNELORDER,
-                                   1)) != AACENC_OK) {
-        av_log(avctx, AV_LOG_ERROR,
-               "Unable to set wav channel order %d: %s\n",
-               mode, aac_get_error(err));
         goto error;
     }
 
