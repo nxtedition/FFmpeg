@@ -18,6 +18,8 @@ extern "C" {
 #include <ntv2utils.h>
 #include <ntv2devicefeatures.h>
 #include <ntv2publicinterface.h>
+#include <ntv2formatdescriptor.h>
+#include <ntv2testpatterngen.h>
 
 #define AJA_AUDIO_TIME_BASE_Q {1,10000000}
 
@@ -341,6 +343,10 @@ static void capture_thread(AJAThread *thread, void *opaque)
     const auto video_format = static_cast<NTV2VideoFormat>(ctx->video_format);
     auto last_video_format = NTV2_FORMAT_UNKNOWN;
 
+    // const auto raw_format = static_cast<NTV2FrameBufferFormat>(ctx->raw_format);
+    // const auto formatDescriptor = NTV2FormatDescriptor(video_format, raw_format);
+    // NTV2TestPatternGen testPatternGen;
+
     int ret;
 
     av_assert0(channel < NTV2_CHANNEL_INVALID);
@@ -509,21 +515,10 @@ static void capture_thread(AJAThread *thread, void *opaque)
 
                 ff_side_data_set_prft(&video_pkt, lastPtrf);
 
-                // TODO (fix): This no longer works with V210
-                if (ctx->draw_bars && av_pixel_format == AV_PIX_FMT_UYVY422) {
-                    const unsigned bars[8] = {
-                        0xEA80EA80, 0xD292D210, 0xA910A9A5, 0x90229035,
-                        0x6ADD6ACA, 0x51EF515A, 0x286D28EF, 0x10801080 };
-
-                    const auto width  = video_codec->width;
-                    const auto height = video_codec->height;
-                    auto p = reinterpret_cast<unsigned*>(video_pkt.data);
-
-                    for (int y = 0; y < height; y++) {
-                        for (int x = 0; x < width; x += 2)
-                            *p++ = bars[(x * 8) / width];
-                    }
-                }
+                // NTV2_POINTER buffer(video_pkt.data, video_pkt.size);
+                // if (!testPatternGen.DrawTestPattern(NTV2_TestPatt_ColorBars100, formatDescriptor, buffer)) {
+                    ::memset(video_pkt.data, 0, video_pkt.size);
+                // }
 
                 // Audio
 
