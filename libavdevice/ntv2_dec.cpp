@@ -339,6 +339,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
     const auto device = reinterpret_cast<CNTV2Card*>(ctx->device);
     const auto channel = ::NTV2InputSourceToChannel(static_cast<NTV2InputSource>(ctx->input_source));
     const auto video_format = static_cast<NTV2VideoFormat>(ctx->video_format);
+    auto last_video_format = NTV2_FORMAT_UNKNOWN;
 
     int ret;
 
@@ -376,7 +377,7 @@ static void capture_thread(AJAThread *thread, void *opaque)
     AUTOCIRCULATE_TRANSFER transfer;
     av_assert0(device->GetFrameBufferFormat(channel, transfer.acFrameBufferFormat));
 
-    const auto expect_progressive = ::IsProgressivePicture(video_format);
+    const auto expect_progressive = NTV2_IS_PSF_VIDEO_FORMAT(video_format);
     const auto video_size = ::GetVideoActiveSize(video_format, transfer.acFrameBufferFormat, NTV2_VANCMODE_OFF);
     const auto video_codec = ctx->video_st->codecpar;
     const auto av_pixel_format = static_cast<AVPixelFormat>(video_codec->format);
@@ -407,8 +408,15 @@ static void capture_thread(AJAThread *thread, void *opaque)
             last_frames_dropped = status.acFramesDropped;
         }
 
-        // TODO (fix): Is this the correct way to detect signal?
         const auto detected_format = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source), expect_progressive);
+
+        if (detected_format != last_video_format) {
+            av_log(avctx, AV_LOG_INFO, "new input video format detected: %s (%i)\n",
+                ::NTV2VideoFormatToString(detected_format).c_str(),
+                detected_format);
+            last_video_format = detected_format;
+        }
+
         const auto has_video_signal = detected_format == video_format;
         if (has_video_signal) {
             if (signal_debounce == 1) {
