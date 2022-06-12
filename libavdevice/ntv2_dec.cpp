@@ -22,6 +22,7 @@ extern "C" {
 #include <ntv2testpatterngen.h>
 
 #define AJA_AUDIO_TIME_BASE_Q {1,10000000}
+#define SIGNAL_DEBOUNCE 8
 
 // from libavcodec/avpacket.c
 // timestamp is microseconds since epoch
@@ -341,7 +342,6 @@ static void capture_thread(AJAThread *thread, void *opaque)
     const auto device = reinterpret_cast<CNTV2Card*>(ctx->device);
     const auto channel = ::NTV2InputSourceToChannel(static_cast<NTV2InputSource>(ctx->input_source));
     const auto video_format = static_cast<NTV2VideoFormat>(ctx->video_format);
-    auto last_video_format = NTV2_FORMAT_UNKNOWN;
 
     // const auto raw_format = static_cast<NTV2FrameBufferFormat>(ctx->raw_format);
     // const auto formatDescriptor = NTV2FormatDescriptor(video_format, raw_format);
@@ -358,32 +358,10 @@ static void capture_thread(AJAThread *thread, void *opaque)
     const auto buffer_count =  num_frame_buffers / num_frames_stores;
     av_assert0(buffer_count > 1);
 
-    // Setup auto circulate.
-    {
-        av_log(avctx, AV_LOG_DEBUG, "AutoCirculateInitForInput channel=%i audio_system=%i buffer_count=%i [%i-%i]\n",
-            channel,
-            ::NTV2ChannelToAudioSystem(channel),
-            buffer_count,
-            buffer_count * channel,
-            buffer_count * (channel + 1) - 1);
-
-        av_assert0(device->AutoCirculateStop(channel));
-        av_assert0(device->AutoCirculateInitForInput(
-            channel,
-            0,
-            ::NTV2ChannelToAudioSystem(channel),
-            0,
-            1,
-            buffer_count * channel,
-            buffer_count * (channel + 1) - 1
-        ));
-        av_assert0(device->AutoCirculateStart(channel));
-    }
-
     AUTOCIRCULATE_TRANSFER transfer;
     av_assert0(device->GetFrameBufferFormat(channel, transfer.acFrameBufferFormat));
 
-    const auto expect_progressive = NTV2_IS_PSF_VIDEO_FORMAT(video_format);
+    // const auto expect_progressive = NTV2_IS_PSF_VIDEO_FORMAT(video_format);
     const auto video_size = ::GetVideoActiveSize(video_format, transfer.acFrameBufferFormat, NTV2_VANCMODE_OFF);
     const auto video_codec = ctx->video_st->codecpar;
     const auto av_pixel_format = static_cast<AVPixelFormat>(video_codec->format);
@@ -402,50 +380,27 @@ static void capture_thread(AJAThread *thread, void *opaque)
     int64_t lastFrameTime = 0;
     int64_t lastPtrf = av_gettime();
 
-    auto signal_debounce = buffer_count;
+    auto signal_debounce = SIGNAL_DEBOUNCE;
     ULWord last_frames_dropped = 0;
+
+    av_assert0(device->AutoCirculateStop(channel));
 
     while (!atomic_load(&ctx->exit)) {
         AUTOCIRCULATE_STATUS status;
         av_assert0(device->AutoCirculateGetStatus(channel, status));
 
-        if (last_frames_dropped != status.acFramesDropped) {
-            av_log(avctx, AV_LOG_WARNING, "ac frames dropped: %u (total %u)\n", status.acFramesDropped - last_frames_dropped, status.acFramesDropped);
-            last_frames_dropped = status.acFramesDropped;
-        }
-
-        const auto detected_format = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source), expect_progressive);
-
-        if (detected_format != last_video_format) {
-            av_log(avctx, AV_LOG_INFO, "new input video format detected: %s (%i)\n",
-                ::NTV2VideoFormatToString(detected_format).c_str(),
-                detected_format);
-            last_video_format = detected_format;
-        }
-
-        const auto has_video_signal = detected_format == video_format;
-        if (has_video_signal) {
-            if (signal_debounce == 1) {
-                av_log(avctx, AV_LOG_INFO, "signal connected\n");
+        if (status.IsRunning()) {
+            if (last_frames_dropped != status.acFramesDropped) {
+                av_log(avctx, AV_LOG_WARNING, "ac frames dropped: %u (total %u)\n", status.acFramesDropped - last_frames_dropped, status.acFramesDropped);
+                last_frames_dropped = status.acFramesDropped;
             }
-            if (signal_debounce > 0) {
-                signal_debounce--;
-            }
-        } else {
-            if (signal_debounce == 0) {
-                av_log(avctx, AV_LOG_WARNING, "signal disconnected, detected_format=%s (%i)\n",
-                    ::NTV2VideoFormatToString(detected_format).c_str(), detected_format);
-            }
-            signal_debounce = buffer_count;
-        }
 
-        av_log(avctx, AV_LOG_TRACE, "Status: processed=%lu dropped=%lu buffer=%lu queue=%i signal=%u (%i)\n",
-            status.acFramesProcessed,
-            status.acFramesDropped,
-            status.acBufferLevel,
-            av_thread_message_queue_nb_elems(ctx->queue),
-            has_video_signal ? 1 : 0,
-            static_cast<int>(detected_format));
+            av_log(avctx, AV_LOG_TRACE, "Status: processed=%lu dropped=%lu buffer=%lu queue=%i\n",
+                status.acFramesProcessed,
+                status.acFramesDropped,
+                status.acBufferLevel,
+                av_thread_message_queue_nb_elems(ctx->queue));
+        }
 
         AVPacket video_pkt = { 0 };
         video_pkt.flags |= AV_PKT_FLAG_KEY;
@@ -457,7 +412,10 @@ static void capture_thread(AJAThread *thread, void *opaque)
 
         int ret = 0;
 
-        if (status.IsRunning() && status.HasAvailableInputFrame()) {
+        const auto detected_format = device->GetInputVideoFormat(static_cast<NTV2InputSource>(ctx->input_source));
+        const auto has_signal = detected_format == video_format;
+
+        if (status.IsRunning() && status.HasAvailableInputFrame() && has_signal) {
             video_pkt.buf = av_buffer_pool_get(video_pool);
             video_pkt.data = video_pkt.buf->data;
             video_pkt.size = video_pkt.buf->size;
@@ -471,7 +429,12 @@ static void capture_thread(AJAThread *thread, void *opaque)
             av_assert0(device->AutoCirculateTransfer(channel, transfer));
 
             const auto frameInfo = transfer.GetFrameInfo();
-            lastFrameTime = frameInfo.acAudioClockTimeStamp - status.acAudioClockStartTime;
+
+            if (lastFrameTime >= frameInfo.acAudioClockTimeStamp) {
+                av_log(avctx, AV_LOG_WARNING, "invalid frame time, lastFrameTime=%li frameTime=%li\n", lastFrameTime, frameInfo.acAudioClockTimeStamp);
+            }
+
+            lastFrameTime = frameInfo.acAudioClockTimeStamp;
             lastPtrf = av_rescale_q(frameInfo.acFrameTime, AJA_AUDIO_TIME_BASE_Q, AV_TIME_BASE_Q);
 
             video_pkt.pts = av_rescale_q(lastFrameTime, AJA_AUDIO_TIME_BASE_Q, ctx->video_st->time_base);
@@ -492,16 +455,59 @@ static void capture_thread(AJAThread *thread, void *opaque)
             } else if ((ret = av_thread_message_queue_send(ctx->queue, &audio_pkt, 0)) < 0){
                 av_packet_unref(&audio_pkt);
             }
-        } else if (!has_video_signal) {
-            const auto currentTime = status.acAudioClockCurrentTime - status.acAudioClockStartTime;
+
+            device->WaitForInputVerticalInterrupt(channel);
+        } else {
+            if (has_signal) {
+                if (signal_debounce > 0) {
+                    if (--signal_debounce == 0) {
+                        av_log(avctx, AV_LOG_INFO, "signal connected\n");
+
+                        // Setup auto circulate.
+                        av_log(avctx, AV_LOG_DEBUG, "AutoCirculateInitForInput channel=%i audio_system=%i buffer_count=%i [%i-%i]\n",
+                            channel,
+                            ::NTV2ChannelToAudioSystem(channel),
+                            buffer_count,
+                            buffer_count * channel,
+                            buffer_count * (channel + 1) - 1);
+
+                        av_assert0(device->AutoCirculateInitForInput(
+                            channel,
+                            0,
+                            ::NTV2ChannelToAudioSystem(channel),
+                            0,
+                            1,
+                            buffer_count * channel,
+                            buffer_count * (channel + 1) - 1
+                        ));
+                        av_assert0(device->AutoCirculateStart(channel));
+                    }
+                }
+            } else {
+                if (signal_debounce == 0) {
+                    av_log(avctx, AV_LOG_WARNING, "signal disconnected, detected_format=%s (%i)\n",
+                        ::NTV2VideoFormatToString(detected_format).c_str(),
+                        detected_format);
+
+                    av_assert0(device->AutoCirculateStop(channel));
+                    last_frames_dropped = 0;
+                } else {
+                    av_log(avctx, AV_LOG_TRACE, "waiting for signal, detected_format=%s (%i)\n",
+                        ::NTV2VideoFormatToString(detected_format).c_str(),
+                        detected_format);
+                }
+                signal_debounce = SIGNAL_DEBOUNCE;
+            }
+
+            const auto currentTime = status.acAudioClockCurrentTime;
 
             if (!lastFrameTime) {
                 lastFrameTime = currentTime;
             }
 
-            const auto diff = av_rescale_q(currentTime - lastFrameTime, AJA_AUDIO_TIME_BASE_Q, {1,1000});
+            const auto diff = currentTime - lastFrameTime;
 
-            if (diff > 300) {
+            if (diff > (buffer_count + 1) * frameDuration) {
                 lastFrameTime += frameDuration;
                 lastPtrf += av_rescale_q(frameDuration, AJA_AUDIO_TIME_BASE_Q, AV_TIME_BASE_Q);
 
@@ -543,15 +549,13 @@ static void capture_thread(AJAThread *thread, void *opaque)
                     av_packet_unref(&audio_pkt);
                 }
             } else {
-                av_usleep(10000);
+                av_usleep(10000); // TODO: should we use WaitForInputVerticalInterrupt()? what if we have no signal? or what if signal has lower framerate than "bars"?
             }
 
             if (ret < 0 && ret != AVERROR_EOF) {
                 // TODO: what to do when this happens?
                 av_log(avctx, AV_LOG_ERROR, "failed add packet to queue: %u\n", ret);
             }
-        } else {
-            device->WaitForInputVerticalInterrupt(channel);
         }
     }
 
