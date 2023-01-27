@@ -119,6 +119,7 @@ typedef struct X264Context {
      * encounter a frame with ROI side data.
      */
     int roi_warned;
+    int prft_warned;
 } X264Context;
 
 static void X264_log(void *p, int level, const char *fmt, va_list args)
@@ -361,7 +362,10 @@ static int X264_frame(AVCodecContext *ctx, AVPacket *pkt, const AVFrame *frame,
                 x4->reordered_opaque[x4->next_reordered_opaque].wallclock = prft->wallclock;
             } else {
                 x4->reordered_opaque[x4->next_reordered_opaque].wallclock = av_gettime();
-                av_log(ctx, AV_LOG_WARNING, "setting wallclock from av_gettime\n");
+                if (!x4->prft_warned) {
+                    av_log(ctx, AV_LOG_WARNING, "setting prft wallclock from av_gettime\n");
+                    x4->prft_warned = 1;
+                }
             }
         }
         x4->pic.opaque = &x4->reordered_opaque[x4->next_reordered_opaque];
