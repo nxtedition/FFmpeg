@@ -2478,6 +2478,15 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
     if (pkt->pts == AV_NOPTS_VALUE)
         is_ref_pkt = can_split = 0;
 
+    {
+        AVProducerReferenceTime *prft;
+        int side_data_size;
+        prft = (AVProducerReferenceTime *)av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+        if (prft && side_data_size == sizeof(AVProducerReferenceTime)) {
+            av_log(s, AV_LOG_INFO, "packet (stream:%d split:%d ref:d) pts=%"PRId64" dts="PRId64" prft=%"PRId64"\n", pkt->stream_index, can_split, is_ref_pkt, pkt->pts, pkt->dts, prft->wallclock);
+        }
+    }
+
     if (is_ref_pkt) {
         if (vs->end_pts == AV_NOPTS_VALUE)
             vs->end_pts = pkt->pts;
