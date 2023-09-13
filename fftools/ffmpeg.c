@@ -1363,6 +1363,26 @@ static void do_video_out(OutputFile *of,
             if (ret < 0)
                 goto error;
 
+            // Copy PRFT side-data from frame to packet
+            if (enc->export_side_data & AV_CODEC_EXPORT_DATA_PRFT) {
+                AVProducerReferenceTime *prft;
+                AVFrameSideData *frame_side_data;
+                uint8_t *side_data;
+                size_t side_data_size;
+
+                frame_side_data = av_frame_get_side_data(next_picture, AV_FRAME_DATA_PRFT);
+                side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+                if (frame_side_data && frame_side_data->size >= sizeof(AVProducerReferenceTime) && !side_data) {
+                    side_data_size = sizeof(AVProducerReferenceTime);
+                    side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_PRFT, side_data_size);
+
+                    if (!side_data)
+                        goto error;
+
+                    memcpy(side_data, frame_side_data->data, side_data_size);
+                }
+            }
+
             if (debug_ts) {
                 av_log(NULL, AV_LOG_INFO, "encoder -> type:video "
                        "pkt_pts:%s pkt_pts_time:%s pkt_dts:%s pkt_dts_time:%s "
