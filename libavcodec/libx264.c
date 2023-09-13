@@ -352,22 +352,22 @@ static int X264_frame(AVCodecContext *ctx, AVPacket *pkt, const AVFrame *frame,
 
         x4->reordered_opaque[x4->next_reordered_opaque].reordered_opaque = frame->reordered_opaque;
         x4->reordered_opaque[x4->next_reordered_opaque].wallclock = wallclock;
-        if (ctx->export_side_data & AV_CODEC_EXPORT_DATA_PRFT) {
-            AVProducerReferenceTime *prft;
-            AVFrameSideData *side_data;
+        // if (ctx->export_side_data & AV_CODEC_EXPORT_DATA_PRFT) {
+        //     AVProducerReferenceTime *prft;
+        //     AVFrameSideData *side_data;
 
-            side_data = av_frame_get_side_data(frame, AV_FRAME_DATA_PRFT);
-            if (side_data && side_data->size >= sizeof(AVProducerReferenceTime)) {
-                prft = (AVProducerReferenceTime *)side_data->data;
-                x4->reordered_opaque[x4->next_reordered_opaque].wallclock = prft->wallclock;
-            } else {
-                x4->reordered_opaque[x4->next_reordered_opaque].wallclock = av_gettime();
-                if (!x4->prft_warned) {
-                    av_log(ctx, AV_LOG_WARNING, "setting prft wallclock from av_gettime\n");
-                    x4->prft_warned = 1;
-                }
-            }
-        }
+        //     side_data = av_frame_get_side_data(frame, AV_FRAME_DATA_PRFT);
+        //     if (side_data && side_data->size >= sizeof(AVProducerReferenceTime)) {
+        //         prft = (AVProducerReferenceTime *)side_data->data;
+        //         x4->reordered_opaque[x4->next_reordered_opaque].wallclock = prft->wallclock;
+        //     } else {
+        //         x4->reordered_opaque[x4->next_reordered_opaque].wallclock = av_gettime();
+        //         if (!x4->prft_warned) {
+        //             av_log(ctx, AV_LOG_WARNING, "setting prft wallclock from av_gettime\n");
+        //             x4->prft_warned = 1;
+        //         }
+        //     }
+        // }
         x4->pic.opaque = &x4->reordered_opaque[x4->next_reordered_opaque];
         x4->next_reordered_opaque++;
         x4->next_reordered_opaque %= x4->nb_reordered_opaque;
@@ -555,8 +555,8 @@ static int X264_frame(AVCodecContext *ctx, AVPacket *pkt, const AVFrame *frame,
     pkt->flags |= AV_PKT_FLAG_KEY*pic_out.b_keyframe;
     if (ret) {
         ff_side_data_set_encoder_stats(pkt, (pic_out.i_qpplus1 - 1) * FF_QP2LAMBDA, NULL, 0, pict_type);
-        if (wallclock)
-            ff_side_data_set_prft(pkt, wallclock);
+        // if (wallclock)
+        //     ff_side_data_set_prft(pkt, wallclock);
     }
 
     *got_packet = ret;
