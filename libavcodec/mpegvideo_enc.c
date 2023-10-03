@@ -1785,6 +1785,26 @@ vbv_retry:
                                        (avctx->flags&AV_CODEC_FLAG_PSNR) ? MPEGVIDEO_MAX_PLANES : 0,
                                        s->pict_type);
 
+        // Copy PRFT side-data from frame to packet
+        if (avctx->export_side_data & AV_CODEC_EXPORT_DATA_PRFT) {
+            AVProducerReferenceTime *prft;
+            AVFrameSideData *frame_side_data;
+            uint8_t *side_data;
+            size_t side_data_size;
+
+            frame_side_data = av_frame_get_side_data(s->current_picture.f, AV_FRAME_DATA_PRFT);
+            side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+            if (frame_side_data && frame_side_data->size >= sizeof(AVProducerReferenceTime) && !side_data) {
+                side_data_size = sizeof(AVProducerReferenceTime);
+                side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_PRFT, side_data_size);
+
+                if (!side_data)
+                    return -1;
+
+                memcpy(side_data, frame_side_data->data, side_data_size);
+            }
+        }
+
         if (avctx->flags & AV_CODEC_FLAG_PASS1)
             assert(put_bits_count(&s->pb) == s->header_bits + s->mv_bits +
                                              s->misc_bits + s->i_tex_bits +
