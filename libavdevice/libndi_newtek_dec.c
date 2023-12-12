@@ -43,7 +43,7 @@ struct NDIContext {
     AVStream *video_st, *audio_st;
 };
 
-static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_t *v, AVPacket *pkt)
+static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_v2_t *v, AVPacket *pkt)
 {
     int ret;
     struct NDIContext *ctx = avctx->priv_data;
@@ -66,7 +66,7 @@ static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_t *v,
     return 0;
 }
 
-static int ndi_set_audio_packet(AVFormatContext *avctx, NDIlib_audio_frame_t *a, AVPacket *pkt)
+static int ndi_set_audio_packet(AVFormatContext *avctx, NDIlib_audio_frame_v2_t *a, AVPacket *pkt)
 {
     int ret;
     struct NDIContext *ctx = avctx->priv_data;
@@ -88,7 +88,7 @@ static int ndi_set_audio_packet(AVFormatContext *avctx, NDIlib_audio_frame_t *a,
 
     dst.reference_level = 0;
     dst.p_data = (short *)pkt->data;
-    NDIlib_util_audio_to_interleaved_16s(a, &dst);
+    NDIlib_util_audio_to_interleaved_16s_v2(a, &dst);
 
     return 0;
 }
