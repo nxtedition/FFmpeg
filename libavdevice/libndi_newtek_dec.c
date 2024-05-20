@@ -43,6 +43,30 @@ struct NDIContext {
     AVStream *video_st, *audio_st;
 };
 
+// from libavcodec/avpacket.c
+// timestamp is microseconds since epoch
+static int set_prft(AVPacket *pkt, int64_t timestamp)
+{
+    AVProducerReferenceTime *prft;
+    uint8_t *side_data;
+    size_t side_data_size;
+
+    side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
+    if (!side_data) {
+        side_data_size = sizeof(AVProducerReferenceTime);
+        side_data = av_packet_new_side_data(pkt, AV_PKT_DATA_PRFT, side_data_size);
+    }
+
+    if (!side_data || side_data_size < sizeof(AVProducerReferenceTime))
+        return AVERROR(ENOMEM);
+
+    prft = (AVProducerReferenceTime *)side_data;
+    prft->wallclock = timestamp;
+    prft->flags = 0;
+
+    return 0;
+}
+
 static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_v2_t *v, AVPacket *pkt)
 {
     int ret;
@@ -54,6 +78,8 @@ static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_v2_t 
 
     pkt->dts = pkt->pts = av_rescale_q(v->timestamp, NDI_TIME_BASE_Q, ctx->video_st->time_base);
     pkt->duration = av_rescale_q(1, (AVRational){v->frame_rate_D, v->frame_rate_N}, ctx->video_st->time_base);
+
+    set_prft(pkt, v->timestamp / 10L);
 
     av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timestamp=%"PRId64"\n",
         __func__, pkt->dts, pkt->duration, v->timestamp);
