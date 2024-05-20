@@ -86,7 +86,7 @@ static int ndi_set_audio_packet(AVFormatContext *avctx, NDIlib_audio_frame_v2_t 
     pkt->flags       |= AV_PKT_FLAG_KEY;
     pkt->stream_index = ctx->audio_st->index;
 
-    dst.reference_level = 0;
+    dst.reference_level = 20;
     dst.p_data = (short *)pkt->data;
     NDIlib_util_audio_to_interleaved_16s_v2(a, &dst);
 
