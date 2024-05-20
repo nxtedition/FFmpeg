@@ -52,11 +52,11 @@ static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_v2_t 
     if (ret < 0)
         return ret;
 
-    pkt->dts = pkt->pts = av_rescale_q(v->timecode, NDI_TIME_BASE_Q, ctx->video_st->time_base);
+    pkt->dts = pkt->pts = av_rescale_q(v->timestamp, NDI_TIME_BASE_Q, ctx->video_st->time_base);
     pkt->duration = av_rescale_q(1, (AVRational){v->frame_rate_D, v->frame_rate_N}, ctx->video_st->time_base);
 
-    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timecode=%"PRId64"\n",
-        __func__, pkt->dts, pkt->duration, v->timecode);
+    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timestamp=%"PRId64"\n",
+        __func__, pkt->dts, pkt->duration, v->timestamp);
 
     pkt->flags         |= AV_PKT_FLAG_KEY;
     pkt->stream_index   = ctx->video_st->index;
@@ -77,11 +77,11 @@ static int ndi_set_audio_packet(AVFormatContext *avctx, NDIlib_audio_frame_v2_t 
     if (ret < 0)
         return ret;
 
-    pkt->dts = pkt->pts = av_rescale_q(a->timecode, NDI_TIME_BASE_Q, ctx->audio_st->time_base);
+    pkt->dts = pkt->pts = av_rescale_q(a->timestamp, NDI_TIME_BASE_Q, ctx->audio_st->time_base);
     pkt->duration = av_rescale_q(1, (AVRational){a->no_samples, a->sample_rate}, ctx->audio_st->time_base);
 
-    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timecode=%"PRId64"\n",
-        __func__, pkt->dts, pkt->duration, a->timecode);
+    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timestamp=%"PRId64"\n",
+        __func__, pkt->dts, pkt->duration, a->timestamp);
 
     pkt->flags       |= AV_PKT_FLAG_KEY;
     pkt->stream_index = ctx->audio_st->index;
