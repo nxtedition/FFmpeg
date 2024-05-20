@@ -23,8 +23,17 @@
 #include "libavformat/internal.h"
 #include "libavutil/opt.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/time.h"
 
 #include "libndi_newtek_common.h"
+
+typedef enum NDIPtsSource {
+    PTS_SRC_TIMECODE      = 1,
+    PTS_SRC_TIMESTAMP     = 2,
+    PTS_SRC_WALLCLOCK     = 3,
+    PTS_SRC_ABS_WALLCLOCK = 4,
+    PTS_SRC_NB
+} NDIPtsSource;
 
 struct NDIContext {
     const AVClass *cclass;
@@ -34,9 +43,11 @@ struct NDIContext {
     int64_t wait_sources;
     int allow_video_fields;
     char *extra_ips;
+    NDIPtsSource audio_pts_source;
+    NDIPtsSource video_pts_source;
 
     /* Runtime */
-    NDIlib_recv_instance_t *recv;
+    NDIlib_recv_instance_t recv;
     NDIlib_find_instance_t ndi_find;
 
     /* Streams */
@@ -71,18 +82,33 @@ static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_v2_t 
 {
     int ret;
     struct NDIContext *ctx = avctx->priv_data;
+    int64_t abs_wallclock = av_gettime();
 
     ret = av_new_packet(pkt, v->yres * v->line_stride_in_bytes);
     if (ret < 0)
         return ret;
 
-    pkt->dts = pkt->pts = av_rescale_q(v->timestamp, NDI_TIME_BASE_Q, ctx->video_st->time_base);
+    switch (ctx->video_pts_source) {
+    case PTS_SRC_TIMECODE:
+        pkt->dts = pkt->pts = av_rescale_q(v->timecode, NDI_TIME_BASE_Q, ctx->video_st->time_base);
+        break;
+    case PTS_SRC_TIMESTAMP:
+        pkt->dts = pkt->pts = av_rescale_q(v->timestamp, NDI_TIME_BASE_Q, ctx->video_st->time_base);
+        break;
+    case PTS_SRC_WALLCLOCK:
+        pkt->dts = pkt->pts = av_rescale_q(av_gettime_relative(), (AVRational){1, AV_TIME_BASE}, ctx->video_st->time_base);
+        break;
+    case PTS_SRC_ABS_WALLCLOCK:
+        pkt->dts = pkt->pts = av_rescale_q(abs_wallclock, (AVRational){1, AV_TIME_BASE}, ctx->video_st->time_base);
+        break;
+    }
+
     pkt->duration = av_rescale_q(1, (AVRational){v->frame_rate_D, v->frame_rate_N}, ctx->video_st->time_base);
 
-    set_prft(pkt, v->timestamp / 10L);
+    set_prft(pkt, abs_wallclock);
 
-    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timestamp=%"PRId64"\n",
-        __func__, pkt->dts, pkt->duration, v->timestamp);
+    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timecode=%"PRId64", timestamp=%"PRId64"\n",
+        __func__, pkt->dts, pkt->duration, v->timecode, v->timestamp);
 
     pkt->flags         |= AV_PKT_FLAG_KEY;
     pkt->stream_index   = ctx->video_st->index;
@@ -96,6 +122,7 @@ static int ndi_set_audio_packet(AVFormatContext *avctx, NDIlib_audio_frame_v2_t 
 {
     int ret;
     struct NDIContext *ctx = avctx->priv_data;
+    int64_t abs_wallclock = av_gettime();
 
     NDIlib_audio_frame_interleaved_16s_t dst;
 
@@ -103,11 +130,25 @@ static int ndi_set_audio_packet(AVFormatContext *avctx, NDIlib_audio_frame_v2_t 
     if (ret < 0)
         return ret;
 
-    pkt->dts = pkt->pts = av_rescale_q(a->timestamp, NDI_TIME_BASE_Q, ctx->audio_st->time_base);
+    switch (ctx->audio_pts_source) {
+    case PTS_SRC_TIMECODE:
+        pkt->dts = pkt->pts = av_rescale_q(a->timecode, NDI_TIME_BASE_Q, ctx->audio_st->time_base);
+        break;
+    case PTS_SRC_TIMESTAMP:
+        pkt->dts = pkt->pts = av_rescale_q(a->timestamp, NDI_TIME_BASE_Q, ctx->audio_st->time_base);
+        break;
+    case PTS_SRC_WALLCLOCK:
+        pkt->dts = pkt->pts = av_rescale_q(av_gettime_relative(), (AVRational){1, AV_TIME_BASE}, ctx->audio_st->time_base);
+        break;
+    case PTS_SRC_ABS_WALLCLOCK:
+        pkt->dts = pkt->pts = av_rescale_q(abs_wallclock, (AVRational){1, AV_TIME_BASE}, ctx->audio_st->time_base);
+        break;
+    }
+
     pkt->duration = av_rescale_q(1, (AVRational){a->no_samples, a->sample_rate}, ctx->audio_st->time_base);
 
-    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timestamp=%"PRId64"\n",
-        __func__, pkt->dts, pkt->duration, a->timestamp);
+    av_log(avctx, AV_LOG_DEBUG, "%s: pkt->dts = pkt->pts = %"PRId64", duration=%"PRId64", timecode=%"PRId64", timestamp=%"PRId64"\n",
+        __func__, pkt->dts, pkt->duration, a->timecode, a->timestamp);
 
     pkt->flags       |= AV_PKT_FLAG_KEY;
     pkt->stream_index = ctx->audio_st->index;
@@ -345,6 +386,12 @@ static const AVOption options[] = {
     { "wait_sources", "Time to wait until the number of online sources have changed"  , OFFSET(wait_sources), AV_OPT_TYPE_DURATION, { .i64 = 1000000 }, 100000, 20000000, DEC },
     { "allow_video_fields", "When this flag is FALSE, all video that you receive will be progressive"  , OFFSET(allow_video_fields), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, DEC },
     { "extra_ips", "List of comma separated ip addresses to scan for remote sources",       OFFSET(extra_ips), AV_OPT_TYPE_STRING, {.str = NULL }, 0, 0, DEC },
+    { "audio_pts",     "audio pts source",   OFFSET(audio_pts_source),    AV_OPT_TYPE_INT,   { .i64 = PTS_SRC_TIMECODE      }, 1, PTS_SRC_NB-1, DEC, "pts_source"},
+    { "video_pts",     "video pts source",   OFFSET(video_pts_source),    AV_OPT_TYPE_INT,   { .i64 = PTS_SRC_TIMECODE      }, 1, PTS_SRC_NB-1, DEC, "pts_source"},
+    { "timecode",      NULL,                 0,                           AV_OPT_TYPE_CONST, { .i64 = PTS_SRC_TIMECODE      }, 0, 0, DEC, "pts_source"},
+    { "timestamp",     NULL,                 0,                           AV_OPT_TYPE_CONST, { .i64 = PTS_SRC_TIMESTAMP     }, 0, 0, DEC, "pts_source"},
+    { "wallclock",     NULL,                 0,                           AV_OPT_TYPE_CONST, { .i64 = PTS_SRC_WALLCLOCK     }, 0, 0, DEC, "pts_source"},
+    { "abs_wallclock", NULL,                 0,                           AV_OPT_TYPE_CONST, { .i64 = PTS_SRC_ABS_WALLCLOCK }, 0, 0, DEC, "pts_source"},
     { NULL },
 };
 
