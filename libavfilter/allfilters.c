@@ -177,6 +177,7 @@ extern const FFFilter ff_asrc_sine;
 extern const FFFilter ff_asink_anullsink;
 
 extern const FFFilter ff_vf_addroi;
+extern const FFFilter ff_vf_alphadet;
 extern const FFFilter ff_vf_alphaextract;
 extern const FFFilter ff_vf_alphamerge;
 extern const FFFilter ff_vf_amplify;
