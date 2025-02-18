@@ -3869,6 +3869,7 @@ libzmq_protocol_deps="libzmq"
 libzmq_protocol_select="network"
 
 # filters
+alphadetect_vulkan_filter_deps="vulkan spirv_compiler"
 ametadata_filter_deps="avformat"
 amovie_filter_deps="avcodec avformat"
 aresample_filter_deps="swresample"
