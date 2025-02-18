@@ -210,6 +210,7 @@ OBJS-$(CONFIG_BILATERAL_CUDA_FILTER)         += vf_bilateral_cuda.o vf_bilateral
 OBJS-$(CONFIG_BITPLANENOISE_FILTER)          += vf_bitplanenoise.o
 OBJS-$(CONFIG_BLACKDETECT_FILTER)            += vf_blackdetect.o
 OBJS-$(CONFIG_BLACKDETECT_CUDA_FILTER)       += vf_blackdetect_cuda.o vf_blackdetect_cuda.ptx.o
+OBJS-$(CONFIG_BLACKDETECT_VULKAN_FILTER)     += vf_blackdetect_vulkan.o
 OBJS-$(CONFIG_BLACKFRAME_FILTER)             += vf_blackframe.o
 OBJS-$(CONFIG_BLEND_FILTER)                  += vf_blend.o framesync.o
 OBJS-$(CONFIG_BLEND_VULKAN_FILTER)           += vf_blend_vulkan.o framesync.o vulkan.o vulkan_filter.o
