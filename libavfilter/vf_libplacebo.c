@@ -49,6 +49,7 @@ static inline AVFrame *pl_get_mapped_avframe(const struct pl_frame *frame)
 typedef struct pl_options_t {
     // Backwards compatibility shim of this struct
     struct pl_render_params params;
+    struct pl_deinterlace_params deinterlace_params;
     struct pl_deband_params deband_params;
     struct pl_sigmoid_params sigmoid_params;
     struct pl_color_adjustment color_adjustment;
@@ -211,6 +212,11 @@ typedef struct LibplaceboContext {
     int force_dither;
     int disable_fbos;
 
+    /* pl_deinterlace_params */
+    int deinterlace;
+    int skip_spatial_check;
+    int send_fields;
+
     /* pl_deband_params */
     int deband;
     int deband_iterations;
@@ -372,6 +378,11 @@ static int update_settings(AVFilterContext *ctx)
 
     RET(av_parse_color(color_rgba, s->fillcolor, -1, s));
 
+    opts->deinterlace_params = *pl_deinterlace_params(
+        .algo = s->deinterlace,
+        .skip_spatial_check = s->skip_spatial_check,
+    );
+
     opts->deband_params = *pl_deband_params(
         .iterations = s->deband_iterations,
         .threshold = s->deband_threshold,
@@ -436,6 +447,7 @@ static int update_settings(AVFilterContext *ctx)
         .corner_rounding = s->corner_rounding,
 #endif
 
+        .deinterlace_params = &opts->deinterlace_params,
         .deband_params = s->deband ? &opts->deband_params : NULL,
         .sigmoid_params = s->sigmoid ? &opts->sigmoid_params : NULL,
         .color_adjustment = &opts->color_adjustment,
@@ -848,6 +860,8 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
     out->color_range = outlink->color_range;
     if (s->fps.num)
         out->duration = 1;
+    if (s->deinterlace)
+        out->flags &= ~(AV_FRAME_FLAG_INTERLACED | AV_FRAME_FLAG_TOP_FIELD_FIRST);
 
     if (s->apply_dovi && av_frame_get_side_data(ref, AV_FRAME_DATA_DOVI_METADATA)) {
         /* Output of dovi reshaping is always BT.2020+PQ, so infer the correct
@@ -957,21 +971,29 @@ static int handle_input(AVFilterContext *ctx, LibplaceboInput *input)
     int64_t pts;
 
     while ((ret = ff_inlink_consume_frame(inlink, &in)) > 0) {
-        in->opaque = s;
-        pl_queue_push(input->queue, &(struct pl_source_frame) {
+        struct pl_source_frame src = {
             .pts         = in->pts * av_q2d(inlink->time_base),
             .duration    = in->duration * av_q2d(inlink->time_base),
-            .first_field = pl_field_from_avframe(in),
+            .first_field = s->deinterlace ? pl_field_from_avframe(in) : PL_FIELD_NONE,
             .frame_data  = in,
             .map         = map_frame,
             .unmap       = unmap_frame,
             .discard     = discard_frame,
-        });
+        };
+
+        in->opaque = s;
+        pl_queue_push(input->queue, &src);
 
         if (!s->fps.num) {
             /* Internally queue an output frame for the same PTS */
             pts = av_rescale_q(in->pts, inlink->time_base, outlink->time_base);
             av_fifo_write(input->out_pts, &pts, 1);
+
+            if (s->send_fields && src.first_field != PL_FIELD_NONE) {
+                /* Queue the second field for interlaced content */
+                pts += av_rescale_q(in->duration, inlink->time_base, outlink->time_base) / 2;
+                av_fifo_write(input->out_pts, &pts, 1);
+            }
         }
     }
 
@@ -1229,6 +1251,13 @@ static int libplacebo_config_output(AVFilterLink *outlink)
                                           avctx->inputs[i]->time_base,
                                           AV_TIME_BASE / 2, AV_TIME_BASE_Q);
         }
+
+        if (s->deinterlace && s->send_fields) {
+            const AVRational q2 = { 2, 1 };
+            ol->frame_rate = av_mul_q(ol->frame_rate, q2);
+            /* Ensure output frame timestamps are divisible by two */
+            outlink->time_base = av_div_q(outlink->time_base, q2);
+        }
     }
 
     /* Static variables */
@@ -1357,6 +1386,13 @@ static const AVOption libplacebo_options[] = {
     { "sigmoid", "Enable sigmoid upscaling", OFFSET(sigmoid), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, DYNAMIC },
     { "apply_filmgrain", "Apply film grain metadata", OFFSET(apply_filmgrain), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, DYNAMIC },
     { "apply_dolbyvision", "Apply Dolby Vision metadata", OFFSET(apply_dovi), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, DYNAMIC },
+
+    { "deinterlace", "Deinterlacing mode", OFFSET(deinterlace), AV_OPT_TYPE_INT, {.i64 = PL_DEINTERLACE_WEAVE}, 0, PL_DEINTERLACE_ALGORITHM_COUNT - 1, DYNAMIC, .unit = "deinterlace" },
+        { "weave", "Weave fields together (no-op)",    0, AV_OPT_TYPE_CONST, {.i64 = PL_DEINTERLACE_WEAVE}, 0, 0, STATIC, .unit = "deinterlace" },
+        { "bob",   "Naive bob deinterlacing",          0, AV_OPT_TYPE_CONST, {.i64 = PL_DEINTERLACE_BOB},   0, 0, STATIC, .unit = "deinterlace" },
+        { "yadif", "Yet another deinterlacing filter", 0, AV_OPT_TYPE_CONST, {.i64 = PL_DEINTERLACE_YADIF}, 0, 0, STATIC, .unit = "deinterlace" },
+    { "skip_spatial_check", "Skip yadif spatial check", OFFSET(skip_spatial_check), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DYNAMIC },
+    { "send_fields", "Output a frame for each field", OFFSET(send_fields), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DYNAMIC },
 
     { "deband", "Enable debanding", OFFSET(deband), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DYNAMIC },
     { "deband_iterations", "Deband iterations", OFFSET(deband_iterations), AV_OPT_TYPE_INT, {.i64 = 1}, 0, 16, DYNAMIC },

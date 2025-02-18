@@ -192,6 +192,7 @@ OBJS-$(CONFIG_ANULLSINK_FILTER)              += asink_anullsink.o
 
 # video filters
 OBJS-$(CONFIG_ADDROI_FILTER)                 += vf_addroi.o
+OBJS-$(CONFIG_ALPHADET_FILTER)               += vf_alphadet.o
 OBJS-$(CONFIG_ALPHAEXTRACT_FILTER)           += vf_extractplanes.o
 OBJS-$(CONFIG_ALPHAMERGE_FILTER)             += vf_alphamerge.o framesync.o
 OBJS-$(CONFIG_AMPLIFY_FILTER)                += vf_amplify.o
@@ -208,6 +209,7 @@ OBJS-$(CONFIG_BILATERAL_FILTER)              += vf_bilateral.o
 OBJS-$(CONFIG_BILATERAL_CUDA_FILTER)         += vf_bilateral_cuda.o vf_bilateral_cuda.ptx.o
 OBJS-$(CONFIG_BITPLANENOISE_FILTER)          += vf_bitplanenoise.o
 OBJS-$(CONFIG_BLACKDETECT_FILTER)            += vf_blackdetect.o
+OBJS-$(CONFIG_BLACKDETECT_CUDA_FILTER)       += vf_blackdetect_cuda.o vf_blackdetect_cuda.ptx.o
 OBJS-$(CONFIG_BLACKFRAME_FILTER)             += vf_blackframe.o
 OBJS-$(CONFIG_BLEND_FILTER)                  += vf_blend.o framesync.o
 OBJS-$(CONFIG_BLEND_VULKAN_FILTER)           += vf_blend_vulkan.o framesync.o vulkan.o vulkan_filter.o
@@ -472,6 +474,7 @@ OBJS-$(CONFIG_SCALE_VULKAN_FILTER)           += vf_scale_vulkan.o vulkan.o vulka
 OBJS-$(CONFIG_SCALE2REF_FILTER)              += vf_scale.o scale_eval.o framesync.o
 OBJS-$(CONFIG_SCALE2REF_NPP_FILTER)          += vf_scale_npp.o scale_eval.o
 OBJS-$(CONFIG_SCDET_FILTER)                  += vf_scdet.o
+OBJS-$(CONFIG_SCDET_CUDA_FILTER)             += vf_scdet_cuda.o vf_scdet_cuda.ptx.o
 OBJS-$(CONFIG_SCHARR_FILTER)                 += vf_convolution.o
 OBJS-$(CONFIG_SCROLL_FILTER)                 += vf_scroll.o
 OBJS-$(CONFIG_SEGMENT_FILTER)                += f_segment.o

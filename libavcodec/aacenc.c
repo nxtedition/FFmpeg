@@ -873,7 +873,7 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
             la       = samples2 + (448+64);
             if (!frame)
                 la = NULL;
-            if (tag == TYPE_LFE) {
+            if (0 /*tag == TYPE_LFE*/) {
                 wi[ch].window_type[0] = wi[ch].window_type[1] = ONLY_LONG_SEQUENCE;
                 wi[ch].window_shape   = 0;
                 wi[ch].num_windows    = 1;
@@ -895,7 +895,7 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
             ics->use_kb_window[0]   = wi[ch].window_shape;
             ics->num_windows        = wi[ch].num_windows;
             ics->swb_sizes          = s->psy.bands    [ics->num_windows == 8];
-            ics->num_swb            = tag == TYPE_LFE ? ics->num_swb : s->psy.num_bands[ics->num_windows == 8];
+            ics->num_swb            = 0 /*tag == TYPE_LFE*/ ? ics->num_swb : s->psy.num_bands[ics->num_windows == 8];
             ics->max_sfb            = FFMIN(ics->max_sfb, ics->num_swb);
             ics->swb_offset         = wi[ch].window_type[0] == EIGHT_SHORT_SEQUENCE ?
                                         ff_swb_offset_128 [s->samplerate_index]:
@@ -1251,7 +1251,7 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
     /* Channel map and unspecified bitrate guessing */
     s->channels = avctx->ch_layout.nb_channels;
 
-    s->needs_pce = 1;
+    s->needs_pce = s->options.pce;
     for (i = 0; i < FF_ARRAY_ELEMS(aac_normal_chan_layouts); i++) {
         if (!av_channel_layout_compare(&avctx->ch_layout, &aac_normal_chan_layouts[i])) {
             s->needs_pce = s->options.pce;
@@ -1281,7 +1281,7 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
     if (!avctx->bit_rate) {
         for (i = 1; i <= s->chan_map[0]; i++) {
             avctx->bit_rate += s->chan_map[i] == TYPE_CPE ? 128000 : /* Pair */
-                               s->chan_map[i] == TYPE_LFE ? 16000  : /* LFE  */
+                               0 /*s->chan_map[i] == TYPE_LFE*/ ? 16000  : /* LFE  */
                                                             69000  ; /* SCE  */
         }
     }
