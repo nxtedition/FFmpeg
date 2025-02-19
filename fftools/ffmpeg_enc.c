@@ -287,6 +287,17 @@ int enc_open(void *opaque, const AVFrame *frame)
                    av_chroma_location_name(frame->chroma_location));
         }
 
+        if (enc_ctx->alpha_mode == AVALPHA_MODE_UNSPECIFIED) {
+            enc_ctx->alpha_mode = frame->alpha_mode;
+        } else if (enc_ctx->alpha_mode != frame->alpha_mode &&
+                   frame->alpha_mode != AVALPHA_MODE_UNSPECIFIED) {
+            av_log(e, AV_LOG_WARNING,
+                   "Requested alpha mode '%s' does not match the "
+                   "frame tagged alpha mode '%s'; result may be incorrect.\n",
+                   av_alpha_mode_name(enc_ctx->alpha_mode),
+                   av_alpha_mode_name(frame->alpha_mode));
+        }
+
         if (enc_ctx->flags & (AV_CODEC_FLAG_INTERLACED_DCT | AV_CODEC_FLAG_INTERLACED_ME) ||
             (frame->flags & AV_FRAME_FLAG_INTERLACED)
 #if FFMPEG_OPT_TOP
