@@ -85,6 +85,8 @@ static int do_alphamerge(FFFrameSync *fs)
                             FFMIN(main_linesize, alpha_linesize), alpha_buf->height);
     }
 
+    main_buf->alpha_mode = AVALPHA_MODE_STRAIGHT;
+
     return ff_filter_frame(ctx->outputs[0], main_buf);
 }
 
