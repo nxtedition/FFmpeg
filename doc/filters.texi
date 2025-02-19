@@ -16458,7 +16458,7 @@ approaches.
 Set the color used to fill the output area not covered by the output image, for
 example as a result of @option{normalize_sar}. For the general syntax of this
 option, check the @ref{color syntax,,"Color" section in the ffmpeg-utils
-manual,ffmpeg-utils}. Defaults to @code{black}.
+manual,ffmpeg-utils}. Defaults to @code{black@@0}.
 
 @item corner_rounding
 Render frames with rounded corners. The value, given as a float ranging from
@@ -16485,6 +16485,10 @@ value of @code{auto} outputs frames in the same format as the input frames,
 leading to no change. For any other value, conversion will be performed.
 
 See the @ref{setparams} filter for a list of possible values.
+
+@item alpha_mode
+Choose the desired output alpha mode, when the output format has an alpha
+channel. See the @ref{setparams} filter for a list of possible values.
 
 @item apply_filmgrain
 Apply film grain (e.g. AV1 or H.274) if present in source frames, and strip
@@ -18847,7 +18851,8 @@ See @ref{framesync}.
 
 @item alpha
 Set format of alpha of the overlaid video, it can be @var{straight} or
-@var{premultiplied}. Default is @var{straight}.
+@var{premultiplied}, or @var{auto} to use the frame tagging if available.
+Default is @var{auto}.
 @end table
 
 The @option{x}, and @option{y} expressions can contain the following
@@ -22253,6 +22258,19 @@ Keep the same chroma location (default).
 @item top
 @item bottomleft
 @item bottom
+@end table
+
+@item alpha_mode
+Set the alpha moda.
+Available values are:
+
+@table @samp
+@item auto
+Keep the same alpha mode (default).
+
+@item unspecified, unknown
+@item premultiplied
+@item straight
 @end table
 @end table
 
