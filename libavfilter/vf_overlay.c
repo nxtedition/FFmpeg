@@ -750,117 +750,127 @@ static int config_input_main(AVFilterLink *inlink)
     s->main_is_packed_rgb =
         ff_fill_rgba_map(s->main_rgba_map, inlink->format) >= 0;
     s->main_has_alpha = ff_fmt_is_in(inlink->format, alpha_pix_fmts);
-    switch (s->format) {
-    case OVERLAY_FORMAT_YUV420:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva420 : blend_slice_yuv420;
-        break;
-    case OVERLAY_FORMAT_YUV420P10:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva420p10 : blend_slice_yuv420p10;
-        break;
-    case OVERLAY_FORMAT_YUV422:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva422 : blend_slice_yuv422;
-        break;
-    case OVERLAY_FORMAT_YUV422P10:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva422p10 : blend_slice_yuv422p10;
-        break;
-    case OVERLAY_FORMAT_YUV444:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva444 : blend_slice_yuv444;
-        break;
-    case OVERLAY_FORMAT_YUV444P10:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva444p10 : blend_slice_yuv444p10;
-        break;
-    case OVERLAY_FORMAT_RGB:
-        s->blend_slice = s->main_has_alpha ? blend_slice_rgba : blend_slice_rgb;
-        break;
-    case OVERLAY_FORMAT_GBRP:
-        s->blend_slice = s->main_has_alpha ? blend_slice_gbrap : blend_slice_gbrp;
-        break;
-    case OVERLAY_FORMAT_AUTO:
-        switch (inlink->format) {
-        case AV_PIX_FMT_YUVA420P:
-            s->blend_slice = blend_slice_yuva420;
+    return 0;
+}
+
+static int init_slice_fn(AVFilterContext *ctx, enum AVAlphaMode alpha_mode)
+{
+    OverlayContext *s = ctx->priv;
+    const AVFilterLink *inlink = ctx->inputs[0];
+
+    switch (alpha_mode) {
+    case AVALPHA_MODE_UNSPECIFIED:
+    case AVALPHA_MODE_STRAIGHT:
+        switch (s->format) {
+        case OVERLAY_FORMAT_YUV420:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva420 : blend_slice_yuv420;
             break;
-        case AV_PIX_FMT_YUVA420P10:
-            s->blend_slice = blend_slice_yuva420p10;
+        case OVERLAY_FORMAT_YUV420P10:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva420p10 : blend_slice_yuv420p10;
             break;
-        case AV_PIX_FMT_YUVA422P:
-            s->blend_slice = blend_slice_yuva422;
+        case OVERLAY_FORMAT_YUV422:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva422 : blend_slice_yuv422;
             break;
-        case AV_PIX_FMT_YUVA422P10:
-            s->blend_slice = blend_slice_yuva422p10;
+        case OVERLAY_FORMAT_YUV422P10:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva422p10 : blend_slice_yuv422p10;
             break;
-        case AV_PIX_FMT_YUVA444P:
-            s->blend_slice = blend_slice_yuva444;
+        case OVERLAY_FORMAT_YUV444:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva444 : blend_slice_yuv444;
             break;
-        case AV_PIX_FMT_YUVA444P10:
-            s->blend_slice = blend_slice_yuva444p10;
+        case OVERLAY_FORMAT_YUV444P10:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva444p10 : blend_slice_yuv444p10;
             break;
-        case AV_PIX_FMT_ARGB:
-        case AV_PIX_FMT_RGBA:
-        case AV_PIX_FMT_BGRA:
-        case AV_PIX_FMT_ABGR:
-            s->blend_slice = blend_slice_rgba;
+        case OVERLAY_FORMAT_RGB:
+            s->blend_slice = s->main_has_alpha ? blend_slice_rgba : blend_slice_rgb;
             break;
-        case AV_PIX_FMT_GBRAP:
-            s->blend_slice = blend_slice_gbrap;
+        case OVERLAY_FORMAT_GBRP:
+            s->blend_slice = s->main_has_alpha ? blend_slice_gbrap : blend_slice_gbrp;
             break;
-        default:
-            av_assert0(0);
+        case OVERLAY_FORMAT_AUTO:
+            switch (inlink->format) {
+            case AV_PIX_FMT_YUVA420P:
+                s->blend_slice = blend_slice_yuva420;
+                break;
+            case AV_PIX_FMT_YUVA420P10:
+                s->blend_slice = blend_slice_yuva420p10;
+                break;
+            case AV_PIX_FMT_YUVA422P:
+                s->blend_slice = blend_slice_yuva422;
+                break;
+            case AV_PIX_FMT_YUVA422P10:
+                s->blend_slice = blend_slice_yuva422p10;
+                break;
+            case AV_PIX_FMT_YUVA444P:
+                s->blend_slice = blend_slice_yuva444;
+                break;
+            case AV_PIX_FMT_YUVA444P10:
+                s->blend_slice = blend_slice_yuva444p10;
+                break;
+            case AV_PIX_FMT_ARGB:
+            case AV_PIX_FMT_RGBA:
+            case AV_PIX_FMT_BGRA:
+            case AV_PIX_FMT_ABGR:
+                s->blend_slice = blend_slice_rgba;
+                break;
+            case AV_PIX_FMT_GBRAP:
+                s->blend_slice = blend_slice_gbrap;
+                break;
+            default:
+                av_assert0(0);
+                break;
+            }
+            break;
+        }
+        break;
+
+    case AVALPHA_MODE_PREMULTIPLIED:
+        switch (s->format) {
+        case OVERLAY_FORMAT_YUV420:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva420_pm : blend_slice_yuv420_pm;
+            break;
+        case OVERLAY_FORMAT_YUV422:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva422_pm : blend_slice_yuv422_pm;
+            break;
+        case OVERLAY_FORMAT_YUV444:
+            s->blend_slice = s->main_has_alpha ? blend_slice_yuva444_pm : blend_slice_yuv444_pm;
+            break;
+        case OVERLAY_FORMAT_RGB:
+            s->blend_slice = s->main_has_alpha ? blend_slice_rgba_pm : blend_slice_rgb_pm;
+            break;
+        case OVERLAY_FORMAT_GBRP:
+            s->blend_slice = s->main_has_alpha ? blend_slice_gbrap_pm : blend_slice_gbrp_pm;
+            break;
+        case OVERLAY_FORMAT_AUTO:
+            switch (inlink->format) {
+            case AV_PIX_FMT_YUVA420P:
+                s->blend_slice = blend_slice_yuva420_pm;
+                break;
+            case AV_PIX_FMT_YUVA422P:
+                s->blend_slice = blend_slice_yuva422_pm;
+                break;
+            case AV_PIX_FMT_YUVA444P:
+                s->blend_slice = blend_slice_yuva444_pm;
+                break;
+            case AV_PIX_FMT_ARGB:
+            case AV_PIX_FMT_RGBA:
+            case AV_PIX_FMT_BGRA:
+            case AV_PIX_FMT_ABGR:
+                s->blend_slice = blend_slice_rgba_pm;
+                break;
+            case AV_PIX_FMT_GBRAP:
+                s->blend_slice = blend_slice_gbrap_pm;
+                break;
+            default:
+                av_assert0(0);
+                break;
+            }
             break;
         }
         break;
     }
 
-    if (!s->alpha_format)
-        goto end;
-
-    switch (s->format) {
-    case OVERLAY_FORMAT_YUV420:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva420_pm : blend_slice_yuv420_pm;
-        break;
-    case OVERLAY_FORMAT_YUV422:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva422_pm : blend_slice_yuv422_pm;
-        break;
-    case OVERLAY_FORMAT_YUV444:
-        s->blend_slice = s->main_has_alpha ? blend_slice_yuva444_pm : blend_slice_yuv444_pm;
-        break;
-    case OVERLAY_FORMAT_RGB:
-        s->blend_slice = s->main_has_alpha ? blend_slice_rgba_pm : blend_slice_rgb_pm;
-        break;
-    case OVERLAY_FORMAT_GBRP:
-        s->blend_slice = s->main_has_alpha ? blend_slice_gbrap_pm : blend_slice_gbrp_pm;
-        break;
-    case OVERLAY_FORMAT_AUTO:
-        switch (inlink->format) {
-        case AV_PIX_FMT_YUVA420P:
-            s->blend_slice = blend_slice_yuva420_pm;
-            break;
-        case AV_PIX_FMT_YUVA422P:
-            s->blend_slice = blend_slice_yuva422_pm;
-            break;
-        case AV_PIX_FMT_YUVA444P:
-            s->blend_slice = blend_slice_yuva444_pm;
-            break;
-        case AV_PIX_FMT_ARGB:
-        case AV_PIX_FMT_RGBA:
-        case AV_PIX_FMT_BGRA:
-        case AV_PIX_FMT_ABGR:
-            s->blend_slice = blend_slice_rgba_pm;
-            break;
-        case AV_PIX_FMT_GBRAP:
-            s->blend_slice = blend_slice_gbrap_pm;
-            break;
-        default:
-            av_assert0(0);
-            break;
-        }
-        break;
-    }
-
-end:
 #if ARCH_X86
-    ff_overlay_init_x86(s, s->format, inlink->format,
-                        s->alpha_format, s->main_has_alpha);
+    ff_overlay_init_x86(s, s->format, inlink->format, alpha_mode, s->main_has_alpha);
 #endif
 
     return 0;
@@ -902,6 +912,11 @@ static int do_blend(FFFrameSync *fs)
     if (s->x < mainpic->width  && s->x + second->width  >= 0 &&
         s->y < mainpic->height && s->y + second->height >= 0) {
         ThreadData td;
+
+        enum AVAlphaMode alpha_mode = second->alpha_mode;
+        if (s->alpha_mode != AVALPHA_MODE_UNSPECIFIED)
+            alpha_mode = s->alpha_mode;
+        init_slice_fn(ctx, alpha_mode);
 
         td.dst = mainpic;
         td.src = second;
@@ -953,9 +968,11 @@ static const AVOption overlay_options[] = {
         { "gbrp",   "", 0, AV_OPT_TYPE_CONST, {.i64=OVERLAY_FORMAT_GBRP},   .flags = FLAGS, .unit = "format" },
         { "auto",   "", 0, AV_OPT_TYPE_CONST, {.i64=OVERLAY_FORMAT_AUTO},   .flags = FLAGS, .unit = "format" },
     { "repeatlast", "repeat overlay of the last overlay frame", OFFSET(fs.opt_repeatlast), AV_OPT_TYPE_BOOL, {.i64=1}, 0, 1, FLAGS },
-    { "alpha", "alpha format", OFFSET(alpha_format), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, FLAGS, .unit = "alpha_format" },
-        { "straight",      "", 0, AV_OPT_TYPE_CONST, {.i64=0}, .flags = FLAGS, .unit = "alpha_format" },
-        { "premultiplied", "", 0, AV_OPT_TYPE_CONST, {.i64=1}, .flags = FLAGS, .unit = "alpha_format" },
+    { "alpha", "alpha format", OFFSET(alpha_mode), AV_OPT_TYPE_INT, {.i64=AVALPHA_MODE_UNSPECIFIED}, 0, AVALPHA_MODE_NB-1, FLAGS, .unit = "alpha_mode" },
+        { "auto",          "", 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_UNSPECIFIED},   .flags = FLAGS, .unit = "alpha_mode" },
+        { "unknown",       "", 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_UNSPECIFIED},   .flags = FLAGS, .unit = "alpha_mode" },
+        { "straight",      "", 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_STRAIGHT},      .flags = FLAGS, .unit = "alpha_mode" },
+        { "premultiplied", "", 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_PREMULTIPLIED}, .flags = FLAGS, .unit = "alpha_mode" },
     { NULL }
 };
 
