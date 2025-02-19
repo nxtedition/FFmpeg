@@ -2,6 +2,10 @@ The last version increases of all libraries were on 2024-03-07
 
 API changes, most recent first:
 
+2025-02-xx - xxxxxxxxxx - lavc 61.34.100 - avcodec.h codec_par.h
+  Add AVCodecContext.alpha_mode, AVCodecParameters.alpha_mode, and
+  AV_CODEC_CONFIG_ALPHA_MODE.
+
 2025-02-xx - xxxxxxxxxx - lavu 59.58.100 - frame.h pixfmt.h
   Add AVAlphaMode, AVFrame.alpha_mode, av_alpha_mode_name() and
   av_alpha_mode_from_name().
