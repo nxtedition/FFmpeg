@@ -512,6 +512,7 @@ static int filter_frame(AVFilterContext *ctx,
 {
     PreMultiplyContext *s = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(outlink->format);
 
     if (ctx->is_disabled) {
         *out = av_frame_clone(base);
@@ -528,6 +529,13 @@ static int filter_frame(AVFilterContext *ctx,
 
         full = base->color_range == AVCOL_RANGE_JPEG;
         limited = base->color_range == AVCOL_RANGE_MPEG;
+
+        if (desc->flags & AV_PIX_FMT_FLAG_ALPHA) {
+            (*out)->alpha_mode = s->inverse ? AVALPHA_MODE_STRAIGHT
+                                            : AVALPHA_MODE_PREMULTIPLIED;
+        } else {
+            (*out)->alpha_mode = AVALPHA_MODE_UNSPECIFIED;
+        }
 
         if (s->inverse) {
             switch (outlink->format) {
