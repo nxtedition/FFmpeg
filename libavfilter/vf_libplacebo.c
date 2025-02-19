@@ -192,6 +192,7 @@ typedef struct LibplaceboContext {
     int color_range;
     int color_primaries;
     int color_trc;
+    int alpha_mode;
     AVDictionary *extra_opts;
 
     int have_hwdevice;
@@ -862,6 +863,11 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
     if (s->color_primaries >= 0)
         out->color_primaries = s->color_primaries;
 
+    if (outdesc->flags & AV_PIX_FMT_FLAG_ALPHA) {
+        if (s->alpha_mode >= 0)
+            out->alpha_mode = s->alpha_mode;
+    }
+
     /* Strip side data if no longer relevant */
     if (out->width != ref->width || out->height != ref->height)
         changed |= AV_SIDE_DATA_PROP_SIZE_DEPENDENT;
@@ -1348,6 +1354,13 @@ static const AVOption libplacebo_options[] = {
     {"bt2020-12",                      NULL,  0, AV_OPT_TYPE_CONST, {.i64=AVCOL_TRC_BT2020_12},    INT_MIN, INT_MAX, STATIC, .unit = "color_trc"},
     {"smpte2084",                      NULL,  0, AV_OPT_TYPE_CONST, {.i64=AVCOL_TRC_SMPTE2084},    INT_MIN, INT_MAX, STATIC, .unit = "color_trc"},
     {"arib-std-b67",                   NULL,  0, AV_OPT_TYPE_CONST, {.i64=AVCOL_TRC_ARIB_STD_B67}, INT_MIN, INT_MAX, STATIC, .unit = "color_trc"},
+
+    {"alpha_mode", "select alpha moda", OFFSET(alpha_mode), AV_OPT_TYPE_INT, {.i64=-1}, -1, AVALPHA_MODE_NB-1, DYNAMIC, .unit = "alpha_mode"},
+    {"auto", "keep the same alpha mode",  0, AV_OPT_TYPE_CONST, {.i64=-1},                              0, 0, DYNAMIC, .unit = "alpha_mode"},
+    {"unspecified",                      NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_UNSPECIFIED},   0, 0, DYNAMIC, .unit = "alpha_mode"},
+    {"unknown",                          NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_UNSPECIFIED},   0, 0, DYNAMIC, .unit = "alpha_mode"},
+    {"premultiplied",                    NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_PREMULTIPLIED}, 0, 0, DYNAMIC, .unit = "alpha_mode"},
+    {"straight",                         NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_STRAIGHT},      0, 0, DYNAMIC, .unit = "alpha_mode"},
 
     { "upscaler", "Upscaler function", OFFSET(upscaler), AV_OPT_TYPE_STRING, {.str = "spline36"}, .flags = DYNAMIC },
     { "downscaler", "Downscaler function", OFFSET(downscaler), AV_OPT_TYPE_STRING, {.str = "mitchell"}, .flags = DYNAMIC },
