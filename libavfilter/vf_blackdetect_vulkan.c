@@ -220,7 +220,7 @@ static int blackdetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(vkctx->input_format);
         const int depth = desc->comp[0].depth;
         const int ymin = 16  << (depth - 8);
-        const int ymax = 240 << (depth - 8);
+        const int ymax = 235 << (depth - 8);
         const int imax = (1 << depth) - 1;
         push_data.threshold = (s->pixel_black_th * (ymax - ymin) + ymin) / imax;
     }
