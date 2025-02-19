@@ -2713,6 +2713,16 @@ static void print_chroma_location(WriterContext *w, enum AVChromaLocation chroma
     }
 }
 
+static void print_alpha_mode(WriterContext *w, enum AVAlphaMode alpha_mode)
+{
+    const char *val = av_alpha_mode_name(alpha_mode);
+    if (!val || alpha_mode == AVALPHA_MODE_UNSPECIFIED) {
+        print_str_opt("alpha_mode", "unspecified");
+    } else {
+        print_str("alpha_mode", val);
+    }
+}
+
 static void clear_log(int need_lock)
 {
     int i;
@@ -2991,6 +3001,7 @@ static void show_frame(WriterContext *w, AVFrame *frame, AVStream *stream,
         print_primaries(w, frame->color_primaries);
         print_color_trc(w, frame->color_trc);
         print_chroma_location(w, frame->chroma_location);
+        print_alpha_mode(w, frame->alpha_mode);
         break;
 
     case AVMEDIA_TYPE_AUDIO:
