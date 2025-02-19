@@ -901,8 +901,12 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
     }
 
     /* Draw first frame opaque, others with blending */
-    opts->params.skip_target_clearing = false;
     opts->params.blend_params = NULL;
+#if PL_API_VER >= 346
+    opts->params.background = opts->params.border = PL_CLEAR_COLOR;
+#else
+    opts->params.skip_target_clearing = false;
+#endif
     for (int i = 0; i < s->nb_inputs; i++) {
         LibplaceboInput *in = &s->inputs[i];
         FilterLink *il = ff_filter_link(ctx->inputs[in->idx]);
@@ -913,8 +917,12 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
         opts->params.skip_caching_single_frame = high_fps;
         update_crops(ctx, in, &target, out->pts * av_q2d(outlink->time_base));
         pl_render_image_mix(in->renderer, &in->mix, &target, &opts->params);
-        opts->params.skip_target_clearing = true;
         opts->params.blend_params = &pl_alpha_overlay;
+#if PL_API_VER >= 346
+        opts->params.background = opts->params.border = PL_CLEAR_SKIP;
+#else
+        opts->params.skip_target_clearing = true;
+#endif
     }
 
     if (outdesc->flags & AV_PIX_FMT_FLAG_HWACCEL) {
@@ -1160,13 +1168,19 @@ static int libplacebo_query_format(const AVFilterContext *ctx,
         goto fail;
     }
 
-    for (int i = 0; i < s->nb_inputs; i++)
+    for (int i = 0; i < s->nb_inputs; i++) {
+        if (i > 0) {
+            /* Duplicate the format list for each subsequent input */
+            infmts = NULL;
+            for (int n = 0; n < cfg_in[0]->formats->nb_formats; n++)
+                RET(ff_add_format(&infmts, cfg_in[0]->formats->formats[n]));
+        }
         RET(ff_formats_ref(infmts, &cfg_in[i]->formats));
-    RET(ff_formats_ref(outfmts, &cfg_out[0]->formats));
+        RET(ff_formats_ref(ff_all_color_spaces(), &cfg_in[i]->color_spaces));
+        RET(ff_formats_ref(ff_all_color_ranges(), &cfg_in[i]->color_ranges));
+    }
 
-    /* Set colorspace properties */
-    RET(ff_formats_ref(ff_all_color_spaces(), &cfg_in[0]->color_spaces));
-    RET(ff_formats_ref(ff_all_color_ranges(), &cfg_in[0]->color_ranges));
+    RET(ff_formats_ref(outfmts, &cfg_out[0]->formats));
 
     outfmts = s->colorspace > 0 ? ff_make_formats_list_singleton(s->colorspace)
                                 : ff_all_color_spaces();
