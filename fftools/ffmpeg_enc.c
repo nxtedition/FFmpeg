@@ -271,6 +271,7 @@ int enc_open(void *opaque, const AVFrame *frame)
         enc_ctx->color_trc              = frame->color_trc;
         enc_ctx->colorspace             = frame->colorspace;
         enc_ctx->chroma_sample_location = frame->chroma_location;
+        enc_ctx->alpha_mode             = frame->alpha_mode;
 
         if (enc_ctx->flags & (AV_CODEC_FLAG_INTERLACED_DCT | AV_CODEC_FLAG_INTERLACED_ME) ||
             (frame->flags & AV_FRAME_FLAG_INTERLACED)
