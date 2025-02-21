@@ -56,6 +56,10 @@ typedef struct AlphaDetectVulkanContext {
     enum AlphaType type;
 } AlphaDetectVulkanContext;
 
+typedef struct AlphaDetectPushData {
+    float yscale, yoff;
+} AlphaDetectPushData;
+
 typedef struct AlphaDetectBuf {
     uint32_t frame_straight;
 } AlphaDetectBuf;
@@ -122,6 +126,14 @@ static av_cold int init_filter(AVFilterContext *ctx)
                           0));
     shd = &s->shd;
 
+    GLSLC(0, layout(push_constant, std430) uniform pushConstants {            );
+    GLSLC(1,     float yscale;                                                );
+    GLSLC(1,     float yoff;                                                  );
+    GLSLC(0, };                                                               );
+
+    ff_vk_shader_add_push_const(shd, 0, sizeof(AlphaDetectPushData),
+                                VK_SHADER_STAGE_COMPUTE_BIT);
+
     desc = (FFVulkanDescriptorSetBinding []) {
         {
             .name       = "input_img",
@@ -158,7 +170,7 @@ static av_cold int init_filter(AVFilterContext *ctx)
     if (pixdesc->flags & AV_PIX_FMT_FLAG_RGB)
         GLSLC(1, bool straight = any(greaterThan(color.rgb, color.a));        );
     else
-        GLSLC(1, bool straight = color.x > color.a;                           );
+        GLSLC(1, bool straight = yscale * color.x + yoff > color.a;           );
     GLSLC(1,     if (subgroupAny(straight) && subgroupElect())                );
     GLSLC(2,         frame_straight = 1u;                                     );
     GLSLC(0, }                                                                );
@@ -198,6 +210,20 @@ static int alphadetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
     FFVkBuffer *sum_vk;
 
     AlphaDetectBuf *det;
+    AlphaDetectPushData push_data;
+
+    if (in->color_range == AVCOL_RANGE_JPEG) {
+        push_data.yscale = 1.0f;
+        push_data.yoff   = 0.0f;
+    } else {
+        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(vkctx->input_format);
+        const int depth = desc->comp[0].depth;
+        const int ymin = 16  << (depth - 8);
+        const int ymax = 235 << (depth - 8);
+        const int imax = (1 << depth) - 1;
+        push_data.yscale = (float) imax / (ymax - ymin);
+        push_data.yoff = push_data.yscale * -ymin / (float) imax;
+    }
 
     if (!s->initialized)
         RET(init_filter(ctx));
@@ -205,16 +231,15 @@ static int alphadetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
     if (s->type != UNDETERMINED)
         return ff_filter_frame(outlink, in);
 
-    err = ff_vk_get_pooled_buffer(vkctx, &s->det_buf_pool, &sum_buf,
-                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                  NULL,
-                                  sizeof(AlphaDetectBuf),
-                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (err < 0)
-        return err;
+    RET(ff_vk_get_pooled_buffer(vkctx, &s->det_buf_pool, &sum_buf,
+                                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                NULL,
+                                sizeof(AlphaDetectBuf),
+                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
     sum_vk = (FFVkBuffer *)sum_buf->data;
     det = (AlphaDetectBuf *) sum_vk->mapped_mem;
 
@@ -264,8 +289,7 @@ static int alphadetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
                 .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .buffer = sum_vk->buf,
@@ -280,6 +304,8 @@ static int alphadetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
                                         VK_FORMAT_UNDEFINED));
 
     ff_vk_exec_bind_shader(vkctx, exec, &s->shd);
+    ff_vk_shader_update_push_const(vkctx, exec, &s->shd, VK_SHADER_STAGE_COMPUTE_BIT,
+                                   0, sizeof(push_data), &push_data);
 
     vk->CmdDispatch(exec->buf,
                     FFALIGN(in->width,  s->shd.lg_size[0]) / s->shd.lg_size[0],
@@ -292,8 +318,7 @@ static int alphadetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
                 .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                 .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
-                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
