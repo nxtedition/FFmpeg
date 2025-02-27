@@ -39,6 +39,7 @@ typedef struct BlackDetectVulkanContext {
     double black_min_duration_time;
     double picture_black_ratio_th;
     double pixel_black_th;
+    int    alpha;
 
     int64_t black_start;
     int64_t black_end;
@@ -64,6 +65,7 @@ static av_cold int init_filter(AVFilterContext *ctx)
     FFVulkanShader *shd;
     FFVkSPIRVCompiler *spv;
     FFVulkanDescriptorSetBinding *desc;
+    const int plane = s->alpha ? 3 : 0;
 
     const AVPixFmtDescriptor *pixdesc = av_pix_fmt_desc_get(s->vkctx.input_format);
     if (pixdesc->flags & AV_PIX_FMT_FLAG_RGB) {
@@ -126,10 +128,10 @@ static av_cold int init_filter(AVFilterContext *ctx)
     GLSLC(1,     barrier();                                                   );
     GLSLC(0,                                                                  );
     GLSLC(1,     const ivec2 pos = ivec2(gl_GlobalInvocationID.xy);           );
-    GLSLC(1,     if (!IS_WITHIN(pos, imageSize(input_img[0])))                );
+    GLSLF(1,     if (!IS_WITHIN(pos, imageSize(input_img[%d])))               ,plane);
     GLSLC(2,         return;                                                  );
-    GLSLC(1,     float luma = imageLoad(input_img[0], pos).x;                 );
-    GLSLC(1,     uvec4 isblack = subgroupBallot(luma <= threshold);           );
+    GLSLF(1,     float value = imageLoad(input_img[%d], pos).x;               ,plane);
+    GLSLC(1,     uvec4 isblack = subgroupBallot(value <= threshold);          );
     GLSLC(1,     if (subgroupElect())                                         );
     GLSLC(2,         atomicAdd(wg_sum, subgroupBallotBitCount(isblack));      );
     GLSLC(1,     barrier();                                                   );
@@ -214,7 +216,7 @@ static int blackdetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
     BlackDetectBuf *sum;
     BlackDetectPushData push_data;
 
-    if (in->color_range == AVCOL_RANGE_JPEG) {
+    if (in->color_range == AVCOL_RANGE_JPEG || s->alpha) {
         push_data.threshold = s->pixel_black_th;
     } else {
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(vkctx->input_format);
@@ -228,15 +230,16 @@ static int blackdetect_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
     if (!s->initialized)
         RET(init_filter(ctx));
 
-    RET(ff_vk_get_pooled_buffer(vkctx, &s->sum_buf_pool, &sum_buf,
-                                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                NULL,
-                                sizeof(BlackDetectBuf),
-                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT));
+    err = ff_vk_get_pooled_buffer(vkctx, &s->sum_buf_pool, &sum_buf,
+                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                  NULL,
+                                  sizeof(BlackDetectBuf),
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (err < 0)
+        return err;
     sum_vk = (FFVkBuffer *)sum_buf->data;
     sum = (BlackDetectBuf *) sum_vk->mapped_mem;
 
@@ -358,6 +361,29 @@ static void blackdetect_vulkan_uninit(AVFilterContext *avctx)
     s->initialized = 0;
 }
 
+static int config_output(AVFilterLink *outlink)
+{
+    AVFilterContext *ctx = outlink->src;
+    BlackDetectVulkanContext *s = ctx->priv;
+    FFVulkanContext *vkctx = &s->vkctx;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(vkctx->input_format);
+
+    if (s->alpha && !(desc->flags & AV_PIX_FMT_FLAG_ALPHA)) {
+        av_log(ctx, AV_LOG_ERROR, "Input format %s does not have an alpha channel\n",
+               av_get_pix_fmt_name(vkctx->input_format));
+        return AVERROR(EINVAL);
+    }
+
+    if (desc->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_XYZ) ||
+        !(desc->flags & AV_PIX_FMT_FLAG_PLANAR)) {
+        av_log(ctx, AV_LOG_ERROR, "Input format %s is not planar YUV\n",
+               av_get_pix_fmt_name(vkctx->input_format));
+        return AVERROR(EINVAL);
+    }
+
+    return ff_vk_filter_config_output(outlink);
+}
+
 #define OFFSET(x) offsetof(BlackDetectVulkanContext, x)
 #define FLAGS (AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM)
 static const AVOption blackdetect_vulkan_options[] = {
@@ -367,6 +393,7 @@ static const AVOption blackdetect_vulkan_options[] = {
     { "pic_th",                 "set the picture black ratio threshold", OFFSET(picture_black_ratio_th), AV_OPT_TYPE_DOUBLE, {.dbl=.98}, 0, 1, FLAGS },
     { "pixel_black_th", "set the pixel black threshold", OFFSET(pixel_black_th), AV_OPT_TYPE_DOUBLE, {.dbl=.10}, 0, 1, FLAGS },
     { "pix_th",         "set the pixel black threshold", OFFSET(pixel_black_th), AV_OPT_TYPE_DOUBLE, {.dbl=.10}, 0, 1, FLAGS },
+    { "alpha",          "check alpha instead of luma", OFFSET(alpha), AV_OPT_TYPE_BOOL, {.i64=0}, 0, 1, FLAGS },
     { NULL }
 };
 
@@ -385,7 +412,7 @@ static const AVFilterPad blackdetect_vulkan_outputs[] = {
     {
         .name = "default",
         .type = AVMEDIA_TYPE_VIDEO,
-        .config_props = &ff_vk_filter_config_output,
+        .config_props = &config_output,
     },
 };
 

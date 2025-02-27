@@ -169,7 +169,7 @@ typedef struct LibplaceboContext {
     /* settings */
     char *out_format_string;
     enum AVPixelFormat out_format;
-    char *fillcolor;
+    uint8_t fillcolor[4];
     double var_values[VAR_VARS_NB];
     char *w_expr;
     char *h_expr;
@@ -203,11 +203,9 @@ typedef struct LibplaceboContext {
     char *upscaler;
     char *downscaler;
     char *frame_mixer;
-    int lut_entries;
     float antiringing;
     int sigmoid;
     int skip_aa;
-    float polar_cutoff;
     int disable_linear;
     int disable_builtin;
     int force_dither;
@@ -235,7 +233,6 @@ typedef struct LibplaceboContext {
     /* pl_peak_detect_params */
     int peakdetect;
     float smoothing;
-    float min_peak;
     float scene_low;
     float scene_high;
     float percentile;
@@ -375,9 +372,11 @@ static int update_settings(AVFilterContext *ctx)
     AVDictionaryEntry *e = NULL;
     pl_options opts = s->opts;
     int gamut_mode = s->gamut_mode;
-    uint8_t color_rgba[4];
 
-    RET(av_parse_color(color_rgba, s->fillcolor, -1, s));
+    opts->deinterlace_params = *pl_deinterlace_params(
+        .algo = s->deinterlace,
+        .skip_spatial_check = s->skip_spatial_check,
+    );
 
     opts->deinterlace_params = *pl_deinterlace_params(
         .algo = s->deinterlace,
@@ -403,7 +402,6 @@ static int update_settings(AVFilterContext *ctx)
 
     opts->peak_detect_params = *pl_peak_detect_params(
         .smoothing_period = s->smoothing,
-        .minimum_peak = s->min_peak,
         .scene_threshold_low = s->scene_low,
         .scene_threshold_high = s->scene_high,
 #if PL_API_VER >= 263
@@ -436,13 +434,12 @@ static int update_settings(AVFilterContext *ctx)
     );
 
     opts->params = *pl_render_params(
-        .lut_entries = s->lut_entries,
         .antiringing_strength = s->antiringing,
-        .background_transparency = 1.0f - (float) color_rgba[3] / UINT8_MAX,
+        .background_transparency = 1.0f - (float) s->fillcolor[3] / UINT8_MAX,
         .background_color = {
-            (float) color_rgba[0] / UINT8_MAX,
-            (float) color_rgba[1] / UINT8_MAX,
-            (float) color_rgba[2] / UINT8_MAX,
+            (float) s->fillcolor[0] / UINT8_MAX,
+            (float) s->fillcolor[1] / UINT8_MAX,
+            (float) s->fillcolor[2] / UINT8_MAX,
         },
 #if PL_API_VER >= 277
         .corner_rounding = s->corner_rounding,
@@ -461,7 +458,6 @@ static int update_settings(AVFilterContext *ctx)
         .num_hooks = s->num_hooks,
 
         .skip_anti_aliasing = s->skip_aa,
-        .polar_cutoff = s->polar_cutoff,
         .disable_linear_scaling = s->disable_linear,
         .disable_builtin_scalers = s->disable_builtin,
         .force_dither = s->force_dither,
@@ -831,7 +827,7 @@ static void update_crops(AVFilterContext *ctx, LibplaceboInput *in,
 /* Construct and emit an output frame for a given timestamp */
 static int output_frame(AVFilterContext *ctx, int64_t pts)
 {
-    int err = 0, ok, changed;
+    int err = 0, ok, changed = 0;
     LibplaceboContext *s = ctx->priv;
     pl_options opts = s->opts;
     AVFilterLink *outlink = ctx->outputs[0];
@@ -1340,7 +1336,7 @@ static const AVOption libplacebo_options[] = {
     { "force_divisible_by", "enforce that the output resolution is divisible by a defined integer when force_original_aspect_ratio is used", OFFSET(force_divisible_by), AV_OPT_TYPE_INT, { .i64 = 1 }, 1, 256, STATIC },
     { "normalize_sar", "force SAR normalization to 1:1 by adjusting pos_x/y/w/h", OFFSET(normalize_sar), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, STATIC },
     { "pad_crop_ratio", "ratio between padding and cropping when normalizing SAR (0=pad, 1=crop)", OFFSET(pad_crop_ratio), AV_OPT_TYPE_FLOAT, {.dbl=0.0}, 0.0, 1.0, DYNAMIC },
-    { "fillcolor", "Background fill color", OFFSET(fillcolor), AV_OPT_TYPE_STRING, {.str = "black@0"}, .flags = DYNAMIC },
+    { "fillcolor", "Background fill color", OFFSET(fillcolor), AV_OPT_TYPE_COLOR, {.str = "black@0"}, .flags = DYNAMIC },
     { "corner_rounding", "Corner rounding radius", OFFSET(corner_rounding), AV_OPT_TYPE_FLOAT, {.dbl = 0.0}, 0.0, 1.0, .flags = DYNAMIC },
     { "extra_opts", "Pass extra libplacebo-specific options using a :-separated list of key=value pairs", OFFSET(extra_opts), AV_OPT_TYPE_DICT, .flags = DYNAMIC },
 
@@ -1411,7 +1407,6 @@ static const AVOption libplacebo_options[] = {
     { "upscaler", "Upscaler function", OFFSET(upscaler), AV_OPT_TYPE_STRING, {.str = "spline36"}, .flags = DYNAMIC },
     { "downscaler", "Downscaler function", OFFSET(downscaler), AV_OPT_TYPE_STRING, {.str = "mitchell"}, .flags = DYNAMIC },
     { "frame_mixer", "Frame mixing function", OFFSET(frame_mixer), AV_OPT_TYPE_STRING, {.str = "none"}, .flags = DYNAMIC },
-    { "lut_entries", "Number of scaler LUT entries", OFFSET(lut_entries), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 256, DYNAMIC },
     { "antiringing", "Antiringing strength (for non-EWA filters)", OFFSET(antiringing), AV_OPT_TYPE_FLOAT, {.dbl = 0.0}, 0.0, 1.0, DYNAMIC },
     { "sigmoid", "Enable sigmoid upscaling", OFFSET(sigmoid), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, DYNAMIC },
     { "apply_filmgrain", "Apply film grain metadata", OFFSET(apply_filmgrain), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, DYNAMIC },
@@ -1438,7 +1433,6 @@ static const AVOption libplacebo_options[] = {
 
     { "peak_detect", "Enable dynamic peak detection for HDR tone-mapping", OFFSET(peakdetect), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, DYNAMIC },
     { "smoothing_period", "Peak detection smoothing period", OFFSET(smoothing), AV_OPT_TYPE_FLOAT, {.dbl = 100.0}, 0.0, 1000.0, DYNAMIC },
-    { "minimum_peak", "Peak detection minimum peak", OFFSET(min_peak), AV_OPT_TYPE_FLOAT, {.dbl = 1.0}, 0.0, 100.0, DYNAMIC },
     { "scene_threshold_low", "Scene change low threshold", OFFSET(scene_low), AV_OPT_TYPE_FLOAT, {.dbl = 5.5}, -1.0, 100.0, DYNAMIC },
     { "scene_threshold_high", "Scene change high threshold", OFFSET(scene_high), AV_OPT_TYPE_FLOAT, {.dbl = 10.0}, -1.0, 100.0, DYNAMIC },
     { "percentile", "Peak detection percentile", OFFSET(percentile), AV_OPT_TYPE_FLOAT, {.dbl = 99.995}, 0.0, 100.0, DYNAMIC },
@@ -1494,7 +1488,6 @@ static const AVOption libplacebo_options[] = {
 
     /* Performance/quality tradeoff options */
     { "skip_aa", "Skip anti-aliasing", OFFSET(skip_aa), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DYNAMIC },
-    { "polar_cutoff", "Polar LUT cutoff", OFFSET(polar_cutoff), AV_OPT_TYPE_FLOAT, {.dbl = 0}, 0.0, 1.0, DYNAMIC },
     { "disable_linear", "Disable linear scaling", OFFSET(disable_linear), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DYNAMIC },
     { "disable_builtin", "Disable built-in scalers", OFFSET(disable_builtin), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DYNAMIC },
     { "force_dither", "Force dithering", OFFSET(force_dither), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, DYNAMIC },
