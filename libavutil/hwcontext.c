@@ -492,6 +492,15 @@ int av_hwframe_transfer_data(AVFrame *dst, const AVFrame *src, int flags)
     return 0;
 }
 
+int av_hwframe_transfer_wait_all(AVBufferRef *hwframe_ref, int flags)
+{
+    FFHWFramesContext *ctx = (FFHWFramesContext*) hwframe_ref->data;
+    if (!ctx->hw_type->frames_sync)
+        return 0;
+
+    return ctx->hw_type->frames_sync(&ctx->p);
+}
+
 int av_hwframe_get_buffer(AVBufferRef *hwframe_ref, AVFrame *frame, int flags)
 {
     FFHWFramesContext *ctxi = (FFHWFramesContext*)hwframe_ref->data;
