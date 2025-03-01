@@ -4284,6 +4284,8 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
         ff_vk_exec_wait(&p->vkctx, exec);
         if (!host_mapped)
             err = copy_buffer_data(hwfc, bufs[0], swf, region, planes, 0);
+    } else if (upload) {
+        ff_vk_exec_wait(&p->vkctx, exec);
     }
 
 end:
