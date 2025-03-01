@@ -10,6 +10,9 @@ API changes, most recent first:
   Add AVAlphaMode, AVFrame.alpha_mode, av_alpha_mode_name() and
   av_alpha_mode_from_name().
 
+2025-03-xx - xxxxxxxxxx - lavu 59.58.100 - hwcontext.h
+  Add av_hwframe_transfer_wait_all().
+
 2025-02-xx - xxxxxxxxxx - lavu 59.57.100 - log.h
   Add flags AV_LOG_PRINT_TIME and AV_LOG_PRINT_DATETIME.
 

@@ -313,6 +313,7 @@ static const struct FFVkFormatEntry {
     { VK_FORMAT_R16_UNORM,  AV_PIX_FMT_GRAY12,  VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 1, { VK_FORMAT_R16_UNORM  } },
     { VK_FORMAT_R16_UNORM,  AV_PIX_FMT_GRAY14,  VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 1, { VK_FORMAT_R16_UNORM  } },
     { VK_FORMAT_R16_UNORM,  AV_PIX_FMT_GRAY16,  VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 1, { VK_FORMAT_R16_UNORM  } },
+    { VK_FORMAT_R32_UINT,   AV_PIX_FMT_GRAY32,  VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 1, { VK_FORMAT_R32_UINT   } },
     { VK_FORMAT_R32_SFLOAT, AV_PIX_FMT_GRAYF32, VK_IMAGE_ASPECT_COLOR_BIT, 1, 1, 1, { VK_FORMAT_R32_SFLOAT } },
 
     /* RGB formats */
@@ -2718,6 +2719,18 @@ static void vulkan_frames_uninit(AVHWFramesContext *hwfc)
     av_buffer_pool_uninit(&fp->tmp);
 }
 
+static int vulkan_frames_sync(AVHWFramesContext *hwfc)
+{
+    VulkanDevicePriv *p = hwfc->device_ctx->hwctx;
+    VulkanFramesPriv *fp = hwfc->hwctx;
+
+    ff_vk_exec_pool_wait(&p->vkctx, &fp->compute_exec);
+    ff_vk_exec_pool_wait(&p->vkctx, &fp->upload_exec);
+    ff_vk_exec_pool_wait(&p->vkctx, &fp->download_exec);
+
+    return 0;
+}
+
 static int vulkan_frames_init(AVHWFramesContext *hwfc)
 {
     int err;
@@ -4284,6 +4297,8 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
         ff_vk_exec_wait(&p->vkctx, exec);
         if (!host_mapped)
             err = copy_buffer_data(hwfc, bufs[0], swf, region, planes, 0);
+    } else if (upload) {
+        ff_vk_exec_wait(&p->vkctx, exec);
     }
 
 end:
@@ -4480,6 +4495,7 @@ const HWContextType ff_hwcontext_type_vulkan = {
     .frames_init            = vulkan_frames_init,
     .frames_get_buffer      = vulkan_get_buffer,
     .frames_uninit          = vulkan_frames_uninit,
+    .frames_sync            = vulkan_frames_sync,
 
     .transfer_get_formats   = vulkan_transfer_get_formats,
     .transfer_data_to       = vulkan_transfer_data_to,

@@ -230,6 +230,16 @@ AVVulkanDeviceQueueFamily *ff_vk_qf_find(FFVulkanContext *s,
     return NULL;
 }
 
+void ff_vk_exec_pool_wait(FFVulkanContext *s, FFVkExecPool *pool)
+{
+    FFVulkanFunctions *vk = &s->vkfn;
+    for (int i = 0; i < pool->pool_size; i++) {
+        FFVkExecContext *e = &pool->contexts[i];
+        if (e->had_submission)
+            ff_vk_exec_wait(s, e);
+    }
+}
+
 void ff_vk_exec_pool_free(FFVulkanContext *s, FFVkExecPool *pool)
 {
     FFVulkanFunctions *vk = &s->vkfn;
@@ -1441,6 +1451,7 @@ const char *ff_vk_shader_rep_fmt(enum AVPixelFormat pix_fmt,
         };
         return rep_tab[rep_fmt];
     };
+    case AV_PIX_FMT_GRAY32:
     case AV_PIX_FMT_GRAYF32:
     case AV_PIX_FMT_GBRPF32:
     case AV_PIX_FMT_GBRAPF32: {
@@ -1550,10 +1561,10 @@ static VkFormat map_fmt_to_rep(VkFormat fmt, enum FFVkShaderRepFormat rep_fmt)
         { REPS_FMT(VK_FORMAT_R16G16B16) },
         { REPS_FMT(VK_FORMAT_R16G16B16A16) },
         {
+            VK_FORMAT_R32_UINT,
             VK_FORMAT_R32_SFLOAT,
-            VK_FORMAT_R32_SFLOAT,
-            VK_FORMAT_UNDEFINED,
-            VK_FORMAT_UNDEFINED,
+            VK_FORMAT_R32_SINT,
+            VK_FORMAT_R32_UINT,
         },
         {
             VK_FORMAT_R32G32B32_SFLOAT,
