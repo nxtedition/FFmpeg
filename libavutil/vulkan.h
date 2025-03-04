@@ -409,11 +409,6 @@ int ff_vk_exec_pool_init(FFVulkanContext *s, AVVulkanDeviceQueueFamily *qf,
 void ff_vk_exec_pool_free(FFVulkanContext *s, FFVkExecPool *pool);
 
 /**
- * Wait until all prior submissions have finished.
- */
-void ff_vk_exec_pool_wait(FFVulkanContext *s, FFVkExecPool *pool);
-
-/**
  * Retrieve an execution pool. Threadsafe.
  */
 FFVkExecContext *ff_vk_exec_get(FFVulkanContext *s, FFVkExecPool *pool);

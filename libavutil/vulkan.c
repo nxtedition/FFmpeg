@@ -230,16 +230,6 @@ AVVulkanDeviceQueueFamily *ff_vk_qf_find(FFVulkanContext *s,
     return NULL;
 }
 
-void ff_vk_exec_pool_wait(FFVulkanContext *s, FFVkExecPool *pool)
-{
-    FFVulkanFunctions *vk = &s->vkfn;
-    for (int i = 0; i < pool->pool_size; i++) {
-        FFVkExecContext *e = &pool->contexts[i];
-        if (e->had_submission)
-            ff_vk_exec_wait(s, e);
-    }
-}
-
 void ff_vk_exec_pool_free(FFVulkanContext *s, FFVkExecPool *pool)
 {
     FFVulkanFunctions *vk = &s->vkfn;

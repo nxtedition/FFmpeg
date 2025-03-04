@@ -2719,18 +2719,6 @@ static void vulkan_frames_uninit(AVHWFramesContext *hwfc)
     av_buffer_pool_uninit(&fp->tmp);
 }
 
-static int vulkan_frames_sync(AVHWFramesContext *hwfc)
-{
-    VulkanDevicePriv *p = hwfc->device_ctx->hwctx;
-    VulkanFramesPriv *fp = hwfc->hwctx;
-
-    ff_vk_exec_pool_wait(&p->vkctx, &fp->compute_exec);
-    ff_vk_exec_pool_wait(&p->vkctx, &fp->upload_exec);
-    ff_vk_exec_pool_wait(&p->vkctx, &fp->download_exec);
-
-    return 0;
-}
-
 static int vulkan_frames_init(AVHWFramesContext *hwfc)
 {
     int err;
@@ -4493,7 +4481,6 @@ const HWContextType ff_hwcontext_type_vulkan = {
     .frames_init            = vulkan_frames_init,
     .frames_get_buffer      = vulkan_get_buffer,
     .frames_uninit          = vulkan_frames_uninit,
-    .frames_sync            = vulkan_frames_sync,
 
     .transfer_get_formats   = vulkan_transfer_get_formats,
     .transfer_data_to       = vulkan_transfer_data_to,
