@@ -222,15 +222,6 @@ static av_cold void hwupload_uninit(AVFilterContext *avctx)
 {
     HWUploadContext *ctx = avctx->priv;
 
-    /**
-     * Ensure that all outstanding asynchronous uploads are properly completed.
-     * This is to avoid leaking the context, because nobody else will clean up
-     * after the hwfc while there are still pending asynchronous transfers
-     * referencing it.
-     */
-    if (ctx->hwframes_ref)
-        av_hwframe_transfer_wait_all(ctx->hwframes_ref, 0);
-
     av_buffer_unref(&ctx->hwframes_ref);
     av_buffer_unref(&ctx->hwdevice_ref);
 }
