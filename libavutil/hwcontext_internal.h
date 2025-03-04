@@ -69,7 +69,6 @@ typedef struct HWContextType {
 
     int              (*frames_init)(AVHWFramesContext *ctx);
     void             (*frames_uninit)(AVHWFramesContext *ctx);
-    int              (*frames_sync)(AVHWFramesContext *ctx);
 
     int              (*frames_get_buffer)(AVHWFramesContext *ctx, AVFrame *frame);
     int              (*transfer_get_formats)(AVHWFramesContext *ctx,

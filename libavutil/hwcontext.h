@@ -401,16 +401,6 @@ int av_hwframe_get_buffer(AVBufferRef *hwframe_ctx, AVFrame *frame, int flags);
  */
 int av_hwframe_transfer_data(AVFrame *dst, const AVFrame *src, int flags);
 
-/**
- * Explicitly wait for all preceding (possibly asynchronous) transfers to be
- * completed. No-op for synchronous hardware device types.
- *
- * @param hwframe_ctx a reference to an AVHWFramesContext
- * @param flags currently unused, should be set to zero
- * @return 0 on success, a negative AVERROR error code on failure.
- */
-int av_hwframe_transfer_wait_all(AVBufferRef *hwframe_ctx, int flags);
-
 enum AVHWFrameTransferDirection {
     /**
      * Transfer the data from the queried hw frame.
