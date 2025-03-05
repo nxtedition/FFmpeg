@@ -4399,8 +4399,6 @@ static int vulkan_transfer_data_to_cuda(AVHWFramesContext *hwfc, AVFrame *dst,
 
     CHECK_CU(cu->cuCtxPopCurrent(&dummy));
 
-    av_log(hwfc, AV_LOG_VERBOSE, "Transferred Vulkan image to CUDA!\n");
-
     return prepare_frame(hwfc, &fp->upload_exec, dst_f, PREP_MODE_EXTERNAL_IMPORT);
 
 fail:
