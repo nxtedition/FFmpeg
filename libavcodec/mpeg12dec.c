@@ -29,6 +29,7 @@
 
 #define UNCHECKED_BITSTREAM_READER 1
 #include <inttypes.h>
+#include <stdatomic.h>
 
 #include "libavutil/attributes.h"
 #include "libavutil/emms.h"
@@ -46,7 +47,6 @@
 #include "hwaccel_internal.h"
 #include "hwconfig.h"
 #include "idctdsp.h"
-#include "internal.h"
 #include "mpeg_er.h"
 #include "mpeg12.h"
 #include "mpeg12codecs.h"
@@ -90,6 +90,7 @@ typedef struct Mpeg1Context {
     int tmpgexs;
     int first_slice;
     int extradata_decoded;
+    int vbv_delay;
     int64_t timecode_frame_start;  /*< GOP timecode frame start number, in non drop frame format */
 } Mpeg1Context;
 
@@ -779,7 +780,7 @@ static av_cold int mpeg_decode_init(AVCodecContext *avctx)
 
     ff_mpeg12_init_vlcs();
 
-    s2->chroma_format              = 1;
+    s2->chroma_format  = CHROMA_420;
     avctx->color_range             = AVCOL_RANGE_MPEG;
     return 0;
 }
@@ -863,11 +864,11 @@ static enum AVPixelFormat mpeg_get_pixelformat(AVCodecContext *avctx)
     if (CONFIG_GRAY && (avctx->flags & AV_CODEC_FLAG_GRAY))
         return AV_PIX_FMT_GRAY8;
 
-    if (s->chroma_format < 2)
+    if (s->chroma_format < CHROMA_422)
         pix_fmts = avctx->codec_id == AV_CODEC_ID_MPEG1VIDEO ?
                                 mpeg1_hwaccel_pixfmt_list_420 :
                                 mpeg2_hwaccel_pixfmt_list_420;
-    else if (s->chroma_format == 2)
+    else if (s->chroma_format == CHROMA_422)
         pix_fmts = mpeg12_pixfmt_list_422;
     else
         pix_fmts = mpeg12_pixfmt_list_444;
@@ -953,7 +954,7 @@ static int mpeg_decode_postinit(AVCodecContext *avctx)
             (s->bit_rate != 0x3FFFF*400)) {
             avctx->rc_max_rate = s->bit_rate;
         } else if (avctx->codec_id == AV_CODEC_ID_MPEG1VIDEO && s->bit_rate &&
-                   (s->bit_rate != 0x3FFFF*400 || s->vbv_delay != 0xFFFF)) {
+                   (s->bit_rate != 0x3FFFF*400 || s1->vbv_delay != 0xFFFF)) {
             avctx->bit_rate = s->bit_rate;
         }
         s1->save_aspect          = s->avctx->sample_aspect_ratio;
@@ -989,9 +990,9 @@ FF_ENABLE_DEPRECATION_WARNINGS
 #endif
 
             switch (s->chroma_format) {
-            case 1: avctx->chroma_sample_location = AVCHROMA_LOC_LEFT; break;
-            case 2:
-            case 3: avctx->chroma_sample_location = AVCHROMA_LOC_TOPLEFT; break;
+            case CHROMA_420: avctx->chroma_sample_location = AVCHROMA_LOC_LEFT; break;
+            case CHROMA_422:
+            case CHROMA_444: avctx->chroma_sample_location = AVCHROMA_LOC_TOPLEFT; break;
             default: av_assert0(0);
             }
         } // MPEG-2
@@ -1024,7 +1025,7 @@ static int mpeg1_decode_picture(AVCodecContext *avctx, const uint8_t *buf,
         return AVERROR_INVALIDDATA;
 
     vbv_delay = get_bits(&s->gb, 16);
-    s->vbv_delay = vbv_delay;
+    s1->vbv_delay = vbv_delay;
     if (s->pict_type == AV_PICTURE_TYPE_P ||
         s->pict_type == AV_PICTURE_TYPE_B) {
         s->full_pel[0] = get_bits1(&s->gb);
@@ -1065,7 +1066,7 @@ static void mpeg_decode_sequence_extension(Mpeg1Context *s1)
     s->chroma_format        = get_bits(&s->gb, 2); /* chroma_format 1=420, 2=422, 3=444 */
 
     if (!s->chroma_format) {
-        s->chroma_format = 1;
+        s->chroma_format = CHROMA_420;
         av_log(s->avctx, AV_LOG_WARNING, "Chroma format invalid\n");
     }
 
@@ -1360,7 +1361,7 @@ static int mpeg_field_start(Mpeg1Context *s1, const uint8_t *buf, int buf_size)
     }
 
     if (avctx->hwaccel) {
-        if ((ret = FF_HW_CALL(avctx, start_frame, buf, buf_size)) < 0)
+        if ((ret = FF_HW_CALL(avctx, start_frame, NULL, buf, buf_size)) < 0)
             return ret;
     } else if (s->codec_tag == MKTAG('V', 'C', 'R', '2')) {
         // Exchange UV
@@ -1544,7 +1545,7 @@ static int mpeg_decode_slice(MpegEncContext *s, int mb_y,
 
             if (s->mb_y >= s->mb_height) {
                 int left   = get_bits_left(&s->gb);
-                int is_d10 = s->chroma_format == 2 &&
+                int is_d10 = s->chroma_format == CHROMA_422 &&
                              s->pict_type == AV_PICTURE_TYPE_I &&
                              avctx->profile == 0 && avctx->level == 5 &&
                              s->intra_dc_precision == 2 &&
@@ -1655,11 +1656,11 @@ static int mpeg_decode_slice(MpegEncContext *s, int mb_y,
     }
 eos: // end of slice
     if (get_bits_left(&s->gb) < 0) {
-        av_log(s, AV_LOG_ERROR, "overread %d\n", -get_bits_left(&s->gb));
+        av_log(s->avctx, AV_LOG_ERROR, "overread %d\n", -get_bits_left(&s->gb));
         return AVERROR_INVALIDDATA;
     }
     *buf += (get_bits_count(&s->gb) - 1) / 8;
-    ff_dlog(s, "Slice start:%d %d  end:%d %d\n", s->resync_mb_x, s->resync_mb_y, s->mb_x, s->mb_y);
+    ff_dlog(s->avctx, "Slice start:%d %d  end:%d %d\n", s->resync_mb_x, s->resync_mb_y, s->mb_x, s->mb_y);
     return 0;
 }
 
@@ -1842,7 +1843,7 @@ static int mpeg1_decode_sequence(AVCodecContext *avctx,
     s->picture_structure    = PICT_FRAME;
     s->first_field          = 0;
     s->frame_pred_frame_dct = 1;
-    s->chroma_format        = 1;
+    s->chroma_format        = CHROMA_420;
     s->codec_id             =
     s->avctx->codec_id      = AV_CODEC_ID_MPEG1VIDEO;
     if (s->avctx->flags & AV_CODEC_FLAG_LOW_DELAY)
@@ -1894,7 +1895,7 @@ static int vcr2_init_sequence(AVCodecContext *avctx)
     s->picture_structure     = PICT_FRAME;
     s->first_field           = 0;
     s->frame_pred_frame_dct  = 1;
-    s->chroma_format         = 1;
+    s->chroma_format         = CHROMA_420;
     if (s->codec_tag == AV_RL32("BW10")) {
         s->codec_id              = s->avctx->codec_id = AV_CODEC_ID_MPEG1VIDEO;
     } else {
@@ -2232,6 +2233,35 @@ static int mpeg_decode_gop(AVCodecContext *avctx,
     return 0;
 }
 
+static void mpeg12_execute_slice_threads(AVCodecContext *avctx,
+                                         Mpeg1Context *const s)
+{
+    if (HAVE_THREADS && (avctx->active_thread_type & FF_THREAD_SLICE) &&
+        !avctx->hwaccel) {
+        MpegEncContext *const s2 = &s->mpeg_enc_ctx;
+        int error_count = 0;
+
+        avctx->execute(avctx, slice_decode_thread,
+                       s2->thread_context, NULL,
+                       s->slice_count, sizeof(void *));
+
+        for (int i = 0; i < s->slice_count; i++) {
+            MpegEncContext *const slice = s2->thread_context[i];
+            int slice_err = atomic_load_explicit(&slice->er.error_count,
+                                                 memory_order_relaxed);
+            // error_count can get set to INT_MAX on serious errors.
+            // So use saturated addition.
+            if ((unsigned)slice_err > INT_MAX - error_count) {
+                error_count = INT_MAX;
+                break;
+            }
+            error_count += slice_err;
+        }
+        atomic_store_explicit(&s2->er.error_count, error_count,
+                              memory_order_relaxed);
+    }
+}
+
 static int decode_chunks(AVCodecContext *avctx, AVFrame *picture,
                          int *got_output, const uint8_t *buf, int buf_size)
 {
@@ -2249,18 +2279,7 @@ static int decode_chunks(AVCodecContext *avctx, AVFrame *picture,
         buf_ptr = avpriv_find_start_code(buf_ptr, buf_end, &start_code);
         if (start_code > 0x1ff) {
             if (!skip_frame) {
-                if (HAVE_THREADS &&
-                    (avctx->active_thread_type & FF_THREAD_SLICE) &&
-                    !avctx->hwaccel) {
-                    int i;
-                    av_assert0(avctx->thread_count > 1);
-
-                    avctx->execute(avctx, slice_decode_thread,
-                                   &s2->thread_context[0], NULL,
-                                   s->slice_count, sizeof(void *));
-                    for (i = 0; i < s->slice_count; i++)
-                        s2->er.error_count += s2->thread_context[i]->er.error_count;
-                }
+                mpeg12_execute_slice_threads(avctx, s);
 
                 ret = slice_end(avctx, picture, got_output);
                 if (ret < 0)
@@ -2319,15 +2338,8 @@ static int decode_chunks(AVCodecContext *avctx, AVFrame *picture,
                 s2->intra_dc_precision= 3;
                 s2->intra_matrix[0]= 1;
             }
-            if (HAVE_THREADS && (avctx->active_thread_type & FF_THREAD_SLICE) &&
-                !avctx->hwaccel && s->slice_count) {
-                int i;
-
-                avctx->execute(avctx, slice_decode_thread,
-                               s2->thread_context, NULL,
-                               s->slice_count, sizeof(void *));
-                for (i = 0; i < s->slice_count; i++)
-                    s2->er.error_count += s2->thread_context[i]->er.error_count;
+            if (s->slice_count) {
+                mpeg12_execute_slice_threads(avctx, s);
                 s->slice_count = 0;
             }
             if (last_code == 0 || last_code == SLICE_MIN_START_CODE) {
@@ -2525,7 +2537,6 @@ static int decode_chunks(AVCodecContext *avctx, AVFrame *picture,
                     int threshold = (s2->mb_height * s->slice_count +
                                      s2->slice_context_count / 2) /
                                     s2->slice_context_count;
-                    av_assert0(avctx->thread_count > 1);
                     if (threshold <= mb_y) {
                         MpegEncContext *thread_context = s2->thread_context[s->slice_count];
 
@@ -2633,7 +2644,7 @@ static int mpeg_decode_frame(AVCodecContext *avctx, AVFrame *picture,
     return ret;
 }
 
-static void flush(AVCodecContext *avctx)
+static av_cold void flush(AVCodecContext *avctx)
 {
     Mpeg1Context *s = avctx->priv_data;
 
