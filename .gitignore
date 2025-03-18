@@ -1,7 +1,6 @@
 .vscode
 *.a
 *.o
-*.objs
 *.o.*
 *.d
 *.def

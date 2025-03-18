@@ -35,10 +35,8 @@ OBJS += $(SHLIBOBJS)
 endif
 $(SUBDIR)$(LIBNAME): $(OBJS) $(STLIBOBJS)
 	$(RM) $@
-	$(Q)echo $^ > $@.objs
-	$(AR) $(ARFLAGS) $(AR_O) @$@.objs
+	$(AR) $(ARFLAGS) $(AR_O) $^
 	$(RANLIB) $@
-	-$(RM) $@.objs
 
 install-headers: install-lib$(NAME)-headers install-lib$(NAME)-pkgconfig
 
@@ -68,10 +66,8 @@ $(SUBDIR)$(SLIBNAME): $(SUBDIR)$(SLIBNAME_WITH_MAJOR)
 
 $(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(OBJS) $(SHLIBOBJS) $(SLIBOBJS) $(SUBDIR)lib$(NAME).ver
 	$(SLIB_CREATE_DEF_CMD)
-	$(Q)echo $$(filter %.o,$$^) > $$@.objs
-	$$(LD) $(SHFLAGS) $(LDFLAGS) $(LDSOFLAGS) $$(LD_O) @$$@.objs $(FFEXTRALIBS)
+	$$(LD) $(SHFLAGS) $(LDFLAGS) $(LDSOFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FFEXTRALIBS)
 	$(SLIB_EXTRA_CMD)
-	-$(RM) $$@.objs
 
 ifdef SUBDIR
 $(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(DEP_LIBS)
