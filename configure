@@ -7760,6 +7760,13 @@ case $ld_type in
     ;;
 esac
 
+{
+ar_out=${FFTMPDIR}/test$LIBSUF
+respfile="@/dev/null"
+out_arg="$(echo $ar_o | sed "s;\$@;$ar_out;g")"
+test_cmd $ar $arflags $out_arg $respfile && ar_objs="true" || ar_objs=""
+}
+
 enable frame_thread_encoder
 
 enabled asm || { arch=c; disable $ARCH_LIST $ARCH_EXT_LIST; }
@@ -8140,6 +8147,7 @@ DEPX86ASM=$x86asmexe
 DEPX86ASMFLAGS=\$(X86ASMFLAGS)
 AR=$ar
 ARFLAGS=$arflags
+AR_OBJS=$ar_objs
 AR_O=$ar_o
 AR_CMD=$ar
 NM_CMD=$nm
