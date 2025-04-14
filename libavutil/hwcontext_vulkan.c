@@ -79,6 +79,7 @@ typedef struct VulkanDeviceFeatures {
     VkPhysicalDeviceVulkan12Features vulkan_1_2;
     VkPhysicalDeviceVulkan13Features vulkan_1_3;
     VkPhysicalDeviceTimelineSemaphoreFeatures timeline_semaphore;
+    VkPhysicalDeviceShaderExpectAssumeFeatures expect_assume;
 
     VkPhysicalDeviceVideoMaintenance1FeaturesKHR video_maintenance_1;
 #ifdef VK_KHR_video_maintenance2
@@ -114,6 +115,7 @@ typedef struct VulkanDevicePriv {
     VkPhysicalDeviceProperties2 props;
     VkPhysicalDeviceMemoryProperties mprops;
     VkPhysicalDeviceExternalMemoryHostPropertiesEXT hprops;
+    VkPhysicalDeviceDriverProperties dprops;
 
     /* Opaque FD external semaphore properties */
     VkExternalSemaphoreProperties ext_sem_props_opaque;
@@ -209,6 +211,9 @@ static void device_features_init(AVHWDeviceContext *ctx, VulkanDeviceFeatures *f
     OPT_CHAIN(&feats->timeline_semaphore, FF_VK_EXT_PORTABILITY_SUBSET,
               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES);
 
+    OPT_CHAIN(&feats->expect_assume, FF_VK_EXT_EXPECT_ASSUME,
+              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_EXPECT_ASSUME_FEATURES_KHR);
+
     OPT_CHAIN(&feats->video_maintenance_1, FF_VK_EXT_VIDEO_MAINTENANCE_1,
               VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_MAINTENANCE_1_FEATURES_KHR);
 #ifdef VK_KHR_video_maintenance2
@@ -300,6 +305,8 @@ static void device_features_copy_needed(VulkanDeviceFeatures *dst, VulkanDeviceF
 #ifdef VK_KHR_shader_relaxed_extended_instruction
     COPY_VAL(relaxed_extended_instruction.shaderRelaxedExtendedInstruction);
 #endif
+
+    COPY_VAL(expect_assume.shaderExpectAssume);
 
     COPY_VAL(optical_flow.opticalFlow);
 #undef COPY_VAL
@@ -632,6 +639,7 @@ static const VulkanOptExtension optional_device_exts[] = {
     { VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME,               FF_VK_EXT_COOP_MATRIX            },
     { VK_NV_OPTICAL_FLOW_EXTENSION_NAME,                      FF_VK_EXT_OPTICAL_FLOW           },
     { VK_EXT_SHADER_OBJECT_EXTENSION_NAME,                    FF_VK_EXT_SHADER_OBJECT          },
+    { VK_KHR_SHADER_EXPECT_ASSUME_EXTENSION_NAME,             FF_VK_EXT_EXPECT_ASSUME          },
     { VK_KHR_VIDEO_MAINTENANCE_1_EXTENSION_NAME,              FF_VK_EXT_VIDEO_MAINTENANCE_1    },
 #ifdef VK_KHR_video_maintenance2
     { VK_KHR_VIDEO_MAINTENANCE_2_EXTENSION_NAME,              FF_VK_EXT_VIDEO_MAINTENANCE_2    },
@@ -789,6 +797,11 @@ static int check_extensions(AVHWDeviceContext *ctx, int dev, AVDictionary *opts,
     for (int i = 0; i < optional_exts_num; i++) {
         tstr = optional_exts[i].name;
         found = 0;
+
+        /* Intel has had a bad descriptor buffer implementation for a while */
+        if (p->dprops.driverID == VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA &&
+            !strcmp(tstr, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME))
+            continue;
 
         if (dev &&
             ((debug_mode == FF_VULKAN_DEBUG_VALIDATE) ||
@@ -1216,6 +1229,7 @@ static int find_device(AVHWDeviceContext *ctx, VulkanDeviceSelection *select)
     VkPhysicalDevice *devices = NULL;
     VkPhysicalDeviceIDProperties *idp = NULL;
     VkPhysicalDeviceProperties2 *prop = NULL;
+    VkPhysicalDeviceDriverProperties *driver_prop = NULL;
     VkPhysicalDeviceDrmPropertiesEXT *drm_prop = NULL;
 
     ret = vk->EnumeratePhysicalDevices(hwctx->inst, &num, NULL);
@@ -1248,6 +1262,12 @@ static int find_device(AVHWDeviceContext *ctx, VulkanDeviceSelection *select)
         goto end;
     }
 
+    driver_prop = av_calloc(num, sizeof(*driver_prop));
+    if (!driver_prop) {
+        err = AVERROR(ENOMEM);
+        goto end;
+    }
+
     if (p->vkctx.extensions & FF_VK_EXT_DEVICE_DRM) {
         drm_prop = av_calloc(num, sizeof(*drm_prop));
         if (!drm_prop) {
@@ -1260,8 +1280,10 @@ static int find_device(AVHWDeviceContext *ctx, VulkanDeviceSelection *select)
     for (int i = 0; i < num; i++) {
         if (p->vkctx.extensions & FF_VK_EXT_DEVICE_DRM) {
             drm_prop[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT;
-            idp[i].pNext = &drm_prop[i];
+            driver_prop[i].pNext = &drm_prop[i];
         }
+        driver_prop[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        idp[i].pNext = &driver_prop[i];
         idp[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
         prop[i].sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         prop[i].pNext = &idp[i];
@@ -1351,12 +1373,17 @@ end:
                vk_dev_type(prop[choice].properties.deviceType),
                prop[choice].properties.deviceID);
         hwctx->phys_dev = devices[choice];
+        p->props = prop[choice];
+        p->props.pNext = NULL;
+        p->dprops = driver_prop[choice];
+        p->dprops.pNext = NULL;
     }
 
     av_free(devices);
     av_free(prop);
     av_free(idp);
     av_free(drm_prop);
+    av_free(driver_prop);
 
     return err;
 }
@@ -3817,7 +3844,6 @@ static int vulkan_map_to_drm(AVHWFramesContext *hwfc, AVFrame *dst,
     AVVulkanDeviceContext *hwctx = &p->p;
     FFVulkanFunctions *vk = &p->vkctx.vkfn;
     VulkanFramesPriv *fp = hwfc->hwctx;
-    AVVulkanFramesContext *hwfctx = &fp->p;
     const int planes = av_pix_fmt_count_planes(hwfc->sw_format);
     VkImageDrmFormatModifierPropertiesEXT drm_mod = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
@@ -3899,9 +3925,6 @@ static int vulkan_map_to_drm(AVHWFramesContext *hwfc, AVFrame *dst,
         vk->GetImageSubresourceLayout(hwctx->act_dev, f->img[i], &sub, &layout);
         drm_desc->layers[i].planes[0].offset = layout.offset;
         drm_desc->layers[i].planes[0].pitch  = layout.rowPitch;
-
-        if (hwfctx->flags & AV_VK_FRAME_FLAG_CONTIGUOUS_MEMORY)
-            drm_desc->layers[i].planes[0].offset += f->offset[i];
     }
 
     dst->width   = src->width;

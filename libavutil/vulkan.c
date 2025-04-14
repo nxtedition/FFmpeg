@@ -559,6 +559,9 @@ int ff_vk_exec_add_dep_buf(FFVulkanContext *s, FFVkExecContext *e,
     e->buf_deps = dst;
 
     for (int i = 0; i < nb_deps; i++) {
+        if (!deps[i])
+            continue;
+
         e->buf_deps[e->nb_buf_deps] = ref ? av_buffer_ref(deps[i]) : deps[i];
         if (!e->buf_deps[e->nb_buf_deps]) {
             ff_vk_exec_discard_deps(s, e);
@@ -2054,6 +2057,12 @@ int ff_vk_shader_init(FFVulkanContext *s, FFVulkanShader *shd, const char *name,
     GLSLC(0, #extension GL_EXT_scalar_block_layout : require                  );
     GLSLC(0, #extension GL_EXT_shader_explicit_arithmetic_types : require     );
     GLSLC(0, #extension GL_EXT_control_flow_attributes : require              );
+    if (s->extensions & FF_VK_EXT_EXPECT_ASSUME) {
+        GLSLC(0, #extension GL_EXT_expect_assume : require                    );
+    } else {
+        GLSLC(0, #define assumeEXT(x) (x)                                     );
+        GLSLC(0, #define expectEXT(x, c) (x)                                  );
+    }
     if ((s->extensions & FF_VK_EXT_DEBUG_UTILS) &&
         (s->extensions & FF_VK_EXT_RELAXED_EXTENDED_INSTR)) {
         GLSLC(0, #extension GL_EXT_debug_printf : require                     );
@@ -2141,7 +2150,7 @@ static int create_shader_module(FFVulkanContext *s, FFVulkanShader *shd,
     ret = vk->CreateShaderModule(s->hwctx->act_dev, &shader_module_info,
                                  s->hwctx->alloc, mod);
     if (ret != VK_SUCCESS) {
-        av_log(s, AV_LOG_VERBOSE, "Error creating shader module: %s\n",
+        av_log(s, AV_LOG_ERROR, "Error creating shader module: %s\n",
                ff_vk_ret2str(ret));
         return AVERROR_EXTERNAL;
     }

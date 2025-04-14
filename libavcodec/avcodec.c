@@ -429,9 +429,6 @@ av_cold void ff_codec_close(AVCodecContext *avctx)
 {
     int i;
 
-    if (!avctx)
-        return;
-
     if (avcodec_is_open(avctx)) {
         AVCodecInternal *avci = avctx->internal;
 
@@ -461,10 +458,6 @@ av_cold void ff_codec_close(AVCodecContext *avctx)
         ff_hwaccel_uninit(avctx);
 
         av_bsf_free(&avci->bsf);
-
-#if FF_API_DROPCHANGED
-        av_channel_layout_uninit(&avci->initial_ch_layout);
-#endif
 
 #if CONFIG_LCMS2
         ff_icc_context_uninit(&avci->icc);
@@ -496,14 +489,6 @@ av_cold void ff_codec_close(AVCodecContext *avctx)
     avctx->codec = NULL;
     avctx->active_thread_type = 0;
 }
-
-#if FF_API_AVCODEC_CLOSE
-int avcodec_close(AVCodecContext *avctx)
-{
-    ff_codec_close(avctx);
-    return 0;
-}
-#endif
 
 static const char *unknown_if_null(const char *str)
 {
