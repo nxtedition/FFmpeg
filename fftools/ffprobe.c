@@ -1136,7 +1136,7 @@ static void print_chroma_location(AVTextFormatContext *tfc, enum AVChromaLocatio
     }
 }
 
-static void print_alpha_mode(WriterContext *w, enum AVAlphaMode alpha_mode)
+static void print_alpha_mode(AVTextFormatContext *tfc, enum AVAlphaMode alpha_mode)
 {
     const char *val = av_alpha_mode_name(alpha_mode);
     if (!val || alpha_mode == AVALPHA_MODE_UNSPECIFIED) {
