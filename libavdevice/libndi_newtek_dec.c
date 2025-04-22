@@ -84,9 +84,29 @@ static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_v2_t 
     struct NDIContext *ctx = avctx->priv_data;
     int64_t abs_wallclock = av_gettime();
 
-    ret = av_new_packet(pkt, v->yres * v->line_stride_in_bytes);
+    int width = v->xres;
+    int height = v->yres;
+    int src_stride = v->line_stride_in_bytes;
+
+    int bytes_per_pixel = ctx->video_st->codecpar->format == AV_PIX_FMT_UYVY422 ? 2 : 4;
+    int row_size = width * bytes_per_pixel;
+    int image_size = row_size * height;
+
+    ret = av_new_packet(pkt, image_size);
     if (ret < 0)
         return ret;
+
+    uint8_t *dst = pkt->data;
+    const uint8_t *src = (const uint8_t *)v->p_data;
+
+    if (row_size == src_stride) {
+        memcpy(pkt->data, v->p_data, pkt->size);
+    } else {
+        // Copy each line while handling any stride padding
+        for (int y = 0; y < height; y++) {
+            memcpy(dst + y * row_size, src + y * src_stride, row_size);
+        }
+    }
 
     switch (ctx->video_pts_source) {
     case PTS_SRC_TIMECODE:
@@ -112,8 +132,6 @@ static int ndi_set_video_packet(AVFormatContext *avctx, NDIlib_video_frame_v2_t 
 
     pkt->flags         |= AV_PKT_FLAG_KEY;
     pkt->stream_index   = ctx->video_st->index;
-
-    memcpy(pkt->data, v->p_data, pkt->size);
 
     return 0;
 }
