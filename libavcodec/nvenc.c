@@ -57,6 +57,7 @@
 
 const enum AVPixelFormat ff_nvenc_pix_fmts[] = {
     AV_PIX_FMT_YUV420P,
+    AV_PIX_FMT_YUV420P10,
     AV_PIX_FMT_NV12,
     AV_PIX_FMT_P010,
     AV_PIX_FMT_YUV444P,
@@ -99,6 +100,7 @@ const AVCodecHWConfigInternal *const ff_nvenc_hw_configs[] = {
                             pix_fmt == AV_PIX_FMT_YUV444P16 || \
                             pix_fmt == AV_PIX_FMT_X2RGB10   || \
                             pix_fmt == AV_PIX_FMT_X2BGR10   || \
+                            pix_fmt == AV_PIX_FMT_YUV420P10 || \
                             pix_fmt == AV_PIX_FMT_GBRP16)
 
 #define IS_RGB(pix_fmt)    (pix_fmt == AV_PIX_FMT_0RGB32  || \

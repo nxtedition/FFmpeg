@@ -44,6 +44,7 @@ static const enum AVPixelFormat supported_formats[] = {
     AV_PIX_FMT_NV12,
     AV_PIX_FMT_NV16,
     AV_PIX_FMT_YUV420P,
+    AV_PIX_FMT_YUV420P10,
     AV_PIX_FMT_YUVA420P,
     AV_PIX_FMT_YUV444P,
     AV_PIX_FMT_P010,
@@ -162,7 +163,8 @@ static int cuda_frames_init(AVHWFramesContext *ctx)
     // YUV420P is a special case.
     // Since nvenc expects the U/V planes to have half the linesize of the Y plane
     // alignment has to be doubled to ensure the U/V planes still end up aligned.
-    if (ctx->sw_format == AV_PIX_FMT_YUV420P)
+    if (ctx->sw_format == AV_PIX_FMT_YUV420P ||
+        ctx->sw_format == AV_PIX_FMT_YUV420P10)
         priv->tex_alignment *= 2;
 
     av_pix_fmt_get_chroma_sub_sample(ctx->sw_format, &priv->shift_width, &priv->shift_height);
@@ -197,7 +199,8 @@ static int cuda_get_buffer(AVHWFramesContext *ctx, AVFrame *frame)
 
     // YUV420P is a special case.
     // Nvenc expects the U/V planes in swapped order from how ffmpeg expects them, also chroma is half-aligned
-    if (ctx->sw_format == AV_PIX_FMT_YUV420P) {
+    if (ctx->sw_format == AV_PIX_FMT_YUV420P ||
+        ctx->sw_format == AV_PIX_FMT_YUV420P10) {
         frame->linesize[1] = frame->linesize[2] = frame->linesize[0] / 2;
         frame->data[2]     = frame->data[1];
         frame->data[1]     = frame->data[2] + frame->linesize[2] * (ctx->height / 2);
