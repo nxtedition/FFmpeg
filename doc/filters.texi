@@ -16307,6 +16307,11 @@ as a list of @var{key}=@var{value} pairs separated by ':'. The following example
 shows how to configure a custom filter kernel ("EWA LanczosSharp") and use it
 to double the input image resolution:
 
+@item shader_cache_dir
+If set to the path of a directory that exists, libplacebo will store and use
+cached shader objects in this directory. This cache is not cleaned up
+automatically.
+
 @example
 -vf "libplacebo=w=iw*2:h=ih*2:extra_opts='upscaler=custom\:upscaler_preset=ewa_lanczos\:upscaler_blur=0.9812505644269356'"
 @end example
