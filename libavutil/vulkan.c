@@ -989,6 +989,9 @@ int ff_vk_create_buf(FFVulkanContext *s, FFVkBuffer *buf, size_t size,
     int use_ded_mem;
     FFVulkanFunctions *vk = &s->vkfn;
 
+    if (s->extensions & FF_VK_EXT_DESCRIPTOR_BUFFER)
+        usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
     VkBufferCreateInfo buf_spawn = {
         .sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext       = pNext,
