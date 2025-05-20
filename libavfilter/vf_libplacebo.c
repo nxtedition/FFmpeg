@@ -194,6 +194,7 @@ typedef struct LibplaceboContext {
     int color_primaries;
     int color_trc;
     int alpha_mode;
+    int rotation;
     AVDictionary *extra_opts;
 
 #if PL_API_VER >= 351
@@ -834,6 +835,13 @@ static void update_crops(AVFilterContext *ctx, LibplaceboInput *in,
         image->crop.y0 = av_expr_eval(s->crop_y_pexpr, s->var_values, NULL);
         image->crop.x1 = image->crop.x0 + s->var_values[VAR_CROP_W];
         image->crop.y1 = image->crop.y0 + s->var_values[VAR_CROP_H];
+        image->rotation = s->rotation;
+        if (s->rotation % PL_ROTATION_180 == PL_ROTATION_90) {
+            /* Libplacebo expects the input crop relative to the actual frame
+             * dimensions, so un-transpose them here */
+            FFSWAP(float, image->crop.x0, image->crop.y0);
+            FFSWAP(float, image->crop.x1, image->crop.y1);
+        }
 
         if (src == ref) {
             /* Only update the target crop once, for the 'reference' frame */
@@ -1235,6 +1243,14 @@ static int libplacebo_config_input(AVFilterLink *inlink)
     AVFilterContext *avctx = inlink->dst;
     LibplaceboContext *s   = avctx->priv;
 
+    if (s->rotation % PL_ROTATION_180 == PL_ROTATION_90) {
+        /* Swap width and height for 90 degree rotations to make the size and
+         * scaling calculations work out correctly */
+        FFSWAP(int, inlink->w, inlink->h);
+        if (inlink->sample_aspect_ratio.num)
+            inlink->sample_aspect_ratio = av_inv_q(inlink->sample_aspect_ratio);
+    }
+
     if (inlink->format == AV_PIX_FMT_VULKAN)
         return ff_vk_filter_config_input(inlink);
 
@@ -1432,6 +1448,12 @@ static const AVOption libplacebo_options[] = {
     {"unknown",                          NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_UNSPECIFIED},   0, 0, DYNAMIC, .unit = "alpha_mode"},
     {"premultiplied",                    NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_PREMULTIPLIED}, 0, 0, DYNAMIC, .unit = "alpha_mode"},
     {"straight",                         NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_STRAIGHT},      0, 0, DYNAMIC, .unit = "alpha_mode"},
+    {"rotate", "rotate the input clockwise", OFFSET(rotation), AV_OPT_TYPE_INT, {.i64=PL_ROTATION_0}, PL_ROTATION_0, PL_ROTATION_360, DYNAMIC, .unit = "rotation"},
+    {"0",                              NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_0},   .flags = STATIC, .unit = "rotation"},
+    {"90",                             NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_90},  .flags = STATIC, .unit = "rotation"},
+    {"180",                            NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_180}, .flags = STATIC, .unit = "rotation"},
+    {"270",                            NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_270}, .flags = STATIC, .unit = "rotation"},
+    {"360",                            NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_360}, .flags = STATIC, .unit = "rotation"},
 
     { "upscaler", "Upscaler function", OFFSET(upscaler), AV_OPT_TYPE_STRING, {.str = "spline36"}, .flags = DYNAMIC },
     { "downscaler", "Downscaler function", OFFSET(downscaler), AV_OPT_TYPE_STRING, {.str = "mitchell"}, .flags = DYNAMIC },

@@ -207,8 +207,7 @@ static int scdet_vulkan_filter_frame(AVFilterLink *link, AVFrame *in)
 
     RET(ff_vk_get_pooled_buffer(vkctx, &s->det_buf_pool, &buf,
                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                 NULL,
                                 sizeof(SceneDetectBuf),
                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
