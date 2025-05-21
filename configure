@@ -7663,7 +7663,6 @@ if enabled icc; then
             disable aligned_stack
     fi
 elif enabled gcc; then
-    check_optflags -fno-tree-vectorize
     check_cflags -Werror=format-security
     check_cflags -Werror=implicit-function-declaration
     check_cflags -Werror=missing-prototypes
