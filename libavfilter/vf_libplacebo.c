@@ -199,7 +199,7 @@ typedef struct LibplaceboContext {
 
 #if PL_API_VER >= 351
     pl_cache cache;
-    char *shader_cache_dir;
+    char *shader_cache;
 #endif
 
     int have_hwdevice;
@@ -384,11 +384,6 @@ static int update_settings(AVFilterContext *ctx)
         .skip_spatial_check = s->skip_spatial_check,
     );
 
-    opts->deinterlace_params = *pl_deinterlace_params(
-        .algo = s->deinterlace,
-        .skip_spatial_check = s->skip_spatial_check,
-    );
-
     opts->deband_params = *pl_deband_params(
         .iterations = s->deband_iterations,
         .threshold = s->deband_threshold,
@@ -535,12 +530,12 @@ static int libplacebo_init(AVFilterContext *avctx)
     }
 
 #if PL_API_VER >= 351
-    if (s->shader_cache_dir && s->shader_cache_dir[0]) {
+    if (s->shader_cache && s->shader_cache[0]) {
         s->cache = pl_cache_create(pl_cache_params(
             .log  = s->log,
-            .get  = pl_cache_get_dir,
-            .set  = pl_cache_set_dir,
-            .priv = s->shader_cache_dir,
+            .get  = pl_cache_get_file,
+            .set  = pl_cache_set_file,
+            .priv = s->shader_cache,
         ));
         if (!s->cache) {
             libplacebo_uninit(avctx);
@@ -1382,7 +1377,7 @@ static const AVOption libplacebo_options[] = {
     { "corner_rounding", "Corner rounding radius", OFFSET(corner_rounding), AV_OPT_TYPE_FLOAT, {.dbl = 0.0}, 0.0, 1.0, .flags = DYNAMIC },
     { "extra_opts", "Pass extra libplacebo-specific options using a :-separated list of key=value pairs", OFFSET(extra_opts), AV_OPT_TYPE_DICT, .flags = DYNAMIC },
 #if PL_API_VER >= 351
-    { "shader_cache_dir",  "Set shader cache directory", OFFSET(shader_cache_dir), AV_OPT_TYPE_STRING, {.str=""}, .flags = STATIC },
+    { "shader_cache",  "Set shader cache path", OFFSET(shader_cache), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = STATIC },
 #endif
 
     {"colorspace", "select colorspace", OFFSET(colorspace), AV_OPT_TYPE_INT, {.i64=-1}, -1, AVCOL_SPC_NB-1, DYNAMIC, .unit = "colorspace"},
