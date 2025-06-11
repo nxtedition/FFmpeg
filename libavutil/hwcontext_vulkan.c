@@ -4170,7 +4170,7 @@ static int vulkan_transfer_host(AVHWFramesContext *hwfc, AVFrame *hwf,
     const int nb_images = ff_vk_count_images(hwf_vk);
 
     VkSemaphoreWaitInfo sem_wait;
-    VkHostImageLayoutTransitionInfo layout_ch_info[];
+    VkHostImageLayoutTransitionInfo layout_ch_info[nb_images];
     int nb_layout_ch = 0;
 
     hwfc_vk->lock_frame(hwfc, hwf_vk);
