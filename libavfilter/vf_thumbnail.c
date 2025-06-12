@@ -53,6 +53,7 @@ typedef struct ThumbContext {
 
     int planewidth[4];
     int planeheight[4];
+    int bitdepth;
 } ThumbContext;
 
 #define OFFSET(x) offsetof(ThumbContext, x)
@@ -193,7 +194,23 @@ static int do_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             p += frame->linesize[0];
         }
         break;
-    default:
+
+    case AV_PIX_FMT_YUV410P:
+    case AV_PIX_FMT_YUV411P:
+    case AV_PIX_FMT_YUV420P:
+    case AV_PIX_FMT_YUV422P:
+    case AV_PIX_FMT_YUV440P:
+    case AV_PIX_FMT_YUV444P:
+    case AV_PIX_FMT_YUVJ420P:
+    case AV_PIX_FMT_YUVJ422P:
+    case AV_PIX_FMT_YUVJ440P:
+    case AV_PIX_FMT_YUVJ444P:
+    case AV_PIX_FMT_YUVJ411P:
+    case AV_PIX_FMT_YUVA420P:
+    case AV_PIX_FMT_YUVA422P:
+    case AV_PIX_FMT_YUVA444P:
+    case AV_PIX_FMT_GBRP:
+    case AV_PIX_FMT_GBRAP:
         for (int plane = 0; plane < 3; plane++) {
             const int slice_start = (s->planeheight[plane] * jobnr) / nb_jobs;
             const int slice_end = (s->planeheight[plane] * (jobnr+1)) / nb_jobs;
@@ -205,6 +222,25 @@ static int do_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             for (int j = slice_start; j < slice_end; j++) {
                 for (int i = 0; i < planewidth; i++)
                     hhist[p[i]]++;
+                p += linesize;
+            }
+        }
+        break;
+
+    default:
+        for (int plane = 0; plane < 3; plane++) {
+            const int slice_start = (s->planeheight[plane] * jobnr) / nb_jobs;
+            const int slice_end = (s->planeheight[plane] * (jobnr+1)) / nb_jobs;
+            const int slice_offset = slice_start * frame->linesize[plane];
+            const uint16_t *p = (const uint16_t *) (frame->data[plane] + slice_offset);
+            const ptrdiff_t linesize = frame->linesize[plane] >> 1;
+            const int planewidth = s->planewidth[plane];
+            const int shift = s->bitdepth - 8;
+            int *hhist = hist + 256 * plane;
+
+            for (int j = slice_start; j < slice_end; j++) {
+                for (int i = 0; i < planewidth; i++)
+                    hhist[(p[i] >> shift) & 0xFF]++;
                 p += linesize;
             }
         }
@@ -286,6 +322,7 @@ static int config_props(AVFilterLink *inlink)
     s->planewidth[0]  = s->planewidth[3]  = inlink->w;
     s->planeheight[1] = s->planeheight[2] = AV_CEIL_RSHIFT(inlink->h, desc->log2_chroma_h);
     s->planeheight[0] = s->planeheight[3] = inlink->h;
+    s->bitdepth       = desc->comp[0].depth;
 
     return 0;
 }
@@ -304,6 +341,21 @@ static const enum AVPixelFormat pix_fmts[] = {
     AV_PIX_FMT_YUVJ411P,
     AV_PIX_FMT_YUVA420P, AV_PIX_FMT_YUVA422P, AV_PIX_FMT_YUVA444P,
     AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRAP,
+
+    /* High bit depth formats */
+    AV_PIX_FMT_YUV420P9,  AV_PIX_FMT_YUV422P9,  AV_PIX_FMT_YUV444P9,
+    AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
+    AV_PIX_FMT_YUV420P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV444P12,
+    AV_PIX_FMT_YUV420P14, AV_PIX_FMT_YUV422P14, AV_PIX_FMT_YUV444P14,
+    AV_PIX_FMT_YUV420P16, AV_PIX_FMT_YUV422P16, AV_PIX_FMT_YUV444P16,
+    AV_PIX_FMT_YUVA420P9,  AV_PIX_FMT_YUVA422P9,  AV_PIX_FMT_YUVA444P9,
+    AV_PIX_FMT_YUVA420P10, AV_PIX_FMT_YUVA422P10, AV_PIX_FMT_YUVA444P10,
+                           AV_PIX_FMT_YUVA422P12, AV_PIX_FMT_YUVA444P12,
+    AV_PIX_FMT_YUVA420P16, AV_PIX_FMT_YUVA422P16, AV_PIX_FMT_YUVA444P16,
+    AV_PIX_FMT_GBRP9,  AV_PIX_FMT_GBRP10, AV_PIX_FMT_GBRP12,
+    AV_PIX_FMT_GBRAP12, AV_PIX_FMT_GBRP14, AV_PIX_FMT_GBRAP14,
+    AV_PIX_FMT_GBRP16, AV_PIX_FMT_GBRAP16,
+
     AV_PIX_FMT_NONE
 };
 
