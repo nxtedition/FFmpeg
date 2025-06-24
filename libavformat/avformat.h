@@ -146,8 +146,8 @@
  * consumed). The calling program can handle such unrecognized options as it
  * wishes, e.g.
  * @code
- * AVDictionaryEntry *e;
- * if (e = av_dict_get(options, "", NULL, AV_DICT_IGNORE_SUFFIX)) {
+ * const AVDictionaryEntry *e;
+ * if ((e = av_dict_iterate(options, NULL))) {
  *     fprintf(stderr, "Option %s not recognized by the demuxer.\n", e->key);
  *     abort();
  * }
@@ -470,8 +470,7 @@ typedef struct AVProbeData {
 /**
  * The muxer/demuxer is experimental and should be used with caution.
  *
- * - demuxers: will not be selected automatically by probing, must be specified
- *             explicitly.
+ * It will not be selected automatically, and must be specified explicitly.
  */
 #define AVFMT_EXPERIMENTAL  0x0004
 #define AVFMT_SHOW_IDS      0x0008 /**< Show format stream IDs numbers. */
