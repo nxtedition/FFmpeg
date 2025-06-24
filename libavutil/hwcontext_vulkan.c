@@ -1780,6 +1780,10 @@ static int vulkan_device_create_internal(AVHWDeviceContext *ctx,
             p->disable_multiplane = strtol(opt_d->value, NULL, 10);
     }
 
+	opt_d = av_dict_get(opts, "disable_host_transfer", NULL, 0);
+	if (opt_d)
+		p->disable_host_transfer = strtol(opt_d->value, NULL, 10);
+
     /* Set the public device feature struct and its pNext chain */
     hwctx->device_features = p->feats.device;
 
@@ -2034,7 +2038,9 @@ FF_ENABLE_DEPRECATION_WARNINGS
     p->transfer_qf = ff_vk_qf_find(&p->vkctx, VK_QUEUE_TRANSFER_BIT, 0);
 
     /* Only use host image transfers if ReBAR is enabled */
-    p->disable_host_transfer = !vulkan_device_has_rebar(ctx);
+    if (!p->disable_host_transfer) {
+        p->disable_host_transfer = !vulkan_device_has_rebar(ctx);
+    }
 
 end:
     av_free(qf_vid);
