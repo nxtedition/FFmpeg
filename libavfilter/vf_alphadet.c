@@ -1,3 +1,4 @@
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/internal.h"
 #include "filters.h"
@@ -32,6 +33,7 @@ static int filter_frame(AVFilterLink *link, AVFrame *picref)
     }
 
     if (alphadet->type == UNDETERMINED) {
+        uint8_t *range_lut = alphadet->range_lut;
         int l_stride = picref->linesize[0];
         int a_stride = picref->linesize[3];
 
@@ -39,6 +41,8 @@ static int filter_frame(AVFilterLink *link, AVFrame *picref)
             for (int x = 0; x < picref->width; x++) {
                 int l = picref->data[0][y * l_stride + x];
                 int a = picref->data[3][y * a_stride + x];
+                if (range_lut)
+                    l = range_lut[l];
                 if (l > a) {
                     av_log(ctx, AV_LOG_INFO, "L: %d A: %d\n", l, a);
                     alphadet->type = STRAIGHT;
@@ -57,6 +61,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     ALPHADETContext *alphadet = ctx->priv;
 
     av_log(ctx, AV_LOG_INFO, "Alpha detection: %s\n", type2str(alphadet->type));
+
+    av_freep(&alphadet->range_lut);
 }
 
 static const enum AVPixelFormat pix_fmts[] = {
@@ -103,11 +109,43 @@ static av_cold int init(AVFilterContext *ctx)
     return 0;
 }
 
+static int config_input(AVFilterLink *inlink)
+{
+    AVFilterContext *ctx = inlink->dst;
+    ALPHADETContext *alphadet = ctx->priv;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(inlink->format);
+
+    if (inlink->color_range != AVCOL_RANGE_JPEG) {
+        const int depth = desc->comp[0].depth;
+        const int nb_entries = 1 << depth;
+        const int ymin = 16  << (depth - 8);
+        const int ymax = 235 << (depth - 8);
+        const int imax = (1 << depth) - 1;
+        const double scale = (double) imax / (ymax - ymin);
+        alphadet->range_lut = av_malloc_array(nb_entries, 1 << (depth > 8));
+        if (!alphadet->range_lut)
+            return AVERROR(ENOMEM);
+
+        for (int i = 0; i < nb_entries; i++) {
+            const int val = av_clip(scale * (i - ymin), 0, nb_entries - 1);
+            if (depth > 8) {
+                ((uint16_t *) alphadet->range_lut)[i] = val;
+            } else {
+                ((uint8_t *) alphadet->range_lut)[i] = val;
+            }
+        }
+    }
+
+    return 0;
+}
+
+
 static const AVFilterPad alphadet_inputs[] = {
     {
         .name         = "default",
         .type         = AVMEDIA_TYPE_VIDEO,
         .filter_frame = filter_frame,
+        .config_props = config_input,
     },
 };
 

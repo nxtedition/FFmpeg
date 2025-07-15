@@ -14,6 +14,7 @@ typedef struct ALPHADETContext {
     const AVClass *class;
     Type type;
     const AVPixFmtDescriptor *csp;
+    void *range_lut;
 } ALPHADETContext;
 
 #endif
