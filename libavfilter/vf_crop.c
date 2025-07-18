@@ -356,8 +356,10 @@ static int process_command(AVFilterContext *ctx, const char *cmd, const char *ar
 
 static const AVOption crop_options[] = {
     { "out_w",       "set the width crop area expression",   OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, 0, 0, TFLAGS },
+    { "width",       "set the width crop area expression",   OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, 0, 0, TFLAGS },
     { "w",           "set the width crop area expression",   OFFSET(w_expr), AV_OPT_TYPE_STRING, {.str = "iw"}, 0, 0, TFLAGS },
     { "out_h",       "set the height crop area expression",  OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, 0, 0, TFLAGS },
+    { "height",      "set the height crop area expression",  OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, 0, 0, TFLAGS },
     { "h",           "set the height crop area expression",  OFFSET(h_expr), AV_OPT_TYPE_STRING, {.str = "ih"}, 0, 0, TFLAGS },
     { "x",           "set the x crop area expression",       OFFSET(x_expr), AV_OPT_TYPE_STRING, {.str = "(in_w-out_w)/2"}, 0, 0, TFLAGS },
     { "y",           "set the y crop area expression",       OFFSET(y_expr), AV_OPT_TYPE_STRING, {.str = "(in_h-out_h)/2"}, 0, 0, TFLAGS },
