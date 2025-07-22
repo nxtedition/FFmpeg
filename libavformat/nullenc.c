@@ -34,5 +34,4 @@ const FFOutputFormat ff_null_muxer = {
     .p.video_codec     = AV_CODEC_ID_WRAPPED_AVFRAME,
     .write_packet      = null_write_packet,
     .p.flags           = AVFMT_VARIABLE_FPS | AVFMT_NOFILE | AVFMT_NOTIMESTAMPS,
-    .interleave_packet = ff_interleave_packet_passthrough,
 };
