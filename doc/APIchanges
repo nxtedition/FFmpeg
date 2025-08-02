@@ -10,6 +10,9 @@ API changes, most recent first:
   Add AVAlphaMode, AVFrame.alpha_mode, av_alpha_mode_name() and
   av_alpha_mode_from_name().
 
+2025-07-31 - xxxxxxxxxx - lavu 60.7.100 - spherical.h
+  Add AV_SPHERICAL_PARAMETRIC_IMMERSIVE.
+
 2025-07-20 - xxxxxxxxxx - lavu 60.6.100 - attributes.h, avstring.h
   Add av_scanf_format() and use it on av_sscanf().
 

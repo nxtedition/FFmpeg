@@ -448,11 +448,11 @@ static void print_formats(void *log_ctx, int level, enum AVMediaType type,
 
     switch (type) {
     case AVMEDIA_TYPE_VIDEO:
-        for (int i = 0; i < formats->nb_formats; i++)
+        for (unsigned i = 0; i < formats->nb_formats; i++)
             av_bprintf(&bp, "%s%s", bp.len ? " " : "", av_get_pix_fmt_name(formats->formats[i]));
         break;
     case AVMEDIA_TYPE_AUDIO:
-        for (int i = 0; i < formats->nb_formats; i++)
+        for (unsigned i = 0; i < formats->nb_formats; i++)
             av_bprintf(&bp, "%s%s", bp.len ? " " : "", av_get_sample_fmt_name(formats->formats[i]));
         break;
     default:
