@@ -150,6 +150,9 @@ typedef struct VulkanDevicePriv {
     /* Disable all video support */
     int disable_video;
 
+    /* Prefer memcpy over dynamic host pointer imports */
+    int avoid_host_import;
+
     /* Maximum queues */
     int limit_queues;
 
@@ -1777,6 +1780,14 @@ static int vulkan_device_create_internal(AVHWDeviceContext *ctx,
         opt_d = av_dict_get(opts, "disable_multiplane", NULL, 0);
         if (opt_d)
             p->disable_multiplane = strtol(opt_d->value, NULL, 10);
+    }
+
+    /* Disable host pointer imports */
+    p->avoid_host_import = !(p->vkctx.extensions & FF_VK_EXT_EXTERNAL_HOST_MEMORY);
+    if (!p->avoid_host_import) {
+        opt_d = av_dict_get(opts, "avoid_host_import", NULL, 0);
+        if (opt_d)
+            p->avoid_host_import = strtol(opt_d->value, NULL, 10);
     }
 
 	opt_d = av_dict_get(opts, "disable_host_transfer", NULL, 0);
@@ -4383,7 +4394,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
     }
 
     /* Setup buffers first */
-    if (p->vkctx.extensions & FF_VK_EXT_EXTERNAL_HOST_MEMORY) {
+    if (!p->avoid_host_import) {
         err = host_map_frame(hwfc, bufs, &nb_bufs, swf, region, upload);
         if (err >= 0)
             host_mapped = 1;
