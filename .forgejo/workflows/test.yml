@@ -15,7 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Configure
-        run: ./configure --enable-gpl --enable-nonfree --enable-memory-poisoning
+        run: ./configure --enable-gpl --enable-nonfree --enable-memory-poisoning --assert-level=2
       - name: Build
         run: make -j$(nproc)
       - name: Restore Cached Fate-Suite
@@ -30,7 +30,7 @@ jobs:
         id: fate
         run: |
           make fate-rsync SAMPLES=$PWD/fate-suite
-          echo "hash=$(find fate-suite -type f | sha256sum | cut -d' ' -f1)" >> $FORGEJO_OUTPUT
+          echo "hash=$(find fate-suite -type f | sort | sha256sum | cut -d' ' -f1)" >> $FORGEJO_OUTPUT
       - name: Cache Fate-Suite
         uses: actions/cache/save@v4
         if: ${{ format('fate-suite-{0}', steps.fate.outputs.hash) != steps.cache.outputs.cache-matched-key }}
@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ghcr.io/btbn/ffmpeg-builds/win64-gpl:latest]
+        image: ["ghcr.io/btbn/ffmpeg-builds/win64-gpl:latest"]
     runs-on: linux-amd64
     container: ${{ matrix.image }}
     steps:
