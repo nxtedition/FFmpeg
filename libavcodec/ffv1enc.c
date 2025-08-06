@@ -816,7 +816,6 @@ av_cold int ff_ffv1_encode_setup_plane_info(AVCodecContext *avctx,
         if (!avctx->bits_per_raw_sample)
             s->bits_per_raw_sample = 9;
     case AV_PIX_FMT_GRAY10:
-    case AV_PIX_FMT_P010:
     case AV_PIX_FMT_YUV444P10:
     case AV_PIX_FMT_YUV440P10:
     case AV_PIX_FMT_YUV420P10:

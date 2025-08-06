@@ -192,8 +192,6 @@ OBJS-$(CONFIG_ANULLSINK_FILTER)              += asink_anullsink.o
 
 # video filters
 OBJS-$(CONFIG_ADDROI_FILTER)                 += vf_addroi.o
-OBJS-$(CONFIG_ALPHADET_FILTER)               += vf_alphadet.o
-OBJS-$(CONFIG_ALPHADETECT_VULKAN_FILTER)     += vf_alphadetect_vulkan.o
 OBJS-$(CONFIG_ALPHAEXTRACT_FILTER)           += vf_extractplanes.o
 OBJS-$(CONFIG_ALPHAMERGE_FILTER)             += vf_alphamerge.o framesync.o
 OBJS-$(CONFIG_AMPLIFY_FILTER)                += vf_amplify.o
