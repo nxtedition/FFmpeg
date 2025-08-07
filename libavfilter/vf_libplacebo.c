@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <math.h>
+
 #include "libavutil/avassert.h"
 #include "libavutil/eval.h"
 #include "libavutil/fifo.h"
@@ -201,7 +203,6 @@ typedef struct LibplaceboContext {
     int color_range;
     int color_primaries;
     int color_trc;
-    int alpha_mode;
     int rotation;
     AVDictionary *extra_opts;
 
@@ -914,18 +915,42 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
     pl_options opts = s->opts;
     AVFilterLink *outlink = ctx->outputs[0];
     const AVPixFmtDescriptor *outdesc = av_pix_fmt_desc_get(outlink->format);
+    const double target_pts = pts * av_q2d(outlink->time_base);
     struct pl_frame target;
     const AVFrame *ref = NULL;
     AVFrame *out;
 
-    /* Use the first active input as metadata reference */
+    /* Count the number of visible inputs, by excluding frames which are fully
+     * obscured or which have no frames in the mix */
+    int idx_start = 0, nb_visible = 0;
     for (int i = 0; i < s->nb_inputs; i++) {
-        const LibplaceboInput *in = &s->inputs[i];
-        if (in->qstatus == PL_QUEUE_OK && (ref = ref_frame(&in->mix)))
-            break;
+        LibplaceboInput *in = &s->inputs[i];
+        struct pl_frame dummy;
+        if (in->qstatus != PL_QUEUE_OK || !in->mix.num_frames)
+            continue;
+        const struct pl_frame *cur = pl_frame_mix_current(&in->mix);
+        update_crops(ctx, in, &dummy, target_pts);
+        const int x0 = roundf(FFMIN(dummy.crop.x0, dummy.crop.x1)),
+                  y0 = roundf(FFMIN(dummy.crop.y0, dummy.crop.y1)),
+                  x1 = roundf(FFMAX(dummy.crop.x0, dummy.crop.x1)),
+                  y1 = roundf(FFMAX(dummy.crop.y0, dummy.crop.y1));
+
+        /* If an opaque frame covers entire the output, disregard all lower layers */
+        const bool cropped = x0 > 0 || y0 > 0 || x1 < outlink->w || y1 < outlink->h;
+        if (!cropped && cur->repr.alpha == PL_ALPHA_NONE) {
+            idx_start = i;
+            nb_visible = 0;
+            ref = NULL;
+        }
+        /* Use first visible input as overall reference */
+        if (!ref)
+            ref = ref_frame(&in->mix);
+        nb_visible++;
     }
-    if (!ref)
-        return 0;
+
+    /* It should be impossible to call output_frame() without at least one
+     * valid nonempty frame mix */
+    av_assert1(nb_visible > 0);
 
     out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out)
@@ -954,11 +979,6 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
         out->color_trc = s->color_trc;
     if (s->color_primaries >= 0)
         out->color_primaries = s->color_primaries;
-
-    if (outdesc->flags & AV_PIX_FMT_FLAG_ALPHA) {
-        if (s->alpha_mode >= 0)
-            out->alpha_mode = s->alpha_mode;
-    }
 
     /* Strip side data if no longer relevant */
     if (out->width != ref->width || out->height != ref->height)
@@ -995,7 +1015,8 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
 
     struct pl_frame orig_target = target;
     bool use_linear_compositor = false;
-    if (s->linear_tex && target.color.transfer != PL_COLOR_TRC_LINEAR && !s->disable_linear) {
+    if (s->linear_tex && target.color.transfer != PL_COLOR_TRC_LINEAR &&
+        !s->disable_linear && nb_visible > 1) {
         target = (struct pl_frame) {
             .num_planes = 1,
             .planes[0] = {
@@ -1023,10 +1044,12 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
         FilterLink *il = ff_filter_link(ctx->inputs[i]);
         FilterLink *ol = ff_filter_link(outlink);
         int high_fps = av_cmp_q(il->frame_rate, ol->frame_rate) >= 0;
-        if (in->qstatus != PL_QUEUE_OK)
+        if (in->qstatus != PL_QUEUE_OK || !in->mix.num_frames || i < idx_start) {
+            pl_renderer_flush_cache(in->renderer);
             continue;
+        }
         opts->params.skip_caching_single_frame = high_fps;
-        update_crops(ctx, in, &target, out->pts * av_q2d(outlink->time_base));
+        update_crops(ctx, in, &target, target_pts);
         pl_render_image_mix(in->renderer, &in->mix, &target, &opts->params);
 
         /* Force straight output and set correct blend mode */
@@ -1211,7 +1234,7 @@ static int libplacebo_activate(AVFilterContext *ctx)
                 retry = true;
                 break;
             case PL_QUEUE_OK:
-                ok = true;
+                ok |= in->mix.num_frames > 0;
                 break;
             case PL_QUEUE_ERR:
                 return AVERROR_EXTERNAL;
@@ -1571,13 +1594,6 @@ static const AVOption libplacebo_options[] = {
     {"180",                            NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_180}, .flags = STATIC, .unit = "rotation"},
     {"270",                            NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_270}, .flags = STATIC, .unit = "rotation"},
     {"360",                            NULL,  0, AV_OPT_TYPE_CONST, {.i64=PL_ROTATION_360}, .flags = STATIC, .unit = "rotation"},
-
-    {"alpha_mode", "select alpha moda", OFFSET(alpha_mode), AV_OPT_TYPE_INT, {.i64=-1}, -1, AVALPHA_MODE_NB-1, DYNAMIC, .unit = "alpha_mode"},
-    {"auto", "keep the same alpha mode",  0, AV_OPT_TYPE_CONST, {.i64=-1},                              0, 0, DYNAMIC, .unit = "alpha_mode"},
-    {"unspecified",                      NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_UNSPECIFIED},   0, 0, DYNAMIC, .unit = "alpha_mode"},
-    {"unknown",                          NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_UNSPECIFIED},   0, 0, DYNAMIC, .unit = "alpha_mode"},
-    {"premultiplied",                    NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_PREMULTIPLIED}, 0, 0, DYNAMIC, .unit = "alpha_mode"},
-    {"straight",                         NULL, 0, AV_OPT_TYPE_CONST, {.i64=AVALPHA_MODE_STRAIGHT},      0, 0, DYNAMIC, .unit = "alpha_mode"},
 
     { "upscaler", "Upscaler function", OFFSET(upscaler), AV_OPT_TYPE_STRING, {.str = "spline36"}, .flags = DYNAMIC },
     { "downscaler", "Downscaler function", OFFSET(downscaler), AV_OPT_TYPE_STRING, {.str = "mitchell"}, .flags = DYNAMIC },
