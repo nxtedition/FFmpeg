@@ -10,6 +10,12 @@ API changes, most recent first:
   Add AVAlphaMode, AVFrame.alpha_mode, av_alpha_mode_name() and
   av_alpha_mode_from_name().
 
+2025-09-xx - xxxxxxxxxx - lsws 9.3.100 - swscale.h
+  Add SWS_UNSTABLE flag.
+
+2025-09-01 - xxxxxxxx - lavc 62.14.100 - packet.h
+  Add AV_PKT_DATA_EXIF
+
 2025-08-xx - xxxxxxxx - lavc 62.13.101 - exif.h
   Add AV_EXIF_FLAG_RECURSIVE
 
