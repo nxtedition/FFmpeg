@@ -165,6 +165,13 @@ static int query_formats(const AVFilterContext *ctx,
             return ret;
     }
 
+    if (s->alpha_mode >= 0) {
+        ret = ff_formats_ref(ff_make_formats_list_singleton(s->alpha_mode),
+                             &cfg_out[0]->alpha_modes);
+        if (ret < 0)
+            return ret;
+    }
+
     return 0;
 }
 
@@ -247,6 +254,7 @@ static av_cold int init_setrange(AVFilterContext *ctx)
     s->color_trc       = -1;
     s->colorspace      = -1;
     s->chroma_location = -1;
+    s->alpha_mode      = -1;
     return 0;
 }
 
@@ -284,6 +292,7 @@ static av_cold int init_setfield(AVFilterContext *ctx)
     s->color_trc       = -1;
     s->colorspace      = -1;
     s->chroma_location = -1;
+    s->alpha_mode      = -1;
     return 0;
 }
 

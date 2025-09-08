@@ -1076,8 +1076,8 @@ static void populate_fields(AVCodecParserContext *s, AVCodecContext *avctx, cons
     }
 
     if (meta->have_alpha) {
-        avctx->alpha_mode |= meta->alpha_associated ? AVALPHA_MODE_PREMULTIPLIED
-                                                    : AVALPHA_MODE_STRAIGHT;
+        avctx->alpha_mode = meta->alpha_associated ? AVALPHA_MODE_PREMULTIPLIED
+                                                   : AVALPHA_MODE_STRAIGHT;
     }
 }
 

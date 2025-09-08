@@ -963,6 +963,7 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
     out->height = outlink->h;
     out->colorspace = outlink->colorspace;
     out->color_range = outlink->color_range;
+    out->alpha_mode = outlink->alpha_mode;
     if (s->deinterlace)
         out->flags &= ~(AV_FRAME_FLAG_INTERLACED | AV_FRAME_FLAG_TOP_FIELD_FIRST);
 
@@ -978,11 +979,6 @@ static int output_frame(AVFilterContext *ctx, int64_t pts)
         out->color_trc = s->color_trc;
     if (s->color_primaries >= 0)
         out->color_primaries = s->color_primaries;
-
-    if (outdesc->flags & AV_PIX_FMT_FLAG_ALPHA) {
-        if (s->alpha_mode >= 0)
-            out->alpha_mode = s->alpha_mode;
-    }
 
     /* Strip side data if no longer relevant */
     if (out->width != ref->width || out->height != ref->height)
@@ -1345,6 +1341,7 @@ static int libplacebo_query_format(const AVFilterContext *ctx,
         RET(ff_formats_ref(infmts, &cfg_in[i]->formats));
         RET(ff_formats_ref(ff_all_color_spaces(), &cfg_in[i]->color_spaces));
         RET(ff_formats_ref(ff_all_color_ranges(), &cfg_in[i]->color_ranges));
+        RET(ff_formats_ref(ff_all_alpha_modes(), &cfg_in[i]->alpha_modes));
     }
 
     RET(ff_formats_ref(outfmts, &cfg_out[0]->formats));
@@ -1356,6 +1353,10 @@ static int libplacebo_query_format(const AVFilterContext *ctx,
     outfmts = s->color_range > 0 ? ff_make_formats_list_singleton(s->color_range)
                                  : ff_all_color_ranges();
     RET(ff_formats_ref(outfmts, &cfg_out[0]->color_ranges));
+
+    outfmts = s->alpha_mode > 0 ? ff_make_formats_list_singleton(s->alpha_mode)
+                                 : ff_all_alpha_modes();
+    RET(ff_formats_ref(outfmts, &cfg_out[0]->alpha_modes));
     return 0;
 
 fail:
@@ -1422,13 +1423,15 @@ static int libplacebo_config_output(AVFilterLink *outlink)
 
     if (s->nb_inputs > 1 && !s->disable_fbos) {
         /* Create a separate renderer and composition texture */
-        pl_fmt fmt = pl_find_fmt(s->gpu, PL_FMT_FLOAT, 4, 16, 0, PL_FMT_CAP_BLENDABLE);
+        const enum pl_fmt_caps caps = PL_FMT_CAP_BLENDABLE | PL_FMT_CAP_BLITTABLE;
+        pl_fmt fmt = pl_find_fmt(s->gpu, PL_FMT_FLOAT, 4, 16, 0, caps);
         bool ok = !!fmt;
         if (ok) {
             ok = pl_tex_recreate(s->gpu, &s->linear_tex, pl_tex_params(
                 .format     = fmt,
                 .w          = outlink->w,
                 .h          = outlink->h,
+                .blit_dst   = true,
                 .renderable = true,
                 .sampleable = true,
                 .storable   = fmt->caps & PL_FMT_CAP_STORABLE,

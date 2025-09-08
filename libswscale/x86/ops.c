@@ -20,8 +20,8 @@
 
 #include <float.h>
 
-#include <libavutil/avassert.h>
-#include <libavutil/mem.h>
+#include "libavutil/avassert.h"
+#include "libavutil/mem.h"
 
 #include "../ops_chain.h"
 
@@ -130,7 +130,7 @@ static int setup_clear(const SwsOp *op, SwsOpPriv *out)
 #define DECL_SWIZZLE(EXT, X, Y, Z, W)                                           \
     DECL_ASM(U8, swizzle_##X##Y##Z##W##EXT,                                     \
         .op = SWS_OP_SWIZZLE,                                                   \
-        .swizzle = SWS_SWIZZLE( X, Y, Z, W ),                                   \
+        .swizzle.in = {X, Y, Z, W},                                             \
     );
 
 #define DECL_CONVERT(EXT, FROM, TO)                                             \
@@ -695,7 +695,7 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
         SWS_DECL_FUNC(NAME);                                    \
         void NAME##_return(void);                               \
         ret = ff_sws_op_chain_append(chain, NAME##_return,      \
-                                     NULL, (SwsOpPriv) {0});    \
+                                     NULL, &(SwsOpPriv) {0});   \
         out->func = NAME;                                       \
     } while (0)
 

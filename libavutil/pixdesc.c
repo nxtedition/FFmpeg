@@ -3893,9 +3893,7 @@ const char *av_alpha_mode_name(enum AVAlphaMode mode)
 
 enum AVAlphaMode av_alpha_mode_from_name(const char *name)
 {
-    int i;
-
-    for (i = 0; i < FF_ARRAY_ELEMS(alpha_mode_names); i++) {
+    for (int i = 0; i < FF_ARRAY_ELEMS(alpha_mode_names); i++) {
         if (!alpha_mode_names[i])
             continue;
 

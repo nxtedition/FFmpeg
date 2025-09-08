@@ -453,7 +453,7 @@ static int libjxl_preprocess_stream(AVCodecContext *avctx, const AVFrame *frame,
         extra_info.alpha_premultiplied = info.alpha_premultiplied;
 
         if (JxlEncoderSetExtraChannelInfo(ctx->encoder, 0, &extra_info) != JXL_ENC_SUCCESS) {
-            av_log(avctx, AV_LOG_ERROR, "Failed to set JxlExtraChannelInfo for channel %d\n", i);
+            av_log(avctx, AV_LOG_ERROR, "Failed to set JxlExtraChannelInfo for alpha!\n");
             return AVERROR_EXTERNAL;
         }
     }
