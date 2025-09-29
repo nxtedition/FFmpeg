@@ -250,6 +250,7 @@ External library support:
   --enable-liblensfun      enable lensfun lens correction [no]
   --enable-libmodplug      enable ModPlug via libmodplug [no]
   --enable-libmp3lame      enable MP3 encoding via libmp3lame [no]
+  --enable-libmpeghdec     enable MPEG-H 3DA decoding via libmpeghdec [no]
   --enable-liboapv         enable APV encoding via liboapv [no]
   --enable-libopencore-amrnb enable AMR-NB de/encoding via libopencore-amrnb [no]
   --enable-libopencore-amrwb enable AMR-WB decoding via libopencore-amrwb [no]
@@ -1926,6 +1927,7 @@ EXTERNAL_LIBRARY_GPL_LIST="
 EXTERNAL_LIBRARY_NONFREE_LIST="
     decklink
     libfdk_aac
+    libmpeghdec
     libtls
 "
 
@@ -2967,9 +2969,19 @@ ac3_fixed_decoder_select="ac3_parser ac3dsp bswapdsp"
 ac3_encoder_select="ac3dsp audiodsp me_cmp"
 ac3_fixed_encoder_select="ac3dsp audiodsp me_cmp"
 acelp_kelvin_decoder_select="audiodsp celp_math"
+adpcm_circus_decoder_deps="lgpl_gpl"
 adpcm_g722_decoder_select="g722dsp"
 adpcm_g722_encoder_select="g722dsp"
+adpcm_ima_escape_decoder_deps="lgpl_gpl"
+adpcm_ima_hvqm2_decoder_deps="lgpl_gpl"
+adpcm_ima_hvqm4_decoder_deps="lgpl_gpl"
+adpcm_ima_magix_decoder_deps="lgpl_gpl"
+adpcm_ima_pda_decoder_deps="lgpl_gpl"
+adpcm_n64_decoder_deps="lgpl_gpl"
+adpcm_psxc_decoder_deps="lgpl_gpl"
 agm_decoder_select="idctdsp"
+ahx_decoder_deps="lgpl_gpl"
+ahx_decoder_select="mpegaudio ahx_to_mp2_bsf"
 aic_decoder_select="golomb idctdsp"
 alac_encoder_select="lpc"
 als_decoder_select="bswapdsp mpeg4audio"
@@ -3552,6 +3564,7 @@ vvc_qsv_decoder_select="vvc_mp4toannexb_bsf qsvdec"
 
 # parsers
 aac_parser_select="adts_header mpeg4audio"
+ahx_parser_deps="lgpl_gpl"
 apv_parser_select="cbs_apv"
 av1_parser_select="cbs_av1"
 evc_parser_select="evcparse"
@@ -3566,6 +3579,7 @@ vvc_parser_select="cbs_h266"
 
 # bitstream_filters
 aac_adtstoasc_bsf_select="adts_header mpeg4audio"
+ahx_to_mp2_bsf_deps="lgpl_gpl"
 av1_frame_merge_bsf_select="cbs_av1"
 av1_frame_split_bsf_select="cbs_av1"
 av1_metadata_bsf_select="cbs_av1"
@@ -3661,6 +3675,7 @@ liblc3_encoder_select="audio_frame_queue"
 libmodplug_demuxer_deps="libmodplug"
 libmp3lame_encoder_deps="libmp3lame"
 libmp3lame_encoder_select="audio_frame_queue mpegaudioheader"
+libmpeghdec_decoder_deps="libmpeghdec"
 liboapv_encoder_deps="liboapv"
 libopencore_amrnb_decoder_deps="libopencore_amrnb"
 libopencore_amrnb_encoder_deps="libopencore_amrnb"
@@ -4633,6 +4648,7 @@ enabled gpl && map "die_license_disabled_gpl nonfree" $EXTERNAL_LIBRARY_NONFREE_
 map "die_license_disabled nonfree" $HWACCEL_LIBRARY_NONFREE_LIST
 
 enabled version3 && { enabled gpl && enable gplv3 || enable lgplv3; }
+enabled gpl && enable lgpl_gpl # Files that are marked as LGPL but some developers prefer only building them with --enable-gpl
 
 if enabled nonfree; then
     license="nonfree and unredistributable"
@@ -5004,7 +5020,7 @@ msvc_flags(){
     for flag; do
         case $flag in
             -Wall)                echo -W3 -wd4018 -wd4146 -wd4244 -wd4305     \
-                                       -wd4554 ;;
+                                       -wd4554 -wd4267 ;;
             -Wextra)              echo -W4 -wd4244 -wd4127 -wd4018 -wd4389     \
                                        -wd4146 -wd4057 -wd4204 -wd4706 -wd4305 \
                                        -wd4152 -wd4324 -we4013 -wd4100 -wd4214 \
@@ -7171,11 +7187,16 @@ fi
 
 enabled libmodplug        && require_pkg_config libmodplug libmodplug libmodplug/modplug.h ModPlug_Load
 enabled libmp3lame        && require "libmp3lame >= 3.98.3" lame/lame.h lame_set_VBR_quality -lmp3lame $libm_extralibs
+enabled libmpeghdec       && require_pkg_config libmpeghdec "mpeghdec >= 3.0.0" mpeghdec/mpeghdecoder.h mpeghdecoder_init
 enabled libmysofa         && { check_pkg_config libmysofa libmysofa mysofa.h mysofa_neighborhood_init_withstepdefine ||
                                require libmysofa mysofa.h mysofa_neighborhood_init_withstepdefine -lmysofa $zlib_extralibs; }
-enabled libnpp            && { check_lib libnpp npp.h nppGetLibVersion -lnppig -lnppicc -lnppc -lnppidei -lnppif ||
+enabled libnpp            && { test_cpp_condition "$(cd "$source_path"; pwd)/libavfilter/version_major.h" FF_API_LIBNPP_SUPPORT ||
+                               die "ERROR: libnpp support is removed in this version"; } &&
+                             { check_lib libnpp npp.h nppGetLibVersion -lnppig -lnppicc -lnppc -lnppidei -lnppif ||
                                check_lib libnpp npp.h nppGetLibVersion -lnppi -lnppif -lnppc -lnppidei ||
-                               die "ERROR: libnpp not found"; }
+                               die "ERROR: libnpp not found"; } &&
+                             { check_func_headers "nppi.h" nppiYCbCr420_8u_P2P3R $libnpp_extralibs ||
+                               die "ERROR: libnpp support is deprecated, version 13.0 and up are not supported"; }
 enabled libopencore_amrnb && require libopencore_amrnb opencore-amrnb/interf_dec.h Decoder_Interface_init -lopencore-amrnb
 enabled libopencore_amrwb && require libopencore_amrwb opencore-amrwb/dec_if.h D_IF_init -lopencore-amrwb
 enabled libopencv         && { check_headers opencv2/core/core_c.h &&
@@ -7816,7 +7837,7 @@ if enabled icc; then
     fi
 elif enabled gcc; then
     gcc_version=$($cc -dumpversion)
-    major_version=${gcc_version%%.*}
+    major_version=${gcc_version%%[!0-9]*}
     if [ $major_version -lt 13 ]; then
         # Disable tree-vectorize for GCC <13 - it has historically been buggy.
         check_optflags -fno-tree-vectorize
