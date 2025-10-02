@@ -7116,7 +7116,7 @@ enabled libcelt           && require libcelt celt/celt.h celt_decode -lcelt0 &&
                                die "ERROR: libcelt must be installed and version must be >= 0.11.0."; }
 enabled libcaca           && require_pkg_config libcaca caca caca.h caca_create_canvas
 enabled libcodec2         && require libcodec2 codec2/codec2.h codec2_create -lcodec2
-enabled libdav1d          && require_pkg_config libdav1d "dav1d >= 0.5.0" "dav1d/dav1d.h" dav1d_version
+enabled libdav1d          && require_pkg_config libdav1d "dav1d >= 1.0.0" "dav1d/dav1d.h" dav1d_version
 enabled libdavs2          && require_pkg_config libdavs2 "davs2 >= 1.6.0" davs2.h davs2_decoder_open
 enabled libdc1394         && require_pkg_config libdc1394 libdc1394-2 dc1394/dc1394.h dc1394_new
 enabled libdrm            && check_pkg_config libdrm libdrm xf86drm.h drmGetVersion
@@ -7132,12 +7132,16 @@ enabled libfontconfig     && require_pkg_config libfontconfig fontconfig "fontco
 enabled libfreetype       && require_pkg_config libfreetype freetype2 "ft2build.h FT_FREETYPE_H" FT_Init_FreeType
 enabled libfribidi        && require_pkg_config libfribidi fribidi fribidi.h fribidi_version_info
 enabled libharfbuzz       && require_pkg_config libharfbuzz harfbuzz hb.h hb_buffer_create
-enabled libglslang && { check_lib spirv_compiler glslang/Include/glslang_c_interface.h glslang_initialize_process \
+if enabled libglslang; then
+    spvremap="-lSPVRemapper"
+    require_headers "glslang/build_info.h" && { test_cpp_condition glslang/build_info.h "GLSLANG_VERSION_MAJOR >= 16" && spvremap="" ; }
+    check_lib spirv_compiler glslang/Include/glslang_c_interface.h glslang_initialize_process \
                             -lglslang -lMachineIndependent -lGenericCodeGen \
-                            -lSPVRemapper -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ||
+                            ${spvremap} -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ||
                         require spirv_compiler glslang/Include/glslang_c_interface.h glslang_initialize_process \
                             -lglslang -lMachineIndependent -lOSDependent -lHLSL -lOGLCompiler -lGenericCodeGen \
-                            -lSPVRemapper -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ; }
+                            ${spvremap} -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ;
+fi
 enabled libgme            && { check_pkg_config libgme libgme gme/gme.h gme_new_emu ||
                                require libgme gme/gme.h gme_new_emu -lgme -lstdc++; }
 enabled libgsm            && { for gsm_hdr in "gsm.h" "gsm/gsm.h"; do
