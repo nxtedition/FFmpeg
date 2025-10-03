@@ -432,6 +432,9 @@ fate-filter-crazychannels: tests/data/filtergraphs/crazychannels
 fate-filter-crazychannels: CMD = framecrc -auto_conversion_filters -/filter_complex $(TARGET_PATH)/tests/data/filtergraphs/crazychannels
 FATE_AFILTER-$(call FILTERFRAMECRC, ARESAMPLE SINE JOIN ATRIM CHANNELMAP CHANNELSPLIT, FILE_PROTOCOL) += fate-filter-crazychannels
 
+fate-filter-apad-stuck: CMD = framecrc -f lavfi -i "testsrc=d=2[out0];sine=d=2[out1]" -af "atrim=end=0.1,apad=pad_dur=1"
+FATE_AFILTER-$(call FILTERFRAMECRC, TESTSRC SINE ATRIM APAD, PIPE_PROTOCOL) += fate-filter-apad-stuck
+
 FATE_AFILTER-yes += fate-filter-formats
 fate-filter-formats: libavfilter/tests/formats$(EXESUF)
 fate-filter-formats: CMD = run libavfilter/tests/formats$(EXESUF)
