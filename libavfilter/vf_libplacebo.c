@@ -920,9 +920,13 @@ static void update_crops(AVFilterContext *ctx, LibplaceboInput *in,
             target->crop.x1 = target->crop.x0 + s->var_values[VAR_POS_W];
             target->crop.y1 = target->crop.y0 + s->var_values[VAR_POS_H];
 
+
             /* Effective visual crop */
-            const float w_adj = av_q2d(inlink->sample_aspect_ratio) /
-                                av_q2d(outlink->sample_aspect_ratio);
+            double sar_in = inlink->sample_aspect_ratio.num ?
+                            av_q2d(inlink->sample_aspect_ratio) : 1.0;
+            double sar_out = outlink->sample_aspect_ratio.num ?
+                             av_q2d(outlink->sample_aspect_ratio) : 1.0;
+            const float w_adj = sar_in / sar_out;
 
             pl_rect2df fixed = image->crop;
             pl_rect2df_stretch(&fixed, w_adj, 1.0);
