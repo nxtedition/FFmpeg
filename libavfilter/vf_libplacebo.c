@@ -913,14 +913,6 @@ static void update_crops(AVFilterContext *ctx, LibplaceboInput *in,
         image->crop.x1 = image->crop.x0 + s->var_values[VAR_CROP_W];
         image->crop.y1 = image->crop.y0 + s->var_values[VAR_CROP_H];
 
-        const pl_rotation rot_total = image->rotation - target->rotation;
-        if ((rot_total + PL_ROTATION_360) % PL_ROTATION_180 == PL_ROTATION_90) {
-            /* Libplacebo expects the input crop relative to the actual frame
-             * dimensions, so un-transpose them here */
-            FFSWAP(float, image->crop.x0, image->crop.y0);
-            FFSWAP(float, image->crop.x1, image->crop.y1);
-        }
-
         if (src == ref) {
             /* Only update the target crop once, for the 'reference' frame */
             target->crop.x0 = av_expr_eval(s->pos_x_pexpr, s->var_values, NULL);
@@ -928,12 +920,19 @@ static void update_crops(AVFilterContext *ctx, LibplaceboInput *in,
             target->crop.x1 = target->crop.x0 + s->var_values[VAR_POS_W];
             target->crop.y1 = target->crop.y0 + s->var_values[VAR_POS_H];
 
+
             /* Effective visual crop */
-            const float w_adj = av_q2d(inlink->sample_aspect_ratio) /
-                                av_q2d(outlink->sample_aspect_ratio);
+            double sar_in = inlink->sample_aspect_ratio.num ?
+                            av_q2d(inlink->sample_aspect_ratio) : 1.0;
+            double sar_out = outlink->sample_aspect_ratio.num ?
+                             av_q2d(outlink->sample_aspect_ratio) : 1.0;
+
+            pl_rotation rot_total = PL_ROTATION_360 + image->rotation - target->rotation;
+            if (rot_total % PL_ROTATION_180 == PL_ROTATION_90)
+                sar_in = 1.0 / sar_in;
 
             pl_rect2df fixed = image->crop;
-            pl_rect2df_stretch(&fixed, w_adj, 1.0);
+            pl_rect2df_stretch(&fixed, sar_in / sar_out, 1.0);
 
             switch (s->fit_mode) {
             case FIT_FILL:
@@ -954,6 +953,13 @@ static void update_crops(AVFilterContext *ctx, LibplaceboInput *in,
             }
             case FIT_SCALE_DOWN:
                 pl_rect2df_aspect_fit(&target->crop, &fixed, 0.0);
+            }
+
+            if (rot_total % PL_ROTATION_180 == PL_ROTATION_90) {
+                /* Libplacebo expects the input crop relative to the actual frame
+                 * dimensions, so un-transpose them here */
+                FFSWAP(float, image->crop.x0, image->crop.y0);
+                FFSWAP(float, image->crop.x1, image->crop.y1);
             }
         }
     }
