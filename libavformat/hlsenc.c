@@ -2499,7 +2499,7 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
         // set program-date-time from producer-reference-time side data
         if (hls->flags & HLS_PROGRAM_DATE_TIME && !vs->prog_date_time) {
             AVProducerReferenceTime *prft;
-            int side_data_size;
+            size_t side_data_size;
 
             prft = (AVProducerReferenceTime *)av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
             if (prft && side_data_size == sizeof(AVProducerReferenceTime)) {
@@ -2629,7 +2629,7 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
             // set program-date-time from producer-reference-time side data
             if (hls->flags & HLS_PROGRAM_DATE_TIME) {
                 AVProducerReferenceTime *prft;
-                int side_data_size;
+                size_t side_data_size;
 
                 prft = (AVProducerReferenceTime *)av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
                 if (prft && side_data_size == sizeof(AVProducerReferenceTime)) {
