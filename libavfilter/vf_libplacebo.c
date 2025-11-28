@@ -1513,10 +1513,7 @@ static int libplacebo_config_output(AVFilterLink *outlink)
         }
     }
 
-    if (s->reset_sar) {
-        /* SAR is normalized, or we have multiple inputs, set out to 1:1 */
-        outlink->sample_aspect_ratio = (AVRational){ 1, 1 };
-    } else if (inlink->sample_aspect_ratio.num && s->fit_mode == FIT_FILL) {
+    if (inlink->sample_aspect_ratio.num && s->fit_mode == FIT_FILL) {
         /* This is consistent with other scale_* filters, which only
          * set the outlink SAR to be equal to the scale SAR iff the input SAR
          * was set to something nonzero */
@@ -1524,6 +1521,9 @@ static int libplacebo_config_output(AVFilterLink *outlink)
         const AVRational ar_out  = { outlink->w, outlink->h };
         const AVRational stretch = av_div_q(ar_in, ar_out);
         outlink->sample_aspect_ratio = av_mul_q(inlink->sample_aspect_ratio, stretch);
+    } else if (s->reset_sar) {
+        /* SAR is normalized, or we have multiple inputs, set out to 1:1 */
+        outlink->sample_aspect_ratio = (AVRational){ 1, 1 };
     } else {
         outlink->sample_aspect_ratio = inlink->sample_aspect_ratio;
     }
