@@ -1902,7 +1902,7 @@ static int vulkan_device_init(AVHWDeviceContext *ctx)
     av_log(ctx, AV_LOG_VERBOSE, "Alignments:\n");
     av_log(ctx, AV_LOG_VERBOSE, "    optimalBufferCopyRowPitchAlignment: %"PRIu64"\n",
            p->props.properties.limits.optimalBufferCopyRowPitchAlignment);
-    av_log(ctx, AV_LOG_VERBOSE, "    minMemoryMapAlignment:              %"SIZE_SPECIFIER"\n",
+    av_log(ctx, AV_LOG_VERBOSE, "    minMemoryMapAlignment:              %zu\n",
            p->props.properties.limits.minMemoryMapAlignment);
     av_log(ctx, AV_LOG_VERBOSE, "    nonCoherentAtomSize:                %"PRIu64"\n",
            p->props.properties.limits.nonCoherentAtomSize);
@@ -2581,7 +2581,7 @@ static int switch_layout_host(AVHWFramesContext *hwfc, FFVkExecPool *ectx,
     VkResult ret;
     VulkanDevicePriv *p = hwfc->device_ctx->hwctx;
     FFVulkanFunctions *vk = &p->vkctx.vkfn;
-    VkHostImageLayoutTransitionInfo layout_change[AV_NUM_DATA_POINTERS];
+    VkHostImageLayoutTransitionInfoEXT layout_change[AV_NUM_DATA_POINTERS];
     int nb_images = ff_vk_count_images(frame);
 
     VkImageLayout new_layout;
@@ -2597,8 +2597,8 @@ static int switch_layout_host(AVHWFramesContext *hwfc, FFVkExecPool *ectx,
         return AVERROR(ENOTSUP);
 
     for (i = 0; i < nb_images; i++) {
-        layout_change[i] = (VkHostImageLayoutTransitionInfo) {
-            .sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO,
+        layout_change[i] = (VkHostImageLayoutTransitionInfoEXT) {
+            .sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT,
             .image = frame->img[i],
             .oldLayout = frame->layout[i],
             .newLayout = new_layout,
@@ -4394,6 +4394,7 @@ static int vulkan_transfer_host(AVHWFramesContext *hwfc, AVFrame *hwf,
     FFVulkanFunctions *vk = &p->vkctx.vkfn;
 
     AVVkFrame *hwf_vk = (AVVkFrame *)hwf->data[0];
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(swf->format);
     const int planes = av_pix_fmt_count_planes(swf->format);
     const int nb_images = ff_vk_count_images(hwf_vk);
 
@@ -4486,7 +4487,7 @@ static int vulkan_transfer_host(AVHWFramesContext *hwfc, AVFrame *hwf,
             get_plane_wh(&p_w, &p_h, swf->format, swf->width, swf->height, i);
 
             region_info.pHostPointer = swf->data[i];
-            region_info.memoryRowLength = swf->linesize[i];
+            region_info.memoryRowLength = swf->linesize[i] / desc->comp[i].step;
             region_info.imageSubresource.aspectMask = ff_vk_aspect_flag(hwf, i);
             region_info.imageExtent = (VkExtent3D){ p_w, p_h, 1 };
             copy_info.srcImage = hwf_vk->img[img_idx];
