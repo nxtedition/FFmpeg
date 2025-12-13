@@ -39,6 +39,7 @@
 #include "libavutil/random_seed.h"
 #include "libavutil/time.h"
 #include "libavutil/time_internal.h"
+#include "libavutil/parseutils.h"
 
 #include "libavcodec/defs.h"
 

@@ -21,6 +21,7 @@
 
 #include "libavformat/avformat.h"
 #include "libavformat/internal.h"
+#include "libavformat/demux.h"
 #include "libavutil/opt.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/time.h"
@@ -332,7 +333,7 @@ static int ndi_create_audio_stream(AVFormatContext *avctx, NDIlib_audio_frame_v2
     st->codecpar->codec_type        = AVMEDIA_TYPE_AUDIO;
     st->codecpar->codec_id          = AV_CODEC_ID_PCM_S16LE;
     st->codecpar->sample_rate       = a->sample_rate;
-    st->codecpar->channels          = a->no_channels;
+    st->codecpar->ch_layout.nb_channels = a->no_channels;
 
     avpriv_set_pts_info(st, 64, 1, NDI_TIME_BASE);
 
@@ -421,11 +422,11 @@ static const AVClass libndi_newtek_demuxer_class = {
     .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT,
 };
 
-AVInputFormat ff_libndi_newtek_demuxer = {
-    .name           = "libndi_newtek",
-    .long_name      = NULL_IF_CONFIG_SMALL("Network Device Interface (NDI) input using NewTek library"),
-    .flags          = AVFMT_NOFILE,
-    .priv_class     = &libndi_newtek_demuxer_class,
+FFInputFormat ff_libndi_newtek_demuxer = {
+    .p.name           = "libndi_newtek",
+    .p.long_name      = NULL_IF_CONFIG_SMALL("Network Device Interface (NDI) input using NewTek library"),
+    .p.flags          = AVFMT_NOFILE,
+    .p.priv_class     = &libndi_newtek_demuxer_class,
     .priv_data_size = sizeof(struct NDIContext),
     .read_header   = ndi_read_header,
     .read_packet   = ndi_read_packet,

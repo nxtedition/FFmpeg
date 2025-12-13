@@ -2046,7 +2046,7 @@ vbv_retry:
             uint8_t *side_data;
             size_t side_data_size;
 
-            frame_side_data = av_frame_get_side_data(s->current_picture.f, AV_FRAME_DATA_PRFT);
+            frame_side_data = av_frame_get_side_data(s->c.cur_pic.ptr->f, AV_FRAME_DATA_PRFT);
             side_data = av_packet_get_side_data(pkt, AV_PKT_DATA_PRFT, &side_data_size);
             if (frame_side_data && frame_side_data->size >= sizeof(AVProducerReferenceTime) && !side_data) {
                 side_data_size = sizeof(AVProducerReferenceTime);

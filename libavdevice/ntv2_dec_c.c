@@ -1,4 +1,5 @@
 #include "libavformat/avformat.h"
+#include "libavformat/demux.h"
 #include "libavutil/opt.h"
 
 #include "ntv2_dec.h"
@@ -440,11 +441,11 @@ static const AVClass ntv2_demuxer_class = {
     .category   = AV_CLASS_CATEGORY_DEVICE_VIDEO_INPUT,
 };
 
-const AVInputFormat ff_ntv2_demuxer = {
-    .name           = "ntv2",
-    .long_name      = NULL_IF_CONFIG_SMALL("AJA NTV2 input"),
-    .flags          = AVFMT_NOFILE,
-    .priv_class     = &ntv2_demuxer_class,
+const FFInputFormat ff_ntv2_demuxer = {
+    .p.name           = "ntv2",
+    .p.long_name      = NULL_IF_CONFIG_SMALL("AJA NTV2 input"),
+    .p.flags          = AVFMT_NOFILE,
+    .p.priv_class     = &ntv2_demuxer_class,
     .priv_data_size = sizeof(struct NTV2Context),
     .read_header    = ff_ntv2_read_header,
     .read_packet    = ff_ntv2_read_packet,
