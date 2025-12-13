@@ -24,6 +24,7 @@
  * WebP encoder using libwebp (WebPEncode API)
  */
 
+#include "libavutil/mem.h"
 #include "codec_internal.h"
 #include "encode.h"
 #include "libwebpenc_common.h"
@@ -89,16 +90,18 @@ static int libwebp_encode_close(AVCodecContext *avctx)
 
 const FFCodec ff_libwebp_encoder = {
     .p.name         = "libwebp",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("libwebp WebP image"),
+    CODEC_LONG_NAME("libwebp WebP image"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_WEBP,
-    .p.capabilities = AV_CODEC_CAP_DR1,
-    .p.pix_fmts     = ff_libwebpenc_pix_fmts,
+    .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
+    CODEC_PIXFMTS_ARRAY(ff_libwebpenc_pix_fmts),
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .p.priv_class   = &ff_libwebpenc_class,
     .p.wrapper_name = "libwebp",
+    .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE,
     .priv_data_size = sizeof(LibWebPContext),
     .defaults       = ff_libwebp_defaults,
     .init           = libwebp_encode_init,
-    .encode2        = libwebp_encode_frame,
+    FF_CODEC_ENCODE_CB(libwebp_encode_frame),
     .close          = libwebp_encode_close,
 };

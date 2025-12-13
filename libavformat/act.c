@@ -22,6 +22,7 @@
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
 #include "avio_internal.h"
+#include "demux.h"
 #include "riff.h"
 #include "internal.h"
 
@@ -68,6 +69,7 @@ static int read_header(AVFormatContext *s)
     AVIOContext *pb = s->pb;
     int size;
     AVStream* st;
+    int ret;
 
     int min,sec,msec;
 
@@ -77,7 +79,9 @@ static int read_header(AVFormatContext *s)
 
     avio_skip(pb, 16);
     size=avio_rl32(pb);
-    ff_get_wav_header(s, pb, st->codecpar, size, 0);
+    ret = ff_get_wav_header(s, pb, st->codecpar, size, 0);
+    if (ret < 0)
+        return ret;
 
     /*
       8000Hz (Fine-rec) file format has 10 bytes long
@@ -195,9 +199,9 @@ static int read_packet(AVFormatContext *s,
     return ret;
 }
 
-const AVInputFormat ff_act_demuxer = {
-    .name           = "act",
-    .long_name      = "ACT Voice file format",
+const FFInputFormat ff_act_demuxer = {
+    .p.name         = "act",
+    .p.long_name    = "ACT Voice file format",
     .priv_data_size = sizeof(ACTContext),
     .read_probe     = probe,
     .read_header    = read_header,

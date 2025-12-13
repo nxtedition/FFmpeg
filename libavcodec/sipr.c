@@ -32,8 +32,8 @@
 #define BITSTREAM_READER_LE
 #include "avcodec.h"
 #include "codec_internal.h"
+#include "decode.h"
 #include "get_bits.h"
-#include "internal.h"
 #include "lsp.h"
 #include "acelp_vectors.h"
 #include "acelp_pitch_delay.h"
@@ -412,9 +412,9 @@ static void decode_frame(SiprContext *ctx, SiprParameters *params,
         convolute_with_sparse(fixed_vector, &fixed_cb, impulse_response,
                               SUBFR_SIZE);
 
-        avg_energy = (0.01 + avpriv_scalarproduct_float_c(fixed_vector,
-                                                          fixed_vector,
-                                                          SUBFR_SIZE)) /
+        avg_energy = (0.01 + ff_scalarproduct_float_c(fixed_vector,
+                                                      fixed_vector,
+                                                      SUBFR_SIZE)) /
                      SUBFR_SIZE;
 
         ctx->past_pitch_gain = pitch_gain = gain_cb[params->gc_index[i]][0];
@@ -456,9 +456,9 @@ static void decode_frame(SiprContext *ctx, SiprParameters *params,
 
     if (ctx->mode == MODE_5k0) {
         for (i = 0; i < subframe_count; i++) {
-            float energy = avpriv_scalarproduct_float_c(ctx->postfilter_syn5k0 + LP_FILTER_ORDER + i * SUBFR_SIZE,
-                                                        ctx->postfilter_syn5k0 + LP_FILTER_ORDER + i * SUBFR_SIZE,
-                                                        SUBFR_SIZE);
+            float energy = ff_scalarproduct_float_c(ctx->postfilter_syn5k0 + LP_FILTER_ORDER + i * SUBFR_SIZE,
+                                                    ctx->postfilter_syn5k0 + LP_FILTER_ORDER + i * SUBFR_SIZE,
+                                                    SUBFR_SIZE);
             ff_adaptive_gain_control(&synth[i * SUBFR_SIZE],
                                      &synth[i * SUBFR_SIZE], energy,
                                      SUBFR_SIZE, 0.9, &ctx->postfilter_agc);
@@ -520,11 +520,10 @@ static av_cold int sipr_decoder_init(AVCodecContext * avctx)
     return 0;
 }
 
-static int sipr_decode_frame(AVCodecContext *avctx, void *data,
+static int sipr_decode_frame(AVCodecContext *avctx, AVFrame *frame,
                              int *got_frame_ptr, AVPacket *avpkt)
 {
     SiprContext *ctx = avctx->priv_data;
-    AVFrame *frame   = data;
     const uint8_t *buf=avpkt->data;
     SiprParameters parm;
     const SiprModeParam *mode_par = &modes[ctx->mode];
@@ -533,7 +532,6 @@ static int sipr_decode_frame(AVCodecContext *avctx, void *data,
     int subframe_size = ctx->mode == MODE_16k ? L_SUBFR_16k : SUBFR_SIZE;
     int i, ret;
 
-    ctx->avctx = avctx;
     if (avpkt->size < (mode_par->bits_per_frame >> 3)) {
         av_log(avctx, AV_LOG_ERROR,
                "Error processing packet: packet size (%d) too small\n",
@@ -565,12 +563,11 @@ static int sipr_decode_frame(AVCodecContext *avctx, void *data,
 
 const FFCodec ff_sipr_decoder = {
     .p.name         = "sipr",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("RealAudio SIPR / ACELP.NET"),
+    CODEC_LONG_NAME("RealAudio SIPR / ACELP.NET"),
     .p.type         = AVMEDIA_TYPE_AUDIO,
     .p.id           = AV_CODEC_ID_SIPR,
     .priv_data_size = sizeof(SiprContext),
     .init           = sipr_decoder_init,
-    .decode         = sipr_decode_frame,
+    FF_CODEC_DECODE_CB(sipr_decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

@@ -24,15 +24,15 @@
 
 #include "avcodec.h"
 #include "libavutil/avutil.h"
+#include "libavutil/mem.h"
 #include "get_bits.h"
 #include "audiodsp.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 
 
 #include "g729.h"
 #include "lsp.h"
-#include "celp_math.h"
 #include "celp_filters.h"
 #include "acelp_filters.h"
 #include "acelp_pitch_delay.h"
@@ -401,8 +401,8 @@ static av_cold int decoder_init(AVCodecContext * avctx)
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame_ptr,
-                        AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
+                        int *got_frame_ptr, AVPacket *avpkt)
 {
     const uint8_t *buf = avpkt->data;
     int buf_size       = avpkt->size;
@@ -427,7 +427,6 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame_ptr,
     int16_t synth[SUBFRAME_SIZE+10]; // fixed-codebook vector
     int j, ret;
     int gain_before, gain_after;
-    AVFrame *frame = data;
 
     frame->nb_samples = SUBFRAME_SIZE<<1;
     if ((ret = ff_get_buffer(avctx, frame, 0)) < 0)
@@ -537,7 +536,7 @@ static int decode_frame(AVCodecContext *avctx, void *data, int *got_frame_ptr,
 
             if (frame_erasure) {
                 ctx->rand_value = g729_prng(ctx->rand_value);
-                fc_indexes   = av_mod_uintp2(ctx->rand_value, format->fc_indexes_bits);
+                fc_indexes   = av_zero_extend(ctx->rand_value, format->fc_indexes_bits);
 
                 ctx->rand_value = g729_prng(ctx->rand_value);
                 pulses_signs = ctx->rand_value;
@@ -755,26 +754,24 @@ static av_cold int decode_close(AVCodecContext *avctx)
 
 const FFCodec ff_g729_decoder = {
     .p.name         = "g729",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("G.729"),
+    CODEC_LONG_NAME("G.729"),
     .p.type         = AVMEDIA_TYPE_AUDIO,
     .p.id           = AV_CODEC_ID_G729,
     .priv_data_size = sizeof(G729Context),
     .init           = decoder_init,
-    .decode         = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
     .close          = decode_close,
-    .p.capabilities = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
+    .p.capabilities = AV_CODEC_CAP_DR1,
 };
 
 const FFCodec ff_acelp_kelvin_decoder = {
     .p.name         = "acelp.kelvin",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Sipro ACELP.KELVIN"),
+    CODEC_LONG_NAME("Sipro ACELP.KELVIN"),
     .p.type         = AVMEDIA_TYPE_AUDIO,
     .p.id           = AV_CODEC_ID_ACELP_KELVIN,
     .priv_data_size = sizeof(G729Context),
     .init           = decoder_init,
-    .decode         = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
     .close          = decode_close,
-    .p.capabilities = AV_CODEC_CAP_SUBFRAMES | AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
+    .p.capabilities = AV_CODEC_CAP_DR1,
 };

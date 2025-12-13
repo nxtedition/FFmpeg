@@ -148,6 +148,10 @@ FATE_LIBAVUTIL += fate-sha512
 fate-sha512: libavutil/tests/sha512$(EXESUF)
 fate-sha512: CMD = run libavutil/tests/sha512$(EXESUF)
 
+FATE_LIBAVUTIL += fate-side_data_array
+fate-side_data_array: libavutil/tests/side_data_array$(EXESUF)
+fate-side_data_array: CMD = run libavutil/tests/side_data_array$(EXESUF)
+
 FATE_LIBAVUTIL += fate-tree
 fate-tree: libavutil/tests/tree$(EXESUF)
 fate-tree: CMD = run libavutil/tests/tree$(EXESUF)
@@ -169,6 +173,11 @@ fate-tea: CMD = run libavutil/tests/tea$(EXESUF)
 FATE_LIBAVUTIL += fate-opt
 fate-opt: libavutil/tests/opt$(EXESUF)
 fate-opt: CMD = run libavutil/tests/opt$(EXESUF)
+
+FATE_LIBAVUTIL += fate-uuid
+fate-uuid: libavutil/tests/uuid$(EXESUF)
+fate-uuid: CMD = run libavutil/tests/uuid$(EXESUF)
+fate-uuid: CMP = null
 
 FATE_LIBAVUTIL += $(FATE_LIBAVUTIL-yes)
 FATE-$(CONFIG_AVUTIL) += $(FATE_LIBAVUTIL)

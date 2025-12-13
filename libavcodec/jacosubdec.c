@@ -32,8 +32,6 @@
 #include "libavutil/bprint.h"
 #include "libavutil/time_internal.h"
 
-#undef time
-
 static int insert_text(AVBPrint *dst, const char *in, const char *arg)
 {
     av_bprintf(dst, "%s", arg);
@@ -162,11 +160,10 @@ static void jacosub_to_ass(AVCodecContext *avctx, AVBPrint *dst, const char *src
     }
 }
 
-static int jacosub_decode_frame(AVCodecContext *avctx,
-                                void *data, int *got_sub_ptr, AVPacket *avpkt)
+static int jacosub_decode_frame(AVCodecContext *avctx, AVSubtitle *sub,
+                                int *got_sub_ptr, const AVPacket *avpkt)
 {
     int ret;
-    AVSubtitle *sub = data;
     const char *ptr = avpkt->data;
     FFASSDecoderContext *s = avctx->priv_data;
 
@@ -196,12 +193,11 @@ end:
 
 const FFCodec ff_jacosub_decoder = {
     .p.name         = "jacosub",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("JACOsub subtitle"),
+    CODEC_LONG_NAME("JACOsub subtitle"),
     .p.type         = AVMEDIA_TYPE_SUBTITLE,
     .p.id           = AV_CODEC_ID_JACOSUB,
     .init           = ff_ass_subtitle_header_default,
-    .decode         = jacosub_decode_frame,
+    FF_CODEC_DECODE_SUB_CB(jacosub_decode_frame),
     .flush          = ff_ass_decoder_flush,
     .priv_data_size = sizeof(FFASSDecoderContext),
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

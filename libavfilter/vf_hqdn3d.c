@@ -31,13 +31,14 @@
 #include "config.h"
 #include "libavutil/attributes.h"
 #include "libavutil/common.h"
+#include "libavutil/emms.h"
+#include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/opt.h"
 
 #include "avfilter.h"
-#include "formats.h"
-#include "internal.h"
+#include "filters.h"
 #include "video.h"
 #include "vf_hqdn3d.h"
 
@@ -180,7 +181,7 @@ static void precalc_coefs(double dist25, int depth, int16_t *ct)
     gamma = log(0.25) / log(1.0 - FFMIN(dist25,252.0)/255.0 - 0.00001);
 
     for (i = -(256<<LUT_BITS); i < 256<<LUT_BITS; i++) {
-        double f = ((i<<(9-LUT_BITS)) + (1<<(8-LUT_BITS)) - 1) / 512.0; // midpoint of the bin
+        double f = (i * (1 << (9-LUT_BITS)) + (1<<(8-LUT_BITS)) - 1) / 512.0; // midpoint of the bin
         simil = FFMAX(0, 1.0 - fabs(f) / 255.0);
         C = pow(simil, gamma) * 256.0 * f;
         ct[(256<<LUT_BITS)+i] = lrint(C);
@@ -278,8 +279,9 @@ static int config_input(AVFilterLink *inlink)
 
     calc_coefs(ctx);
 
-    if (ARCH_X86)
-        ff_hqdn3d_init_x86(s);
+#if ARCH_X86 && HAVE_X86ASM
+    ff_hqdn3d_init_x86(s);
+#endif
 
     return 0;
 }
@@ -382,23 +384,16 @@ static const AVFilterPad avfilter_vf_hqdn3d_inputs[] = {
 };
 
 
-static const AVFilterPad avfilter_vf_hqdn3d_outputs[] = {
-    {
-        .name = "default",
-        .type = AVMEDIA_TYPE_VIDEO
-    },
-};
-
-const AVFilter ff_vf_hqdn3d = {
-    .name          = "hqdn3d",
-    .description   = NULL_IF_CONFIG_SMALL("Apply a High Quality 3D Denoiser."),
+const FFFilter ff_vf_hqdn3d = {
+    .p.name        = "hqdn3d",
+    .p.description = NULL_IF_CONFIG_SMALL("Apply a High Quality 3D Denoiser."),
+    .p.priv_class  = &hqdn3d_class,
+    .p.flags       = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL | AVFILTER_FLAG_SLICE_THREADS,
     .priv_size     = sizeof(HQDN3DContext),
-    .priv_class    = &hqdn3d_class,
     .init          = init,
     .uninit        = uninit,
     FILTER_INPUTS(avfilter_vf_hqdn3d_inputs),
-    FILTER_OUTPUTS(avfilter_vf_hqdn3d_outputs),
+    FILTER_OUTPUTS(ff_video_default_filterpad),
     FILTER_PIXFMTS_ARRAY(pix_fmts),
-    .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL | AVFILTER_FLAG_SLICE_THREADS,
     .process_command = process_command,
 };

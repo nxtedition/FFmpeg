@@ -35,6 +35,7 @@
 #include "libavutil/time.h"
 
 #include "avdevice.h"
+#include "libavformat/demux.h"
 #include "libavformat/internal.h"
 
 #include "oss.h"
@@ -91,7 +92,7 @@ static int audio_read_packet(AVFormatContext *s1, AVPacket *pkt)
         bdelay += abufi.bytes;
     }
     /* subtract time represented by the number of bytes in the audio fifo */
-    cur_time -= (bdelay * 1000000LL) / (s->sample_rate * s->channels);
+    cur_time -= (bdelay * 1000000LL) / (s->sample_rate * s->sample_size * s->channels);
 
     /* convert to wanted units */
     pkt->pts = cur_time;
@@ -130,13 +131,13 @@ static const AVClass oss_demuxer_class = {
     .category       = AV_CLASS_CATEGORY_DEVICE_AUDIO_INPUT,
 };
 
-const AVInputFormat ff_oss_demuxer = {
-    .name           = "oss",
-    .long_name      = NULL_IF_CONFIG_SMALL("OSS (Open Sound System) capture"),
+const FFInputFormat ff_oss_demuxer = {
+    .p.name         = "oss",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("OSS (Open Sound System) capture"),
+    .p.flags        = AVFMT_NOFILE,
+    .p.priv_class   = &oss_demuxer_class,
     .priv_data_size = sizeof(OSSAudioData),
     .read_header    = audio_read_header,
     .read_packet    = audio_read_packet,
     .read_close     = audio_read_close,
-    .flags          = AVFMT_NOFILE,
-    .priv_class     = &oss_demuxer_class,
 };

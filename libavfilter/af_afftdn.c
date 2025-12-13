@@ -20,13 +20,14 @@
 
 #include <float.h>
 
+#include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/tx.h"
 #include "avfilter.h"
 #include "audio.h"
-#include "formats.h"
 #include "filters.h"
 
 #define C       (M_LN10 * 0.1)
@@ -71,6 +72,7 @@ typedef struct DeNoiseChannel {
     double     *band_amt;
     double     *band_excit;
     double     *gain;
+    double     *smoothed_gain;
     double     *prior;
     double     *prior_band_excit;
     double     *clean_data;
@@ -80,8 +82,8 @@ typedef struct DeNoiseChannel {
     double     *abs_var;
     double     *rel_var;
     double     *min_abs_var;
-    float      *fft_in;
-    AVComplexFloat *fft_out;
+    void       *fft_in;
+    void       *fft_out;
     AVTXContext *fft, *ifft;
     av_tx_fn   tx_fn, itx_fn;
 
@@ -104,6 +106,10 @@ typedef struct DeNoiseChannel {
 typedef struct AudioFFTDeNoiseContext {
     const AVClass *class;
 
+    int     format;
+    size_t  sample_size;
+    size_t  complex_sample_size;
+
     float   noise_reduction;
     float   noise_floor;
     int     noise_type;
@@ -114,6 +120,7 @@ typedef struct AudioFFTDeNoiseContext {
     int     output_mode;
     int     noise_floor_link;
     float   ratio;
+    int     gain_smooth;
     float   band_multiplier;
     float   floor_offset;
 
@@ -162,16 +169,16 @@ static const AVOption afftdn_options[] = {
     { "nr", "set the noise reduction",    OFFSET(noise_reduction), AV_OPT_TYPE_FLOAT,  {.dbl = 12},          .01, 97, AFR },
     { "noise_floor", "set the noise floor",OFFSET(noise_floor),    AV_OPT_TYPE_FLOAT,  {.dbl =-50},          -80,-20, AFR },
     { "nf", "set the noise floor",        OFFSET(noise_floor),     AV_OPT_TYPE_FLOAT,  {.dbl =-50},          -80,-20, AFR },
-    { "noise_type", "set the noise type", OFFSET(noise_type),      AV_OPT_TYPE_INT,    {.i64 = WHITE_NOISE}, WHITE_NOISE, NB_NOISE-1, AF, "type" },
-    { "nt", "set the noise type",         OFFSET(noise_type),      AV_OPT_TYPE_INT,    {.i64 = WHITE_NOISE}, WHITE_NOISE, NB_NOISE-1, AF, "type" },
-    {  "white", "white noise",            0,                       AV_OPT_TYPE_CONST,  {.i64 = WHITE_NOISE},   0,  0, AF, "type" },
-    {  "w", "white noise",                0,                       AV_OPT_TYPE_CONST,  {.i64 = WHITE_NOISE},   0,  0, AF, "type" },
-    {  "vinyl", "vinyl noise",            0,                       AV_OPT_TYPE_CONST,  {.i64 = VINYL_NOISE},   0,  0, AF, "type" },
-    {  "v", "vinyl noise",                0,                       AV_OPT_TYPE_CONST,  {.i64 = VINYL_NOISE},   0,  0, AF, "type" },
-    {  "shellac", "shellac noise",        0,                       AV_OPT_TYPE_CONST,  {.i64 = SHELLAC_NOISE}, 0,  0, AF, "type" },
-    {  "s", "shellac noise",              0,                       AV_OPT_TYPE_CONST,  {.i64 = SHELLAC_NOISE}, 0,  0, AF, "type" },
-    {  "custom", "custom noise",          0,                       AV_OPT_TYPE_CONST,  {.i64 = CUSTOM_NOISE},  0,  0, AF, "type" },
-    {  "c", "custom noise",               0,                       AV_OPT_TYPE_CONST,  {.i64 = CUSTOM_NOISE},  0,  0, AF, "type" },
+    { "noise_type", "set the noise type", OFFSET(noise_type),      AV_OPT_TYPE_INT,    {.i64 = WHITE_NOISE}, WHITE_NOISE, NB_NOISE-1, AF, .unit = "type" },
+    { "nt", "set the noise type",         OFFSET(noise_type),      AV_OPT_TYPE_INT,    {.i64 = WHITE_NOISE}, WHITE_NOISE, NB_NOISE-1, AF, .unit = "type" },
+    {  "white", "white noise",            0,                       AV_OPT_TYPE_CONST,  {.i64 = WHITE_NOISE},   0,  0, AF, .unit = "type" },
+    {  "w", "white noise",                0,                       AV_OPT_TYPE_CONST,  {.i64 = WHITE_NOISE},   0,  0, AF, .unit = "type" },
+    {  "vinyl", "vinyl noise",            0,                       AV_OPT_TYPE_CONST,  {.i64 = VINYL_NOISE},   0,  0, AF, .unit = "type" },
+    {  "v", "vinyl noise",                0,                       AV_OPT_TYPE_CONST,  {.i64 = VINYL_NOISE},   0,  0, AF, .unit = "type" },
+    {  "shellac", "shellac noise",        0,                       AV_OPT_TYPE_CONST,  {.i64 = SHELLAC_NOISE}, 0,  0, AF, .unit = "type" },
+    {  "s", "shellac noise",              0,                       AV_OPT_TYPE_CONST,  {.i64 = SHELLAC_NOISE}, 0,  0, AF, .unit = "type" },
+    {  "custom", "custom noise",          0,                       AV_OPT_TYPE_CONST,  {.i64 = CUSTOM_NOISE},  0,  0, AF, .unit = "type" },
+    {  "c", "custom noise",               0,                       AV_OPT_TYPE_CONST,  {.i64 = CUSTOM_NOISE},  0,  0, AF, .unit = "type" },
     { "band_noise", "set the custom bands noise", OFFSET(band_noise_str),  AV_OPT_TYPE_STRING, {.str = 0},     0,  0, AF },
     { "bn", "set the custom bands noise", OFFSET(band_noise_str),  AV_OPT_TYPE_STRING, {.str = 0},             0,  0, AF },
     { "residual_floor", "set the residual floor",OFFSET(residual_floor),  AV_OPT_TYPE_FLOAT, {.dbl =-38},    -80,-20, AFR },
@@ -180,33 +187,35 @@ static const AVOption afftdn_options[] = {
     { "tn", "track noise",                OFFSET(track_noise),     AV_OPT_TYPE_BOOL,   {.i64 =  0},            0,  1, AFR },
     { "track_residual", "track residual", OFFSET(track_residual),  AV_OPT_TYPE_BOOL,   {.i64 =  0},            0,  1, AFR },
     { "tr", "track residual",             OFFSET(track_residual),  AV_OPT_TYPE_BOOL,   {.i64 =  0},            0,  1, AFR },
-    { "output_mode", "set output mode",   OFFSET(output_mode),     AV_OPT_TYPE_INT,    {.i64 = OUT_MODE},      0,  NB_MODES-1, AFR, "mode" },
-    { "om", "set output mode",            OFFSET(output_mode),     AV_OPT_TYPE_INT,    {.i64 = OUT_MODE},      0,  NB_MODES-1, AFR, "mode" },
-    {  "input", "input",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = IN_MODE},       0,  0, AFR, "mode" },
-    {  "i", "input",                      0,                       AV_OPT_TYPE_CONST,  {.i64 = IN_MODE},       0,  0, AFR, "mode" },
-    {  "output", "output",                0,                       AV_OPT_TYPE_CONST,  {.i64 = OUT_MODE},      0,  0, AFR, "mode" },
-    {  "o", "output",                     0,                       AV_OPT_TYPE_CONST,  {.i64 = OUT_MODE},      0,  0, AFR, "mode" },
-    {  "noise", "noise",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = NOISE_MODE},    0,  0, AFR, "mode" },
-    {  "n", "noise",                      0,                       AV_OPT_TYPE_CONST,  {.i64 = NOISE_MODE},    0,  0, AFR, "mode" },
+    { "output_mode", "set output mode",   OFFSET(output_mode),     AV_OPT_TYPE_INT,    {.i64 = OUT_MODE},      0,  NB_MODES-1, AFR, .unit = "mode" },
+    { "om", "set output mode",            OFFSET(output_mode),     AV_OPT_TYPE_INT,    {.i64 = OUT_MODE},      0,  NB_MODES-1, AFR, .unit = "mode" },
+    {  "input", "input",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = IN_MODE},       0,  0, AFR, .unit = "mode" },
+    {  "i", "input",                      0,                       AV_OPT_TYPE_CONST,  {.i64 = IN_MODE},       0,  0, AFR, .unit = "mode" },
+    {  "output", "output",                0,                       AV_OPT_TYPE_CONST,  {.i64 = OUT_MODE},      0,  0, AFR, .unit = "mode" },
+    {  "o", "output",                     0,                       AV_OPT_TYPE_CONST,  {.i64 = OUT_MODE},      0,  0, AFR, .unit = "mode" },
+    {  "noise", "noise",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = NOISE_MODE},    0,  0, AFR, .unit = "mode" },
+    {  "n", "noise",                      0,                       AV_OPT_TYPE_CONST,  {.i64 = NOISE_MODE},    0,  0, AFR, .unit = "mode" },
     { "adaptivity", "set adaptivity factor",OFFSET(ratio),         AV_OPT_TYPE_FLOAT,  {.dbl = 0.5},           0,  1, AFR },
     { "ad",         "set adaptivity factor",OFFSET(ratio),         AV_OPT_TYPE_FLOAT,  {.dbl = 0.5},           0,  1, AFR },
     { "floor_offset", "set noise floor offset factor",OFFSET(floor_offset), AV_OPT_TYPE_FLOAT, {.dbl = 1.0},  -2,  2, AFR },
     { "fo",           "set noise floor offset factor",OFFSET(floor_offset), AV_OPT_TYPE_FLOAT, {.dbl = 1.0},  -2,  2, AFR },
-    { "noise_link", "set the noise floor link",OFFSET(noise_floor_link),AV_OPT_TYPE_INT,{.i64 = MIN_LINK},     0,  NB_LINK-1, AFR, "link" },
-    { "nl", "set the noise floor link",        OFFSET(noise_floor_link),AV_OPT_TYPE_INT,{.i64 = MIN_LINK},     0,  NB_LINK-1, AFR, "link" },
-    {  "none",    "none",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = NONE_LINK},     0,  0, AFR, "link" },
-    {  "min",     "min",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = MIN_LINK},      0,  0, AFR, "link" },
-    {  "max",     "max",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = MAX_LINK},      0,  0, AFR, "link" },
-    {  "average", "average",              0,                       AV_OPT_TYPE_CONST,  {.i64 = AVERAGE_LINK},  0,  0, AFR, "link" },
+    { "noise_link", "set the noise floor link",OFFSET(noise_floor_link),AV_OPT_TYPE_INT,{.i64 = MIN_LINK},     0,  NB_LINK-1, AFR, .unit = "link" },
+    { "nl", "set the noise floor link",        OFFSET(noise_floor_link),AV_OPT_TYPE_INT,{.i64 = MIN_LINK},     0,  NB_LINK-1, AFR, .unit = "link" },
+    {  "none",    "none",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = NONE_LINK},     0,  0, AFR, .unit = "link" },
+    {  "min",     "min",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = MIN_LINK},      0,  0, AFR, .unit = "link" },
+    {  "max",     "max",                  0,                       AV_OPT_TYPE_CONST,  {.i64 = MAX_LINK},      0,  0, AFR, .unit = "link" },
+    {  "average", "average",              0,                       AV_OPT_TYPE_CONST,  {.i64 = AVERAGE_LINK},  0,  0, AFR, .unit = "link" },
     { "band_multiplier", "set band multiplier",OFFSET(band_multiplier), AV_OPT_TYPE_FLOAT,{.dbl = 1.25},       0.2,5, AF  },
     { "bm",       "set band multiplier",       OFFSET(band_multiplier), AV_OPT_TYPE_FLOAT,{.dbl = 1.25},       0.2,5, AF  },
-    { "sample_noise", "set sample noise mode",OFFSET(sample_noise_mode),AV_OPT_TYPE_INT,{.i64 = SAMPLE_NONE},  0,  NB_SAMPLEMODES-1, AFR, "sample" },
-    { "sn",           "set sample noise mode",OFFSET(sample_noise_mode),AV_OPT_TYPE_INT,{.i64 = SAMPLE_NONE},  0,  NB_SAMPLEMODES-1, AFR, "sample" },
-    {  "none",    "none",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_NONE},   0,  0, AFR, "sample" },
-    {  "start",   "start",                0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_START},  0,  0, AFR, "sample" },
-    {  "begin",   "start",                0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_START},  0,  0, AFR, "sample" },
-    {  "stop",    "stop",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_STOP},   0,  0, AFR, "sample" },
-    {  "end",     "stop",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_STOP},   0,  0, AFR, "sample" },
+    { "sample_noise", "set sample noise mode",OFFSET(sample_noise_mode),AV_OPT_TYPE_INT,{.i64 = SAMPLE_NONE},  0,  NB_SAMPLEMODES-1, AFR, .unit = "sample" },
+    { "sn",           "set sample noise mode",OFFSET(sample_noise_mode),AV_OPT_TYPE_INT,{.i64 = SAMPLE_NONE},  0,  NB_SAMPLEMODES-1, AFR, .unit = "sample" },
+    {  "none",    "none",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_NONE},   0,  0, AFR, .unit = "sample" },
+    {  "start",   "start",                0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_START},  0,  0, AFR, .unit = "sample" },
+    {  "begin",   "start",                0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_START},  0,  0, AFR, .unit = "sample" },
+    {  "stop",    "stop",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_STOP},   0,  0, AFR, .unit = "sample" },
+    {  "end",     "stop",                 0,                       AV_OPT_TYPE_CONST,  {.i64 = SAMPLE_STOP},   0,  0, AFR, .unit = "sample" },
+    { "gain_smooth", "set gain smooth radius",OFFSET(gain_smooth), AV_OPT_TYPE_INT,    {.i64 = 0},             0, 50, AFR },
+    { "gs",          "set gain smooth radius",OFFSET(gain_smooth), AV_OPT_TYPE_INT,    {.i64 = 0},             0, 50, AFR },
     { NULL }
 };
 
@@ -343,23 +352,36 @@ static double floor_offset(const double *S, int size, double mean)
 
 static void process_frame(AVFilterContext *ctx,
                           AudioFFTDeNoiseContext *s, DeNoiseChannel *dnch,
-                          AVComplexFloat *fft_data,
                           double *prior, double *prior_band_excit, int track_noise)
 {
     AVFilterLink *outlink = ctx->outputs[0];
+    FilterLink      *outl = ff_filter_link(outlink);
     const double *abs_var = dnch->abs_var;
-    const double ratio = outlink->frame_count_out ? s->ratio : 1.0;
+    const double ratio = outl->frame_count_out ? s->ratio : 1.0;
     const double rratio = 1. - ratio;
     const int *bin2band = s->bin2band;
     double *noisy_data = dnch->noisy_data;
     double *band_excit = dnch->band_excit;
     double *band_amt = dnch->band_amt;
+    double *smoothed_gain = dnch->smoothed_gain;
+    AVComplexDouble *fft_data_dbl = dnch->fft_out;
+    AVComplexFloat *fft_data_flt = dnch->fft_out;
     double *gain = dnch->gain;
 
     for (int i = 0; i < s->bin_count; i++) {
         double sqr_new_gain, new_gain, power, mag, mag_abs_var, new_mag_abs_var;
 
-        noisy_data[i] = mag = hypot(fft_data[i].re, fft_data[i].im);
+        switch (s->format) {
+        case AV_SAMPLE_FMT_FLTP:
+            noisy_data[i] = mag = hypot(fft_data_flt[i].re, fft_data_flt[i].im);
+            break;
+        case AV_SAMPLE_FMT_DBLP:
+            noisy_data[i] = mag = hypot(fft_data_dbl[i].re, fft_data_dbl[i].im);
+            break;
+        default:
+            av_assert0(0);
+        }
+
         power = mag * mag;
         mag_abs_var = power / abs_var[i];
         new_mag_abs_var = ratio * prior[i] + rratio * fmax(mag_abs_var - 1.0, 0.0);
@@ -421,11 +443,43 @@ static void process_frame(AVFilterContext *ctx,
         }
     }
 
-    for (int i = 0; i < s->bin_count; i++) {
-        const double new_gain = gain[i];
+    memcpy(smoothed_gain, gain, s->bin_count * sizeof(*smoothed_gain));
+    if (s->gain_smooth > 0) {
+        const int r = s->gain_smooth;
 
-        fft_data[i].re *= new_gain;
-        fft_data[i].im *= new_gain;
+        for (int i = r; i < s->bin_count - r; i++) {
+            const double gc = gain[i];
+            double num = 0., den = 0.;
+
+            for (int j = -r; j <= r; j++) {
+                const double g = gain[i + j];
+                const double d = 1. - fabs(g - gc);
+
+                num += g * d;
+                den += d;
+            }
+
+            smoothed_gain[i] = num / den;
+        }
+    }
+
+    switch (s->format) {
+    case AV_SAMPLE_FMT_FLTP:
+        for (int i = 0; i < s->bin_count; i++) {
+            const float new_gain = smoothed_gain[i];
+
+            fft_data_flt[i].re *= new_gain;
+            fft_data_flt[i].im *= new_gain;
+        }
+        break;
+    case AV_SAMPLE_FMT_DBLP:
+        for (int i = 0; i < s->bin_count; i++) {
+            const double new_gain = smoothed_gain[i];
+
+            fft_data_dbl[i].re *= new_gain;
+            fft_data_dbl[i].im *= new_gain;
+        }
+        break;
     }
 }
 
@@ -487,8 +541,9 @@ static void set_band_parameters(AudioFFTDeNoiseContext *s,
         dnch->noise_band_auto_var[i] = dnch->max_var * exp((process_get_band_noise(s, dnch, i) - 2.0) * C);
 }
 
-static void read_custom_noise(AudioFFTDeNoiseContext *s, int ch)
+static void read_custom_noise(AVFilterContext *ctx, int ch)
 {
+    AudioFFTDeNoiseContext *s = ctx->priv;
     DeNoiseChannel *dnch = &s->dnch[ch];
     char *custom_noise_str, *p, *arg, *saveptr = NULL;
     double band_noise[NB_PROFILE_BANDS] = { 0.f };
@@ -511,7 +566,7 @@ static void read_custom_noise(AudioFFTDeNoiseContext *s, int ch)
 
         ret = av_sscanf(arg, "%f", &noise);
         if (ret != 1) {
-            av_log(s, AV_LOG_ERROR, "Custom band noise must be float.\n");
+            av_log(ctx, AV_LOG_ERROR, "Custom band noise must be float.\n");
             break;
         }
 
@@ -579,7 +634,27 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     AudioFFTDeNoiseContext *s = ctx->priv;
     double wscale, sar, sum, sdiv;
-    int i, j, k, m, n, ret;
+    int i, j, k, m, n, ret, tx_type;
+    double dscale = 1.;
+    float fscale = 1.f;
+    void *scale;
+
+    s->format = inlink->format;
+
+    switch (s->format) {
+    case AV_SAMPLE_FMT_FLTP:
+        s->sample_size = sizeof(float);
+        s->complex_sample_size = sizeof(AVComplexFloat);
+        tx_type = AV_TX_FLOAT_RDFT;
+        scale = &fscale;
+        break;
+    case AV_SAMPLE_FMT_DBLP:
+        s->sample_size = sizeof(double);
+        s->complex_sample_size = sizeof(AVComplexDouble);
+        tx_type = AV_TX_DOUBLE_RDFT;
+        scale = &dscale;
+        break;
+    }
 
     s->dnch = av_calloc(inlink->ch_layout.nb_channels, sizeof(*s->dnch));
     if (!s->dnch)
@@ -646,7 +721,6 @@ static int config_input(AVFilterLink *inlink)
 
     for (int ch = 0; ch < inlink->ch_layout.nb_channels; ch++) {
         DeNoiseChannel *dnch = &s->dnch[ch];
-        float scale = 1.f;
 
         switch (s->noise_type) {
         case WHITE_NOISE:
@@ -662,7 +736,7 @@ static int config_input(AVFilterLink *inlink)
                 dnch->band_noise[i] = get_band_noise(s, i, 1.0, 500.0, 1.0E10);
             break;
         case CUSTOM_NOISE:
-            read_custom_noise(s, ch);
+            read_custom_noise(ctx, ch);
             break;
         default:
             return AVERROR_BUG;
@@ -674,6 +748,7 @@ static int config_input(AVFilterLink *inlink)
         dnch->band_amt = av_calloc(s->number_of_bands, sizeof(*dnch->band_amt));
         dnch->band_excit = av_calloc(s->number_of_bands, sizeof(*dnch->band_excit));
         dnch->gain = av_calloc(s->bin_count, sizeof(*dnch->gain));
+        dnch->smoothed_gain = av_calloc(s->bin_count, sizeof(*dnch->smoothed_gain));
         dnch->prior = av_calloc(s->bin_count, sizeof(*dnch->prior));
         dnch->prior_band_excit = av_calloc(s->number_of_bands, sizeof(*dnch->prior_band_excit));
         dnch->clean_data = av_calloc(s->bin_count, sizeof(*dnch->clean_data));
@@ -682,12 +757,12 @@ static int config_input(AVFilterLink *inlink)
         dnch->abs_var = av_calloc(s->bin_count, sizeof(*dnch->abs_var));
         dnch->rel_var = av_calloc(s->bin_count, sizeof(*dnch->rel_var));
         dnch->min_abs_var = av_calloc(s->bin_count, sizeof(*dnch->min_abs_var));
-        dnch->fft_in = av_calloc(s->fft_length2, sizeof(*dnch->fft_in));
-        dnch->fft_out = av_calloc(s->fft_length2 + 1, sizeof(*dnch->fft_out));
-        ret = av_tx_init(&dnch->fft, &dnch->tx_fn, AV_TX_FLOAT_RDFT, 0, s->fft_length2, &scale, 0);
+        dnch->fft_in = av_calloc(s->fft_length2, s->sample_size);
+        dnch->fft_out = av_calloc(s->fft_length2 + 1, s->complex_sample_size);
+        ret = av_tx_init(&dnch->fft, &dnch->tx_fn, tx_type, 0, s->fft_length2, scale, 0);
         if (ret < 0)
             return ret;
-        ret = av_tx_init(&dnch->ifft, &dnch->itx_fn, AV_TX_FLOAT_RDFT, 1, s->fft_length2, &scale, 0);
+        ret = av_tx_init(&dnch->ifft, &dnch->itx_fn, tx_type, 1, s->fft_length2, scale, 0);
         if (ret < 0)
             return ret;
         dnch->spread_function = av_calloc(s->number_of_bands * s->number_of_bands,
@@ -697,6 +772,7 @@ static int config_input(AVFilterLink *inlink)
             !dnch->band_amt ||
             !dnch->band_excit ||
             !dnch->gain ||
+            !dnch->smoothed_gain ||
             !dnch->prior ||
             !dnch->prior_band_excit ||
             !dnch->clean_data ||
@@ -834,17 +910,33 @@ static void sample_noise_block(AudioFFTDeNoiseContext *s,
                                DeNoiseChannel *dnch,
                                AVFrame *in, int ch)
 {
-    float *src = (float *)in->extended_data[ch];
+    double *src_dbl = (double *)in->extended_data[ch];
+    float *src_flt = (float *)in->extended_data[ch];
     double mag2, var = 0.0, avr = 0.0, avi = 0.0;
+    AVComplexDouble *fft_out_dbl = dnch->fft_out;
+    AVComplexFloat *fft_out_flt = dnch->fft_out;
+    double *fft_in_dbl = dnch->fft_in;
+    float *fft_in_flt = dnch->fft_in;
     int edge, j, k, n, edgemax;
 
-    for (int i = 0; i < s->window_length; i++)
-        dnch->fft_in[i] = s->window[i] * src[i] * (1LL << 23);
+    switch (s->format) {
+    case AV_SAMPLE_FMT_FLTP:
+        for (int i = 0; i < s->window_length; i++)
+            fft_in_flt[i] = s->window[i] * src_flt[i] * (1LL << 23);
 
-    for (int i = s->window_length; i < s->fft_length2; i++)
-        dnch->fft_in[i] = 0.0;
+        for (int i = s->window_length; i < s->fft_length2; i++)
+            fft_in_flt[i] = 0.f;
+        break;
+    case AV_SAMPLE_FMT_DBLP:
+        for (int i = 0; i < s->window_length; i++)
+            fft_in_dbl[i] = s->window[i] * src_dbl[i] * (1LL << 23);
 
-    dnch->tx_fn(dnch->fft, dnch->fft_out, dnch->fft_in, sizeof(float));
+        for (int i = s->window_length; i < s->fft_length2; i++)
+            fft_in_dbl[i] = 0.;
+        break;
+    }
+
+    dnch->tx_fn(dnch->fft, dnch->fft_out, dnch->fft_in, s->sample_size);
 
     edge = s->noise_band_edge[0];
     j = edge;
@@ -869,10 +961,23 @@ static void sample_noise_block(AudioFFTDeNoiseContext *s,
             avr = 0.0;
             avi = 0.0;
         }
-        avr += dnch->fft_out[n].re;
-        avi += dnch->fft_out[n].im;
-        mag2 = dnch->fft_out[n].re * dnch->fft_out[n].re +
-               dnch->fft_out[n].im * dnch->fft_out[n].im;
+
+        switch (s->format) {
+        case AV_SAMPLE_FMT_FLTP:
+            avr += fft_out_flt[n].re;
+            avi += fft_out_flt[n].im;
+            mag2 = fft_out_flt[n].re * fft_out_flt[n].re +
+                   fft_out_flt[n].im * fft_out_flt[n].im;
+            break;
+        case AV_SAMPLE_FMT_DBLP:
+            avr += fft_out_dbl[n].re;
+            avi += fft_out_dbl[n].im;
+            mag2 = fft_out_dbl[n].re * fft_out_dbl[n].re +
+                   fft_out_dbl[n].im * fft_out_dbl[n].im;
+            break;
+        default:
+            av_assert2(0);
+        }
 
         mag2 = fmax(mag2, s->sample_floor);
 
@@ -905,10 +1010,11 @@ static void finish_sample_noise(AudioFFTDeNoiseContext *s,
     }
 }
 
-static void set_noise_profile(AudioFFTDeNoiseContext *s,
+static void set_noise_profile(AVFilterContext *ctx,
                               DeNoiseChannel *dnch,
                               double *sample_noise)
 {
+    AudioFFTDeNoiseContext *s = ctx->priv;
     double new_band_noise[NB_PROFILE_BANDS];
     double temp[NB_PROFILE_BANDS];
     double sum = 0.0;
@@ -932,13 +1038,13 @@ static void set_noise_profile(AudioFFTDeNoiseContext *s,
 
     reduce_mean(temp);
 
-    av_log(s, AV_LOG_INFO, "bn=");
+    av_log(ctx, AV_LOG_INFO, "bn=");
     for (int m = 0; m < NB_PROFILE_BANDS; m++) {
         new_band_noise[m] = temp[m];
         new_band_noise[m] = av_clipd(new_band_noise[m], -24.0, 24.0);
-        av_log(s, AV_LOG_INFO, "%f ", new_band_noise[m]);
+        av_log(ctx, AV_LOG_INFO, "%f ", new_band_noise[m]);
     }
-    av_log(s, AV_LOG_INFO, "\n");
+    av_log(ctx, AV_LOG_INFO, "\n");
     memcpy(dnch->band_noise, new_band_noise, sizeof(new_band_noise));
 }
 
@@ -953,27 +1059,48 @@ static int filter_channel(AVFilterContext *ctx, void *arg, int jobnr, int nb_job
 
     for (int ch = start; ch < end; ch++) {
         DeNoiseChannel *dnch = &s->dnch[ch];
-        const float *src = (const float *)in->extended_data[ch];
+        const double *src_dbl = (const double *)in->extended_data[ch];
+        const float *src_flt = (const float *)in->extended_data[ch];
         double *dst = dnch->out_samples;
-        float *fft_in = dnch->fft_in;
+        double *fft_in_dbl = dnch->fft_in;
+        float *fft_in_flt = dnch->fft_in;
 
-        for (int m = 0; m < window_length; m++)
-            fft_in[m] = window[m] * src[m] * (1LL << 23);
+        switch (s->format) {
+        case AV_SAMPLE_FMT_FLTP:
+            for (int m = 0; m < window_length; m++)
+                fft_in_flt[m] = window[m] * src_flt[m] * (1LL << 23);
 
-        for (int m = window_length; m < s->fft_length2; m++)
-            fft_in[m] = 0;
+            for (int m = window_length; m < s->fft_length2; m++)
+                fft_in_flt[m] = 0.f;
+            break;
+        case AV_SAMPLE_FMT_DBLP:
+            for (int m = 0; m < window_length; m++)
+                fft_in_dbl[m] = window[m] * src_dbl[m] * (1LL << 23);
 
-        dnch->tx_fn(dnch->fft, dnch->fft_out, fft_in, sizeof(float));
+            for (int m = window_length; m < s->fft_length2; m++)
+                fft_in_dbl[m] = 0.;
+            break;
+        }
 
-        process_frame(ctx, s, dnch, dnch->fft_out,
+        dnch->tx_fn(dnch->fft, dnch->fft_out, dnch->fft_in, s->sample_size);
+
+        process_frame(ctx, s, dnch,
                       dnch->prior,
                       dnch->prior_band_excit,
                       s->track_noise);
 
-        dnch->itx_fn(dnch->ifft, fft_in, dnch->fft_out, sizeof(float));
+        dnch->itx_fn(dnch->ifft, dnch->fft_in, dnch->fft_out, s->complex_sample_size);
 
-        for (int m = 0; m < window_length; m++)
-            dst[m] += s->window[m] * fft_in[m] / (1LL << 23);
+        switch (s->format) {
+        case AV_SAMPLE_FMT_FLTP:
+            for (int m = 0; m < window_length; m++)
+                dst[m] += s->window[m] * fft_in_flt[m] / (1LL << 23);
+            break;
+        case AV_SAMPLE_FMT_DBLP:
+            for (int m = 0; m < window_length; m++)
+                dst[m] += s->window[m] * fft_in_dbl[m] / (1LL << 23);
+            break;
+        }
     }
 
     return 0;
@@ -989,11 +1116,14 @@ static int output_frame(AVFilterLink *inlink, AVFrame *in)
     AVFrame *out;
 
     for (int ch = 0; ch < s->channels; ch++) {
-        float *src = (float *)s->winframe->extended_data[ch];
+        uint8_t *src = (uint8_t *)s->winframe->extended_data[ch];
 
-        memmove(src, &src[s->sample_advance], offset * sizeof(float));
-        memcpy(&src[offset], in->extended_data[ch], in->nb_samples * sizeof(float));
-        memset(&src[offset + in->nb_samples], 0, (s->sample_advance - in->nb_samples) * sizeof(float));
+        memmove(src, src + s->sample_advance * s->sample_size,
+                offset * s->sample_size);
+        memcpy(src + offset * s->sample_size, in->extended_data[ch],
+               in->nb_samples * s->sample_size);
+        memset(src + s->sample_size * (offset + in->nb_samples), 0,
+               (s->sample_advance - in->nb_samples) * s->sample_size);
     }
 
     if (s->track_noise) {
@@ -1054,7 +1184,7 @@ static int output_frame(AVFilterLink *inlink, AVFrame *in)
             if (s->sample_noise_blocks <= 0)
                 break;
             finish_sample_noise(s, dnch, sample_noise);
-            set_noise_profile(s, dnch, sample_noise);
+            set_noise_profile(ctx, dnch, sample_noise);
             set_parameters(s, dnch, 1, 1);
         }
         s->sample_noise = 0;
@@ -1074,27 +1204,53 @@ static int output_frame(AVFilterLink *inlink, AVFrame *in)
             return AVERROR(ENOMEM);
         }
 
-        out->pts = in->pts;
+        av_frame_copy_props(out, in);
     }
 
     for (int ch = 0; ch < inlink->ch_layout.nb_channels; ch++) {
         DeNoiseChannel *dnch = &s->dnch[ch];
         double *src = dnch->out_samples;
-        const float *orig = (const float *)s->winframe->extended_data[ch];
-        float *dst = (float *)out->extended_data[ch];
+        const double *orig_dbl = (const double *)s->winframe->extended_data[ch];
+        const float *orig_flt = (const float *)s->winframe->extended_data[ch];
+        double *dst_dbl = (double *)out->extended_data[ch];
+        float *dst_flt = (float *)out->extended_data[ch];
 
         switch (output_mode) {
         case IN_MODE:
-            for (int m = 0; m < out->nb_samples; m++)
-                dst[m] = orig[m];
+            switch (s->format) {
+            case AV_SAMPLE_FMT_FLTP:
+                for (int m = 0; m < out->nb_samples; m++)
+                    dst_flt[m] = orig_flt[m];
+                break;
+            case AV_SAMPLE_FMT_DBLP:
+                for (int m = 0; m < out->nb_samples; m++)
+                    dst_dbl[m] = orig_dbl[m];
+                break;
+            }
             break;
         case OUT_MODE:
-            for (int m = 0; m < out->nb_samples; m++)
-                dst[m] = src[m];
+            switch (s->format) {
+            case AV_SAMPLE_FMT_FLTP:
+                for (int m = 0; m < out->nb_samples; m++)
+                    dst_flt[m] = src[m];
+                break;
+            case AV_SAMPLE_FMT_DBLP:
+                for (int m = 0; m < out->nb_samples; m++)
+                    dst_dbl[m] = src[m];
+                break;
+            }
             break;
         case NOISE_MODE:
-            for (int m = 0; m < out->nb_samples; m++)
-                dst[m] = orig[m] - src[m];
+            switch (s->format) {
+            case AV_SAMPLE_FMT_FLTP:
+                for (int m = 0; m < out->nb_samples; m++)
+                    dst_flt[m] = orig_flt[m] - src[m];
+                break;
+            case AV_SAMPLE_FMT_DBLP:
+                for (int m = 0; m < out->nb_samples; m++)
+                    dst_dbl[m] = orig_dbl[m] - src[m];
+                break;
+            }
             break;
         default:
             if (in != out)
@@ -1102,6 +1258,7 @@ static int output_frame(AVFilterLink *inlink, AVFrame *in)
             av_frame_free(&out);
             return AVERROR_BUG;
         }
+
         memmove(src, src + s->sample_advance, (s->window_length - s->sample_advance) * sizeof(*src));
         memset(src + (s->window_length - s->sample_advance), 0, s->sample_advance * sizeof(*src));
     }
@@ -1127,6 +1284,11 @@ static int activate(AVFilterContext *ctx)
     if (ret > 0)
         return output_frame(inlink, in);
 
+    if (ff_inlink_queued_samples(inlink) >= s->sample_advance) {
+        ff_filter_set_ready(ctx, 10);
+        return 0;
+    }
+
     FF_FILTER_FORWARD_STATUS(inlink, outlink);
     FF_FILTER_FORWARD_WANTED(outlink, inlink);
 
@@ -1150,6 +1312,7 @@ static av_cold void uninit(AVFilterContext *ctx)
             av_freep(&dnch->band_amt);
             av_freep(&dnch->band_excit);
             av_freep(&dnch->gain);
+            av_freep(&dnch->smoothed_gain);
             av_freep(&dnch->prior);
             av_freep(&dnch->prior_band_excit);
             av_freep(&dnch->clean_data);
@@ -1202,24 +1365,17 @@ static const AVFilterPad inputs[] = {
     },
 };
 
-static const AVFilterPad outputs[] = {
-    {
-        .name = "default",
-        .type = AVMEDIA_TYPE_AUDIO,
-    },
-};
-
-const AVFilter ff_af_afftdn = {
-    .name            = "afftdn",
-    .description     = NULL_IF_CONFIG_SMALL("Denoise audio samples using FFT."),
+const FFFilter ff_af_afftdn = {
+    .p.name          = "afftdn",
+    .p.description   = NULL_IF_CONFIG_SMALL("Denoise audio samples using FFT."),
+    .p.priv_class    = &afftdn_class,
+    .p.flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL |
+                       AVFILTER_FLAG_SLICE_THREADS,
     .priv_size       = sizeof(AudioFFTDeNoiseContext),
-    .priv_class      = &afftdn_class,
     .activate        = activate,
     .uninit          = uninit,
     FILTER_INPUTS(inputs),
-    FILTER_OUTPUTS(outputs),
-    FILTER_SINGLE_SAMPLEFMT(AV_SAMPLE_FMT_FLTP),
+    FILTER_OUTPUTS(ff_audio_default_filterpad),
+    FILTER_SAMPLEFMTS(AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_DBLP),
     .process_command = process_command,
-    .flags           = AVFILTER_FLAG_SUPPORT_TIMELINE_INTERNAL |
-                       AVFILTER_FLAG_SLICE_THREADS,
 };

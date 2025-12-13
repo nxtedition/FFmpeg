@@ -28,6 +28,7 @@
 #include "network.h"
 #include "httpauth.h"
 #include "internal.h"
+#include "os_support.h"
 
 #include "libavutil/log.h"
 #include "libavutil/opt.h"
@@ -74,7 +75,6 @@ enum RTSPControlTransport {
 #define RTSP_DEFAULT_PORT   554
 #define RTSPS_DEFAULT_PORT  322
 #define RTSP_MAX_TRANSPORTS 8
-#define RTSP_TCP_MAX_PACKET_SIZE 1472
 #define RTSP_DEFAULT_AUDIO_SAMPLERATE 44100
 #define RTSP_RTP_PORT_MIN 5000
 #define RTSP_RTP_PORT_MAX 65000
@@ -419,6 +419,17 @@ typedef struct RTSPState {
     int buffer_size;
     int pkt_size;
     char *localaddr;
+
+    /**
+     * Options used for TLS based RTSP streams.
+     */
+    struct {
+        char *ca_file;
+        int verify;
+        char *cert_file;
+        char *key_file;
+        char *host;
+    } tls_opts;
 } RTSPState;
 
 #define RTSP_FLAG_FILTER_SRC  0x1    /**< Filter incoming UDP packets -

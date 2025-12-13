@@ -9,6 +9,7 @@
 /bprint
 /camellia
 /cast5
+/channel_layout
 /color_utils
 /cpu
 /cpu_init
@@ -43,9 +44,11 @@
 /ripemd
 /sha
 /sha512
+/side_data_array
 /softfloat
 /tea
 /tree
 /twofish
 /utf8
+/uuid
 /xtea

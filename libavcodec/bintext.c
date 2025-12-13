@@ -36,7 +36,7 @@
 #include "cga_data.h"
 #include "bintext.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 
 #define FONT_WIDTH 8
 
@@ -93,10 +93,10 @@ static av_cold int decode_init(AVCodecContext *avctx)
             av_log(avctx, AV_LOG_WARNING, "font height %i not supported\n", s->font_height);
             s->font_height = 8;
         case 8:
-            s->font = avpriv_cga_font;
+            s->font = avpriv_cga_font_get();
             break;
         case 16:
-            s->font = avpriv_vga16_font;
+            s->font = avpriv_vga16_font_get();
             break;
         }
     }
@@ -140,9 +140,8 @@ static void draw_char(AVCodecContext *avctx, int c, int a)
     }
 }
 
-static int decode_frame(AVCodecContext *avctx,
-                            void *data, int *got_frame,
-                            AVPacket *avpkt)
+static int decode_frame(AVCodecContext *avctx, AVFrame *frame,
+                        int *got_frame, AVPacket *avpkt)
 {
     XbinContext *s = avctx->priv_data;
     const uint8_t *buf = avpkt->data;
@@ -153,12 +152,11 @@ static int decode_frame(AVCodecContext *avctx,
     if ((avctx->width / FONT_WIDTH) * (avctx->height / s->font_height) / 256 > buf_size)
         return AVERROR_INVALIDDATA;
 
-    s->frame = data;
+    s->frame = frame;
     s->x = s->y = 0;
     if ((ret = ff_get_buffer(avctx, s->frame, 0)) < 0)
         return ret;
     s->frame->pict_type           = AV_PICTURE_TYPE_I;
-    s->frame->palette_has_changed = 1;
     memcpy(s->frame->data[1], s->palette, 16 * 4);
 
     if (avctx->codec_id == AV_CODEC_ID_XBIN) {
@@ -220,39 +218,36 @@ static int decode_frame(AVCodecContext *avctx,
 #if CONFIG_BINTEXT_DECODER
 const FFCodec ff_bintext_decoder = {
     .p.name         = "bintext",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Binary text"),
+    CODEC_LONG_NAME("Binary text"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_BINTEXT,
     .priv_data_size = sizeof(XbinContext),
     .init           = decode_init,
-    .decode         = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };
 #endif
 #if CONFIG_XBIN_DECODER
 const FFCodec ff_xbin_decoder = {
     .p.name         = "xbin",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("eXtended BINary text"),
+    CODEC_LONG_NAME("eXtended BINary text"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_XBIN,
     .priv_data_size = sizeof(XbinContext),
     .init           = decode_init,
-    .decode         = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };
 #endif
 #if CONFIG_IDF_DECODER
 const FFCodec ff_idf_decoder = {
     .p.name         = "idf",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("iCEDraw text"),
+    CODEC_LONG_NAME("iCEDraw text"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_IDF,
     .priv_data_size = sizeof(XbinContext),
     .init           = decode_init,
-    .decode         = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };
 #endif

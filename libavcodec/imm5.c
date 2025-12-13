@@ -18,6 +18,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/attributes.h"
+#include "libavutil/attributes_internal.h"
 #include "libavutil/intreadwrite.h"
 
 #include "avcodec.h"
@@ -51,43 +53,37 @@ static const struct IMM5_unit {
 static av_cold int imm5_init(AVCodecContext *avctx)
 {
     IMM5Context *ctx = avctx->priv_data;
-    const AVCodec *codec;
     int ret;
 
-    codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    if (!codec)
-        return AVERROR_BUG;
-    ctx->h264_avctx = avcodec_alloc_context3(codec);
+    EXTERN const FFCodec ff_h264_decoder;
+    ctx->h264_avctx = avcodec_alloc_context3(&ff_h264_decoder.p);
     if (!ctx->h264_avctx)
         return AVERROR(ENOMEM);
     ctx->h264_avctx->thread_count = 1;
     ctx->h264_avctx->flags        = avctx->flags;
     ctx->h264_avctx->flags2       = avctx->flags2;
-    ret = avcodec_open2(ctx->h264_avctx, codec, NULL);
+    ret = avcodec_open2(ctx->h264_avctx, NULL, NULL);
     if (ret < 0)
         return ret;
 
-    codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
-    if (!codec)
-        return AVERROR_BUG;
-    ctx->hevc_avctx = avcodec_alloc_context3(codec);
+    EXTERN const FFCodec ff_hevc_decoder;
+    ctx->hevc_avctx = avcodec_alloc_context3(&ff_hevc_decoder.p);
     if (!ctx->hevc_avctx)
         return AVERROR(ENOMEM);
     ctx->hevc_avctx->thread_count = 1;
     ctx->hevc_avctx->flags        = avctx->flags;
     ctx->hevc_avctx->flags2       = avctx->flags2;
-    ret = avcodec_open2(ctx->hevc_avctx, codec, NULL);
+    ret = avcodec_open2(ctx->hevc_avctx, NULL, NULL);
     if (ret < 0)
         return ret;
 
     return 0;
 }
 
-static int imm5_decode_frame(AVCodecContext *avctx, void *data,
+static int imm5_decode_frame(AVCodecContext *avctx, AVFrame *frame,
                              int *got_frame, AVPacket *avpkt)
 {
     IMM5Context *ctx = avctx->priv_data;
-    AVFrame *frame = data;
     AVCodecContext *codec_avctx = ctx->h264_avctx;
     int ret;
 
@@ -160,7 +156,7 @@ static int imm5_decode_frame(AVCodecContext *avctx, void *data,
     return avpkt->size;
 }
 
-static void imm5_flush(AVCodecContext *avctx)
+static av_cold void imm5_flush(AVCodecContext *avctx)
 {
     IMM5Context *ctx = avctx->priv_data;
 
@@ -180,14 +176,13 @@ static av_cold int imm5_close(AVCodecContext *avctx)
 
 const FFCodec ff_imm5_decoder = {
     .p.name         = "imm5",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("Infinity IMM5"),
+    CODEC_LONG_NAME("Infinity IMM5"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_IMM5,
     .init           = imm5_init,
-    .decode         = imm5_decode_frame,
+    FF_CODEC_DECODE_CB(imm5_decode_frame),
     .close          = imm5_close,
     .flush          = imm5_flush,
     .priv_data_size = sizeof(IMM5Context),
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

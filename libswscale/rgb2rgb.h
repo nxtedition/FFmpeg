@@ -52,6 +52,10 @@ extern void (*shuffle_bytes_2103)(const uint8_t *src, uint8_t *dst, int src_size
 extern void (*shuffle_bytes_1230)(const uint8_t *src, uint8_t *dst, int src_size);
 extern void (*shuffle_bytes_3012)(const uint8_t *src, uint8_t *dst, int src_size);
 extern void (*shuffle_bytes_3210)(const uint8_t *src, uint8_t *dst, int src_size);
+extern void (*shuffle_bytes_3102)(const uint8_t *src, uint8_t *dst, int src_size);
+extern void (*shuffle_bytes_2013)(const uint8_t *src, uint8_t *dst, int src_size);
+extern void (*shuffle_bytes_2130)(const uint8_t *src, uint8_t *dst, int src_size);
+extern void (*shuffle_bytes_1203)(const uint8_t *src, uint8_t *dst, int src_size);
 
 void rgb64tobgr48_nobswap(const uint8_t *src, uint8_t *dst, int src_size);
 void   rgb64tobgr48_bswap(const uint8_t *src, uint8_t *dst, int src_size);
@@ -76,9 +80,18 @@ void rgb15tobgr15(const uint8_t *src, uint8_t *dst, int src_size);
 void rgb12tobgr12(const uint8_t *src, uint8_t *dst, int src_size);
 void    rgb12to15(const uint8_t *src, uint8_t *dst, int src_size);
 
+void    x2rgb10to48_nobswap(const uint8_t *src, uint8_t *dst, int src_size);
+void      x2rgb10to48_bswap(const uint8_t *src, uint8_t *dst, int src_size);
+void x2rgb10tobgr48_nobswap(const uint8_t *src, uint8_t *dst, int src_size);
+void   x2rgb10tobgr48_bswap(const uint8_t *src, uint8_t *dst, int src_size);
+void    x2rgb10to64_nobswap(const uint8_t *src, uint8_t *dst, int src_size);
+void      x2rgb10to64_bswap(const uint8_t *src, uint8_t *dst, int src_size);
+void x2rgb10tobgr64_nobswap(const uint8_t *src, uint8_t *dst, int src_size);
+void   x2rgb10tobgr64_bswap(const uint8_t *src, uint8_t *dst, int src_size);
+
 void ff_rgb24toyv12_c(const uint8_t *src, uint8_t *ydst, uint8_t *udst,
                       uint8_t *vdst, int width, int height, int lumStride,
-                      int chromStride, int srcStride, int32_t *rgb2yuv);
+                      int chromStride, int srcStride, const int32_t *rgb2yuv);
 
 /**
  * Height should be a multiple of 2 and width should be a multiple of 16.
@@ -121,13 +134,11 @@ extern void (*yuv422ptouyvy)(const uint8_t *ysrc, const uint8_t *usrc, const uin
 /**
  * Height should be a multiple of 2 and width should be a multiple of 2.
  * (If this is a problem for anyone then tell me, and I will fix it.)
- * Chrominance data is only taken from every second line, others are ignored.
- * FIXME: Write high quality version.
  */
 extern void (*ff_rgb24toyv12)(const uint8_t *src, uint8_t *ydst, uint8_t *udst, uint8_t *vdst,
                               int width, int height,
                               int lumStride, int chromStride, int srcStride,
-                              int32_t *rgb2yuv);
+                              const int32_t *rgb2yuv);
 extern void (*planar2x)(const uint8_t *src, uint8_t *dst, int width, int height,
                         int srcStride, int dstStride);
 
@@ -167,6 +178,8 @@ extern void (*yuyvtoyuv422)(uint8_t *ydst, uint8_t *udst, uint8_t *vdst, const u
 void ff_sws_rgb2rgb_init(void);
 
 void rgb2rgb_init_aarch64(void);
+void rgb2rgb_init_riscv(void);
 void rgb2rgb_init_x86(void);
+void rgb2rgb_init_loongarch(void);
 
 #endif /* SWSCALE_RGB2RGB_H */

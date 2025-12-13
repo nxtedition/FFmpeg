@@ -23,10 +23,11 @@
 
 #include "libavutil/common.h"
 #include "libavutil/ffmath.h"
-#include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "avcodec.h"
 #include "celp_filters.h"
 #include "codec_internal.h"
+#include "decode.h"
 #include "internal.h"
 #include "libavutil/lfg.h"
 
@@ -96,16 +97,15 @@ static void make_lpc_coefs(float *lpc, const float *refl, int order)
         memcpy(lpc, cur, sizeof(*lpc) * order);
 }
 
-static void cng_decode_flush(AVCodecContext *avctx)
+static av_cold void cng_decode_flush(AVCodecContext *avctx)
 {
     CNGContext *p = avctx->priv_data;
     p->inited = 0;
 }
 
-static int cng_decode_frame(AVCodecContext *avctx, void *data,
+static int cng_decode_frame(AVCodecContext *avctx, AVFrame *frame,
                             int *got_frame_ptr, AVPacket *avpkt)
 {
-    AVFrame *frame = data;
     CNGContext *p = avctx->priv_data;
     int buf_size  = avpkt->size;
     int ret, i;
@@ -165,17 +165,15 @@ static int cng_decode_frame(AVCodecContext *avctx, void *data,
 
 const FFCodec ff_comfortnoise_decoder = {
     .p.name         = "comfortnoise",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("RFC 3389 comfort noise generator"),
+    CODEC_LONG_NAME("RFC 3389 comfort noise generator"),
     .p.type         = AVMEDIA_TYPE_AUDIO,
     .p.id           = AV_CODEC_ID_COMFORT_NOISE,
     .priv_data_size = sizeof(CNGContext),
     .init           = cng_decode_init,
-    .decode         = cng_decode_frame,
+    FF_CODEC_DECODE_CB(cng_decode_frame),
     .flush          = cng_decode_flush,
     .close          = cng_decode_close,
-    .p.sample_fmts  = (const enum AVSampleFormat[]){ AV_SAMPLE_FMT_S16,
-                                                     AV_SAMPLE_FMT_NONE },
+    CODEC_SAMPLEFMTS(AV_SAMPLE_FMT_S16),
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE |
-                      FF_CODEC_CAP_INIT_CLEANUP,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

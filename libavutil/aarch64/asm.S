@@ -36,6 +36,56 @@
 #   define __has_feature(x) 0
 #endif
 
+#if HAVE_AS_ARCH_DIRECTIVE
+        .arch           AS_ARCH_LEVEL
+#endif
+
+#if HAVE_AS_ARCHEXT_DOTPROD_DIRECTIVE
+#define ENABLE_DOTPROD  .arch_extension dotprod
+#define DISABLE_DOTPROD .arch_extension nodotprod
+#else
+#define ENABLE_DOTPROD
+#define DISABLE_DOTPROD
+#endif
+
+#if HAVE_AS_ARCHEXT_I8MM_DIRECTIVE
+#define ENABLE_I8MM  .arch_extension i8mm
+#define DISABLE_I8MM .arch_extension noi8mm
+#else
+#define ENABLE_I8MM
+#define DISABLE_I8MM
+#endif
+
+#if HAVE_AS_ARCHEXT_SVE_DIRECTIVE
+#define ENABLE_SVE  .arch_extension sve
+#define DISABLE_SVE .arch_extension nosve
+#else
+#define ENABLE_SVE
+#define DISABLE_SVE
+#endif
+
+#if HAVE_AS_ARCHEXT_SVE2_DIRECTIVE
+#define ENABLE_SVE2  .arch_extension sve2
+#define DISABLE_SVE2 .arch_extension nosve2
+#else
+#define ENABLE_SVE2
+#define DISABLE_SVE2
+#endif
+
+#if HAVE_AS_ARCHEXT_SME_DIRECTIVE
+#define ENABLE_SME   .arch_extension sme
+#define DISABLE_SME  .arch_extension nosme
+#else
+#define ENABLE_SME
+#define DISABLE_SME
+#endif
+
+DISABLE_DOTPROD
+DISABLE_I8MM
+DISABLE_SVE
+DISABLE_SVE2
+DISABLE_SME
+
 
 /* Support macros for
  *   - Armv8.3-A Pointer Authentication and
@@ -155,7 +205,7 @@
         .popsection
 #endif
 
-.macro  function name, export=0, align=2
+.macro  function name, export=0, align=4
     .macro endfunc
 ELF     .size   \name, . - \name
 FUNC    .endfunc
@@ -176,7 +226,7 @@ FUNC    .func   \name
     .endif
 .endm
 
-.macro  const   name, align=2, relocate=0
+.macro  const   name, align=4, relocate=0
     .macro endconst
 ELF     .size   \name, . - \name
         .purgem endconst

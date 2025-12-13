@@ -26,7 +26,6 @@
 #include "libavutil/intreadwrite.h"
 #include "avcodec.h"
 #include "mathops.h"
-#include "audio_frame_queue.h"
 
 
 enum channels {
@@ -95,7 +94,6 @@ typedef struct {
     int block_size;
     int32_t sync_idx;
     Channel channels[NB_CHANNELS];
-    AudioFrameQueue afq;
 } AptXContext;
 
 typedef const struct {
@@ -110,7 +108,7 @@ typedef const struct {
 
 extern ConstTables ff_aptx_quant_tables[2][NB_SUBBANDS];
 
-/* Rounded right shift with optionnal clipping */
+/* Rounded right shift with optional clipping */
 #define RSHIFT_SIZE(size)                                                     \
 av_always_inline                                                              \
 static int##size##_t rshift##size(int##size##_t value, int shift)             \

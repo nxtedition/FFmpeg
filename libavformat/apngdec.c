@@ -28,9 +28,11 @@
 
 #include "avformat.h"
 #include "avio_internal.h"
+#include "demux.h"
 #include "internal.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/intreadwrite.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavcodec/apng.h"
 #include "libavcodec/png.h"
@@ -222,7 +224,7 @@ static int apng_read_header(AVFormatContext *s)
                                     ctx->num_frames, ctx->num_play);
             break;
         case MKTAG('f', 'c', 'T', 'L'):
-            if (!acTL_found || len != 26) {
+            if (!acTL_found || len != APNG_FCTL_CHUNK_SIZE) {
                 return AVERROR_INVALIDDATA;
             }
             if ((ret = avio_seek(pb, -8, SEEK_CUR)) < 0)
@@ -274,7 +276,7 @@ static int decode_fctl_chunk(AVFormatContext *s, APNGDemuxContext *ctx, AVPacket
             "delay_den: %"PRIu16", "
             "dispose_op: %d, "
             "blend_op: %d\n",
-            __FUNCTION__,
+            __func__,
             sequence_number,
             width,
             height,
@@ -336,18 +338,21 @@ static int apng_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     switch (tag) {
     case MKTAG('f', 'c', 'T', 'L'):
-        if (len != 26)
+        if (len != APNG_FCTL_CHUNK_SIZE)
             return AVERROR_INVALIDDATA;
 
         if ((ret = decode_fctl_chunk(s, ctx, pkt)) < 0)
             return ret;
 
-        /* fcTL must precede fdAT or IDAT */
+        /* fcTL may be followed by other chunks before fdAT or IDAT */
         len = avio_rb32(pb);
         tag = avio_rl32(pb);
-        if (len > 0x7fffffff ||
-            tag != MKTAG('f', 'd', 'A', 'T') &&
-            tag != MKTAG('I', 'D', 'A', 'T'))
+        if (len > 0x7fffffff)
+            return AVERROR_INVALIDDATA;
+
+        /* check for empty frame */
+        if (tag == MKTAG('f', 'c', 'T', 'L') ||
+            tag == MKTAG('I', 'E', 'N', 'D'))
             return AVERROR_INVALIDDATA;
 
         size = 38 /* fcTL */ + 8 /* len, tag */ + len + 4 /* crc */;
@@ -421,13 +426,13 @@ static const AVClass demuxer_class = {
     .category   = AV_CLASS_CATEGORY_DEMUXER,
 };
 
-const AVInputFormat ff_apng_demuxer = {
-    .name           = "apng",
-    .long_name      = NULL_IF_CONFIG_SMALL("Animated Portable Network Graphics"),
+const FFInputFormat ff_apng_demuxer = {
+    .p.name         = "apng",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Animated Portable Network Graphics"),
+    .p.flags        = AVFMT_GENERIC_INDEX,
+    .p.priv_class   = &demuxer_class,
     .priv_data_size = sizeof(APNGDemuxContext),
     .read_probe     = apng_probe,
     .read_header    = apng_read_header,
     .read_packet    = apng_read_packet,
-    .flags          = AVFMT_GENERIC_INDEX,
-    .priv_class     = &demuxer_class,
 };

@@ -23,7 +23,7 @@
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 
 typedef struct OggVorbisDecContext {
     vorbis_info vi;                     /**< vorbis_info used during init   */
@@ -35,7 +35,8 @@ typedef struct OggVorbisDecContext {
 
 static int oggvorbis_decode_close(AVCodecContext *avccontext);
 
-static int oggvorbis_decode_init(AVCodecContext *avccontext) {
+static av_cold int oggvorbis_decode_init(AVCodecContext *avccontext)
+{
     OggVorbisDecContext *context = avccontext->priv_data ;
     uint8_t *p= avccontext->extradata;
     int i, hsizes[3], ret;
@@ -113,6 +114,12 @@ static int oggvorbis_decode_init(AVCodecContext *avccontext) {
         }
     }
 
+    if (context->vi.rate <= 0 || context->vi.rate > INT_MAX) {
+        av_log(avccontext, AV_LOG_ERROR, "vorbis rate is invalid\n");
+        ret = AVERROR_INVALIDDATA;
+        goto error;
+    }
+
     av_channel_layout_uninit(&avccontext->ch_layout);
     avccontext->ch_layout.order       = AV_CHANNEL_ORDER_UNSPEC;
     avccontext->ch_layout.nb_channels = context->vi.channels;
@@ -149,11 +156,10 @@ static inline int conv(int samples, float **pcm, char *buf, int channels) {
     return 0 ;
 }
 
-static int oggvorbis_decode_frame(AVCodecContext *avccontext, void *data,
-                        int *got_frame_ptr, AVPacket *avpkt)
+static int oggvorbis_decode_frame(AVCodecContext *avccontext, AVFrame *frame,
+                                  int *got_frame_ptr, AVPacket *avpkt)
 {
     OggVorbisDecContext *context = avccontext->priv_data ;
-    AVFrame *frame = data;
     float **pcm ;
     ogg_packet *op= &context->op;
     int samples, total_samples, total_bytes;
@@ -199,7 +205,8 @@ static int oggvorbis_decode_frame(AVCodecContext *avccontext, void *data,
 }
 
 
-static int oggvorbis_decode_close(AVCodecContext *avccontext) {
+static av_cold int oggvorbis_decode_close(AVCodecContext *avccontext)
+{
     OggVorbisDecContext *context = avccontext->priv_data ;
 
     vorbis_block_clear(&context->vb);
@@ -213,12 +220,13 @@ static int oggvorbis_decode_close(AVCodecContext *avccontext) {
 
 const FFCodec ff_libvorbis_decoder = {
     .p.name         = "libvorbis",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("libvorbis"),
+    CODEC_LONG_NAME("libvorbis"),
     .p.type         = AVMEDIA_TYPE_AUDIO,
     .p.id           = AV_CODEC_ID_VORBIS,
     .p.capabilities = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_CHANNEL_CONF,
+    .caps_internal  = FF_CODEC_CAP_NOT_INIT_THREADSAFE,
     .priv_data_size = sizeof(OggVorbisDecContext),
     .init           = oggvorbis_decode_init,
-    .decode         = oggvorbis_decode_frame,
+    FF_CODEC_DECODE_CB(oggvorbis_decode_frame),
     .close          = oggvorbis_decode_close,
 };

@@ -21,10 +21,11 @@
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "dvdsub.h"
 #include "libavutil/avassert.h"
 #include "libavutil/bprint.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 
 typedef struct {
@@ -249,9 +250,9 @@ static void copy_rectangle(AVSubtitleRect *dst, AVSubtitleRect *src, int cmap[])
     }
 }
 
-static int encode_dvd_subtitles(AVCodecContext *avctx,
-                                uint8_t *outbuf, int outbuf_size,
-                                const AVSubtitle *h)
+static int dvdsub_encode(AVCodecContext *avctx,
+                         uint8_t *outbuf, int outbuf_size,
+                         const AVSubtitle *h)
 {
     DVDSubtitleContext *dvdc = avctx->priv_data;
     uint8_t *q, *qq;
@@ -376,6 +377,13 @@ static int encode_dvd_subtitles(AVCodecContext *avctx,
     x2 = vrect.x + vrect.w - 1;
     y2 = vrect.y + vrect.h - 1;
 
+    if ((avctx->width  > 0 && x2 > avctx->width) ||
+        (avctx->height > 0 && y2 > avctx->height)) {
+        av_log(avctx, AV_LOG_ERROR, "canvas_size(%d:%d) is too small(%d:%d) for render\n",
+               avctx->width, avctx->height, x2, y2);
+        ret = AVERROR(EINVAL);
+        goto fail;
+    }
     *q++ = 0x05;
     // x1 x2 -> 6 nibbles
     *q++ = vrect.x >> 4;
@@ -403,7 +411,7 @@ static int encode_dvd_subtitles(AVCodecContext *avctx,
     qq = outbuf;
     bytestream_put_be16(&qq, q - outbuf);
 
-    av_log(NULL, AV_LOG_DEBUG, "subtitle_packet size=%"PTRDIFF_SPECIFIER"\n", q - outbuf);
+    av_log(NULL, AV_LOG_DEBUG, "subtitle_packet size=%td\n", q - outbuf);
     ret = q - outbuf;
 
 fail:
@@ -434,7 +442,7 @@ static int bprint_to_extradata(AVCodecContext *avctx, struct AVBPrint *buf)
     return 0;
 }
 
-static int dvdsub_init(AVCodecContext *avctx)
+static av_cold int dvdsub_init(AVCodecContext *avctx)
 {
     DVDSubtitleContext *dvdc = avctx->priv_data;
     static const uint32_t default_palette[16] = {
@@ -468,17 +476,6 @@ static int dvdsub_init(AVCodecContext *avctx)
     return 0;
 }
 
-static int dvdsub_encode(AVCodecContext *avctx,
-                         unsigned char *buf, int buf_size,
-                         const AVSubtitle *sub)
-{
-    //DVDSubtitleContext *s = avctx->priv_data;
-    int ret;
-
-    ret = encode_dvd_subtitles(avctx, buf, buf_size, sub);
-    return ret;
-}
-
 #define OFFSET(x) offsetof(DVDSubtitleContext, x)
 #define SE AV_OPT_FLAG_SUBTITLE_PARAM | AV_OPT_FLAG_ENCODING_PARAM
 static const AVOption options[] = {
@@ -496,12 +493,11 @@ static const AVClass dvdsubenc_class = {
 
 const FFCodec ff_dvdsub_encoder = {
     .p.name         = "dvdsub",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("DVD subtitles"),
+    CODEC_LONG_NAME("DVD subtitles"),
     .p.type         = AVMEDIA_TYPE_SUBTITLE,
     .p.id           = AV_CODEC_ID_DVD_SUBTITLE,
     .init           = dvdsub_init,
-    .encode_sub     = dvdsub_encode,
+    FF_CODEC_ENCODE_SUB_CB(dvdsub_encode),
     .p.priv_class   = &dvdsubenc_class,
     .priv_data_size = sizeof(DVDSubtitleContext),
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE,
 };

@@ -25,6 +25,7 @@
  * @author Stefan Gehrer <stefan.gehrer@gmx.de>
  */
 
+#include "libavutil/mem.h"
 #include "avcodec.h"
 #include "golomb.h"
 #include "h264chroma.h"
@@ -386,7 +387,7 @@ void ff_cavs_modify_mb_i(AVSContext *h, int *pred_mode_uv)
  ****************************************************************************/
 
 static inline void mc_dir_part(AVSContext *h, AVFrame *pic, int chroma_height,
-                               int delta, int list, uint8_t *dest_y,
+                               int list, uint8_t *dest_y,
                                uint8_t *dest_cb, uint8_t *dest_cr,
                                int src_x_offset, int src_y_offset,
                                qpel_mc_func *qpix_op,
@@ -451,7 +452,7 @@ static inline void mc_dir_part(AVSContext *h, AVFrame *pic, int chroma_height,
     chroma_op(dest_cr, src_cr, h->c_stride, chroma_height, mx & 7, my & 7);
 }
 
-static inline void mc_part_std(AVSContext *h, int chroma_height, int delta,
+static inline void mc_part_std(AVSContext *h, int chroma_height,
                                uint8_t *dest_y,
                                uint8_t *dest_cb,
                                uint8_t *dest_cr,
@@ -473,7 +474,7 @@ static inline void mc_part_std(AVSContext *h, int chroma_height, int delta,
 
     if (mv->ref >= 0) {
         AVFrame *ref = h->DPB[mv->ref].f;
-        mc_dir_part(h, ref, chroma_height, delta, 0,
+        mc_dir_part(h, ref, chroma_height, 0,
                     dest_y, dest_cb, dest_cr, x_offset, y_offset,
                     qpix_op, chroma_op, mv);
 
@@ -483,7 +484,7 @@ static inline void mc_part_std(AVSContext *h, int chroma_height, int delta,
 
     if ((mv + MV_BWD_OFFS)->ref >= 0) {
         AVFrame *ref = h->DPB[0].f;
-        mc_dir_part(h, ref, chroma_height, delta, 1,
+        mc_dir_part(h, ref, chroma_height, 1,
                     dest_y, dest_cb, dest_cr, x_offset, y_offset,
                     qpix_op, chroma_op, mv + MV_BWD_OFFS);
     }
@@ -492,32 +493,32 @@ static inline void mc_part_std(AVSContext *h, int chroma_height, int delta,
 void ff_cavs_inter(AVSContext *h, enum cavs_mb mb_type)
 {
     if (ff_cavs_partition_flags[mb_type] == 0) { // 16x16
-        mc_part_std(h, 8, 0, h->cy, h->cu, h->cv, 0, 0,
+        mc_part_std(h, 8, h->cy, h->cu, h->cv, 0, 0,
                     h->cdsp.put_cavs_qpel_pixels_tab[0],
                     h->h264chroma.put_h264_chroma_pixels_tab[0],
                     h->cdsp.avg_cavs_qpel_pixels_tab[0],
                     h->h264chroma.avg_h264_chroma_pixels_tab[0],
                     &h->mv[MV_FWD_X0]);
     } else {
-        mc_part_std(h, 4, 0, h->cy, h->cu, h->cv, 0, 0,
+        mc_part_std(h, 4, h->cy, h->cu, h->cv, 0, 0,
                     h->cdsp.put_cavs_qpel_pixels_tab[1],
                     h->h264chroma.put_h264_chroma_pixels_tab[1],
                     h->cdsp.avg_cavs_qpel_pixels_tab[1],
                     h->h264chroma.avg_h264_chroma_pixels_tab[1],
                     &h->mv[MV_FWD_X0]);
-        mc_part_std(h, 4, 0, h->cy, h->cu, h->cv, 4, 0,
+        mc_part_std(h, 4, h->cy, h->cu, h->cv, 4, 0,
                     h->cdsp.put_cavs_qpel_pixels_tab[1],
                     h->h264chroma.put_h264_chroma_pixels_tab[1],
                     h->cdsp.avg_cavs_qpel_pixels_tab[1],
                     h->h264chroma.avg_h264_chroma_pixels_tab[1],
                     &h->mv[MV_FWD_X1]);
-        mc_part_std(h, 4, 0, h->cy, h->cu, h->cv, 0, 4,
+        mc_part_std(h, 4, h->cy, h->cu, h->cv, 0, 4,
                     h->cdsp.put_cavs_qpel_pixels_tab[1],
                     h->h264chroma.put_h264_chroma_pixels_tab[1],
                     h->cdsp.avg_cavs_qpel_pixels_tab[1],
                     h->h264chroma.avg_h264_chroma_pixels_tab[1],
                     &h->mv[MV_FWD_X2]);
-        mc_part_std(h, 4, 0, h->cy, h->cu, h->cv, 4, 4,
+        mc_part_std(h, 4, h->cy, h->cu, h->cv, 4, 4,
                     h->cdsp.put_cavs_qpel_pixels_tab[1],
                     h->h264chroma.put_h264_chroma_pixels_tab[1],
                     h->cdsp.avg_cavs_qpel_pixels_tab[1],
@@ -792,15 +793,14 @@ int ff_cavs_init_top_lines(AVSContext *h)
 av_cold int ff_cavs_init(AVCodecContext *avctx)
 {
     AVSContext *h = avctx->priv_data;
+    uint8_t permutation[64];
 
-    ff_blockdsp_init(&h->bdsp, avctx);
+    ff_blockdsp_init(&h->bdsp);
     ff_h264chroma_init(&h->h264chroma, 8);
-    ff_idctdsp_init(&h->idsp, avctx);
     ff_videodsp_init(&h->vdsp, 8);
-    ff_cavsdsp_init(&h->cdsp, avctx);
-    ff_init_scantable_permutation(h->idsp.idct_permutation,
-                                  h->cdsp.idct_perm);
-    ff_init_scantable(h->idsp.idct_permutation, &h->scantable, ff_zigzag_direct);
+    ff_cavsdsp_init(&h->cdsp);
+    ff_init_scantable_permutation(permutation, h->cdsp.idct_perm);
+    ff_permute_scantable(h->permutated_scantable, ff_zigzag_direct, permutation);
 
     h->avctx       = avctx;
     avctx->pix_fmt = AV_PIX_FMT_YUV420P;

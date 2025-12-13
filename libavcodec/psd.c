@@ -19,9 +19,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/mem.h"
 #include "bytestream.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 
 enum PsdCompr {
     PSD_RAW,
@@ -172,10 +173,10 @@ static int decode_header(PSDContext * s)
     }
     bytestream2_skip(&s->gb, len_section);
 
-    /* image ressources */
+    /* image resources */
     len_section = bytestream2_get_be32(&s->gb);
     if (len_section < 0) {
-        av_log(s->avctx, AV_LOG_ERROR, "Negative size for image ressources section.\n");
+        av_log(s->avctx, AV_LOG_ERROR, "Negative size for image resources section.\n");
         return AVERROR_INVALIDDATA;
     }
 
@@ -289,7 +290,7 @@ static int decode_rle(PSDContext * s){
     return 0;
 }
 
-static int decode_frame(AVCodecContext *avctx, void *data,
+static int decode_frame(AVCodecContext *avctx, AVFrame *picture,
                         int *got_frame, AVPacket *avpkt)
 {
     int ret;
@@ -298,8 +299,6 @@ static int decode_frame(AVCodecContext *avctx, void *data,
     int index_out, c, y, x, p;
     uint8_t eq_channel[4] = {2,0,1,3};/* RGBA -> GBRA channel order */
     uint8_t plane_number;
-
-    AVFrame *picture = data;
 
     PSDContext *s = avctx->priv_data;
     s->avctx     = avctx;
@@ -419,9 +418,6 @@ static int decode_frame(AVCodecContext *avctx, void *data,
 
     s->uncompressed_size = s->line_size * s->height * s->channel_count;
 
-    if ((ret = ff_get_buffer(avctx, picture, 0)) < 0)
-        return ret;
-
     /* decode picture if need */
     if (s->compression == PSD_RLE) {
         s->tmp = av_malloc(s->uncompressed_size);
@@ -443,6 +439,9 @@ static int decode_frame(AVCodecContext *avctx, void *data,
         }
         ptr_data = s->gb.buffer;
     }
+
+    if ((ret = ff_get_buffer(avctx, picture, 0)) < 0)
+        return ret;
 
     /* Store data */
     if ((avctx->pix_fmt == AV_PIX_FMT_YA8)||(avctx->pix_fmt == AV_PIX_FMT_YA16BE)){/* Interleaved */
@@ -534,7 +533,6 @@ static int decode_frame(AVCodecContext *avctx, void *data,
     }
 
     if (s->color_mode == PSD_INDEXED) {
-        picture->palette_has_changed = 1;
         memcpy(picture->data[1], s->palette, AVPALETTE_SIZE);
     }
 
@@ -548,10 +546,10 @@ static int decode_frame(AVCodecContext *avctx, void *data,
 
 const FFCodec ff_psd_decoder = {
     .p.name           = "psd",
-    .p.long_name      = NULL_IF_CONFIG_SMALL("Photoshop PSD file"),
+    CODEC_LONG_NAME("Photoshop PSD file"),
     .p.type           = AVMEDIA_TYPE_VIDEO,
     .p.id             = AV_CODEC_ID_PSD,
     .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
     .priv_data_size   = sizeof(PSDContext),
-    .decode           = decode_frame,
+    FF_CODEC_DECODE_CB(decode_frame),
 };

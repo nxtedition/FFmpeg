@@ -20,6 +20,8 @@
 #include "bsf_internal.h"
 #include "cbs_bsf.h"
 
+#include "libavutil/attributes.h"
+
 static int cbs_bsf_update_side_data(AVBSFContext *bsf, AVPacket *pkt)
 {
     CBSBSFContext           *ctx = bsf->priv_data;
@@ -107,7 +109,7 @@ fail:
     return err;
 }
 
-int ff_cbs_bsf_generic_init(AVBSFContext *bsf, const CBSBSFType *type)
+av_cold int ff_cbs_bsf_generic_init(AVBSFContext *bsf, const CBSBSFType *type)
 {
     CBSBSFContext           *ctx = bsf->priv_data;
     CodedBitstreamFragment *frag = &ctx->fragment;
@@ -122,6 +124,11 @@ int ff_cbs_bsf_generic_init(AVBSFContext *bsf, const CBSBSFType *type)
     err = ff_cbs_init(&ctx->output, type->codec_id, bsf);
     if (err < 0)
         return err;
+
+    ctx->output->trace_enable = 1;
+    ctx->output->trace_level  = AV_LOG_TRACE;
+    ctx->output->trace_context = ctx->output;
+    ctx->output->trace_write_callback = ff_cbs_trace_write_log;
 
     if (bsf->par_in->extradata) {
         err = ff_cbs_read_extradata(ctx->input, frag, bsf->par_in);
@@ -147,7 +154,7 @@ fail:
     return err;
 }
 
-void ff_cbs_bsf_generic_close(AVBSFContext *bsf)
+av_cold void ff_cbs_bsf_generic_close(AVBSFContext *bsf)
 {
     CBSBSFContext *ctx = bsf->priv_data;
 

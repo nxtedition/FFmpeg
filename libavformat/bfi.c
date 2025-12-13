@@ -29,6 +29,7 @@
 #include "libavutil/channel_layout.h"
 #include "libavutil/intreadwrite.h"
 #include "avformat.h"
+#include "demux.h"
 #include "internal.h"
 
 typedef struct BFIContext {
@@ -130,7 +131,7 @@ static int bfi_read_packet(AVFormatContext * s, AVPacket * pkt)
         uint32_t state = 0;
         while(state != MKTAG('S','A','V','I')){
             if (avio_feof(pb))
-                return AVERROR(EIO);
+                return AVERROR_INVALIDDATA;
             state = 256*state + avio_r8(pb);
         }
         /* Now that the chunk's location is confirmed, we proceed... */
@@ -139,12 +140,12 @@ static int bfi_read_packet(AVFormatContext * s, AVPacket * pkt)
         audio_offset    = avio_rl32(pb);
         avio_rl32(pb);
         video_offset    = avio_rl32(pb);
-        audio_size      = video_offset - audio_offset;
-        bfi->video_size = chunk_size - video_offset;
-        if (audio_size < 0 || bfi->video_size < 0) {
+        if (audio_offset < 0 || video_offset < audio_offset || chunk_size < video_offset) {
             av_log(s, AV_LOG_ERROR, "Invalid audio/video offsets or chunk size\n");
             return AVERROR_INVALIDDATA;
         }
+        audio_size      = video_offset - audio_offset;
+        bfi->video_size = chunk_size - video_offset;
 
         //Tossing an audio packet at the audio decoder.
         ret = av_get_packet(pb, pkt, audio_size);
@@ -175,9 +176,9 @@ static int bfi_read_packet(AVFormatContext * s, AVPacket * pkt)
     return ret;
 }
 
-const AVInputFormat ff_bfi_demuxer = {
-    .name           = "bfi",
-    .long_name      = NULL_IF_CONFIG_SMALL("Brute Force & Ignorance"),
+const FFInputFormat ff_bfi_demuxer = {
+    .p.name         = "bfi",
+    .p.long_name    = NULL_IF_CONFIG_SMALL("Brute Force & Ignorance"),
     .priv_data_size = sizeof(BFIContext),
     .read_probe     = bfi_probe,
     .read_header    = bfi_read_header,

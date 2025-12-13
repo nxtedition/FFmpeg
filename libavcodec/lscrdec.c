@@ -24,12 +24,13 @@
 #include "libavutil/frame.h"
 #include "libavutil/error.h"
 #include "libavutil/log.h"
+#include "libavutil/mem.h"
 
 #include "avcodec.h"
 #include "bytestream.h"
 #include "codec.h"
 #include "codec_internal.h"
-#include "internal.h"
+#include "decode.h"
 #include "packet.h"
 #include "png.h"
 #include "pngdsp.h"
@@ -107,9 +108,8 @@ static int decode_idat(LSCRContext *s, z_stream *zstream, int length)
     return 0;
 }
 
-static int decode_frame_lscr(AVCodecContext *avctx,
-                             void *data, int *got_frame,
-                             AVPacket *avpkt)
+static int decode_frame_lscr(AVCodecContext *avctx, AVFrame *rframe,
+                             int *got_frame, AVPacket *avpkt)
 {
     LSCRContext *const s = avctx->priv_data;
     GetByteContext *gb = &s->gb;
@@ -155,10 +155,13 @@ static int decode_frame_lscr(AVCodecContext *avctx,
 
         size = bytestream2_get_le32(gb);
 
-        frame->key_frame = (nb_blocks == 1) &&
-                           (w == avctx->width) &&
-                           (h == avctx->height) &&
-                           (x == 0) && (y == 0);
+        if ((nb_blocks == 1) &&
+            (w == avctx->width) &&
+            (h == avctx->height) &&
+            (x == 0) && (y == 0))
+            frame->flags |= AV_FRAME_FLAG_KEY;
+        else
+            frame->flags &= ~AV_FRAME_FLAG_KEY;
 
         bytestream2_seek(gb, 2 + nb_blocks * 12 + offset, SEEK_SET);
         csize = bytestream2_get_be32(gb);
@@ -200,9 +203,9 @@ static int decode_frame_lscr(AVCodecContext *avctx,
         }
     }
 
-    frame->pict_type = frame->key_frame ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_P;
+    frame->pict_type = (frame->flags & AV_FRAME_FLAG_KEY) ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_P;
 
-    if ((ret = av_frame_ref(data, frame)) < 0)
+    if ((ret = av_frame_ref(rframe, frame)) < 0)
         return ret;
 
     *got_frame = 1;
@@ -210,7 +213,7 @@ static int decode_frame_lscr(AVCodecContext *avctx,
     return avpkt->size;
 }
 
-static int lscr_decode_close(AVCodecContext *avctx)
+static av_cold int lscr_decode_close(AVCodecContext *avctx)
 {
     LSCRContext *s = avctx->priv_data;
 
@@ -222,7 +225,7 @@ static int lscr_decode_close(AVCodecContext *avctx)
     return 0;
 }
 
-static int lscr_decode_init(AVCodecContext *avctx)
+static av_cold int lscr_decode_init(AVCodecContext *avctx)
 {
     LSCRContext *s = avctx->priv_data;
 
@@ -239,7 +242,7 @@ static int lscr_decode_init(AVCodecContext *avctx)
     return ff_inflate_init(&s->zstream, avctx);
 }
 
-static void lscr_decode_flush(AVCodecContext *avctx)
+static av_cold void lscr_decode_flush(AVCodecContext *avctx)
 {
     LSCRContext *s = avctx->priv_data;
     av_frame_unref(s->last_picture);
@@ -247,14 +250,14 @@ static void lscr_decode_flush(AVCodecContext *avctx)
 
 const FFCodec ff_lscr_decoder = {
     .p.name         = "lscr",
-    .p.long_name    = NULL_IF_CONFIG_SMALL("LEAD Screen Capture"),
+    CODEC_LONG_NAME("LEAD Screen Capture"),
     .p.type         = AVMEDIA_TYPE_VIDEO,
     .p.id           = AV_CODEC_ID_LSCR,
     .p.capabilities = AV_CODEC_CAP_DR1,
     .priv_data_size = sizeof(LSCRContext),
     .init           = lscr_decode_init,
     .close          = lscr_decode_close,
-    .decode         = decode_frame_lscr,
+    FF_CODEC_DECODE_CB(decode_frame_lscr),
     .flush          = lscr_decode_flush,
-    .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP,
+    .caps_internal  = FF_CODEC_CAP_INIT_CLEANUP,
 };

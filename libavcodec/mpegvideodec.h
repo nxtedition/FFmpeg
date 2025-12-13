@@ -29,6 +29,8 @@
 #define AVCODEC_MPEGVIDEODEC_H
 
 #include "libavutil/frame.h"
+#include "libavutil/log.h"
+
 #include "avcodec.h"
 #include "get_bits.h"
 #include "mpegpicture.h"
@@ -42,29 +44,56 @@
  * Initialize the given MpegEncContext for decoding.
  * the changed fields will not depend upon
  * the prior state of the MpegEncContext.
+ *
+ * Also initialize the picture pool.
  */
-void ff_mpv_decode_init(MpegEncContext *s, AVCodecContext *avctx);
+int ff_mpv_decode_init(MpegEncContext *s, AVCodecContext *avctx);
 
 int ff_mpv_common_frame_size_change(MpegEncContext *s);
 
 int ff_mpv_frame_start(MpegEncContext *s, AVCodecContext *avctx);
-void ff_mpv_report_decode_progress(MpegEncContext *s);
+/**
+ * Ensure that the dummy frames are allocated according to pict_type if necessary.
+ */
+int ff_mpv_alloc_dummy_frames(MpegEncContext *s);
+void ff_mpv_reconstruct_mb(MPVContext *s, int16_t block[][64]);
 void ff_mpv_frame_end(MpegEncContext *s);
 
-int ff_mpv_export_qp_table(MpegEncContext *s, AVFrame *f, Picture *p, int qp_type);
+int ff_mpv_export_qp_table(const MpegEncContext *s, AVFrame *f,
+                           const MPVPicture *p, int qp_type);
+/**
+ * update_thread_context for mpegvideo-based decoders. It updates
+ * the MPVPictures and generic stream-level parameters. If necessary
+ * (on dimension changes), it also performs reinitialization.
+ *
+ * @retval 1 if a reinitialization happened
+ * @retval 0 on success if no reinitialization happened
+ * @retval "<0" error code
+ */
 int ff_mpeg_update_thread_context(AVCodecContext *dst, const AVCodecContext *src);
 void ff_mpeg_draw_horiz_band(MpegEncContext *s, int y, int h);
 void ff_mpeg_flush(AVCodecContext *avctx);
+int ff_mpv_decode_close(AVCodecContext *avctx);
 
-void ff_print_debug_info(MpegEncContext *s, Picture *p, AVFrame *pict);
+void ff_print_debug_info(const MpegEncContext *s, const MPVPicture *p, AVFrame *pict);
 
-static inline int mpeg_get_qscale(MpegEncContext *s)
+static inline int mpeg_get_qscale(GetBitContext *const gb, int q_scale_type)
 {
-    int qscale = get_bits(&s->gb, 5);
-    if (s->q_scale_type)
+    int qscale = get_bits(gb, 5);
+    if (q_scale_type)
         return ff_mpeg2_non_linear_qscale[qscale];
     else
         return qscale << 1;
+}
+
+static inline int check_marker(void *logctx, GetBitContext *s, const char *msg)
+{
+    int bit = get_bits1(s);
+    if (!bit)
+        av_log(logctx, AV_LOG_INFO, "Marker bit missing at %d of %d %s\n",
+               get_bits_count(s) - 1, s->size_in_bits, msg);
+
+    return bit;
 }
 
 #endif /* AVCODEC_MPEGVIDEODEC_H */

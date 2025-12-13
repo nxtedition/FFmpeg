@@ -28,11 +28,12 @@
 #include "libavutil/base64.h"
 #include "libavutil/avstring.h"
 #include "libavutil/intreadwrite.h"
-#include "rtp.h"
+#include "libavutil/mem.h"
 #include "rtpdec_formats.h"
 #include "rtsp.h"
 #include "asf.h"
 #include "avio_internal.h"
+#include "demux.h"
 #include "internal.h"
 
 /**
@@ -119,8 +120,10 @@ int ff_wms_parse_sdp_a_line(AVFormatContext *s, const char *p)
             avformat_close_input(&rt->asf_ctx);
         }
 
-        if (!(iformat = av_find_input_format("asf")))
+        if (!(iformat = av_find_input_format("asf"))) {
+            av_free(buf);
             return AVERROR_DEMUXER_NOT_FOUND;
+        }
 
         rt->asf_ctx = avformat_alloc_context();
         if (!rt->asf_ctx) {
@@ -210,7 +213,7 @@ static int asfrtp_parse_packet(AVFormatContext *s, PayloadContext *asf,
 
         av_freep(&asf->buf);
 
-        ffio_init_context(pb0, (uint8_t *)buf, len, 0, NULL, NULL, NULL, NULL);
+        ffio_init_read_context(pb0, buf, len);
 
         while (avio_tell(pb) + 4 < len) {
             int start_off = avio_tell(pb);

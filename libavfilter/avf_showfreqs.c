@@ -21,6 +21,7 @@
 #include <float.h>
 #include <math.h>
 
+#include "libavutil/mem.h"
 #include "libavutil/tx.h"
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
@@ -30,9 +31,9 @@
 #include "libavutil/parseutils.h"
 #include "audio.h"
 #include "filters.h"
+#include "formats.h"
 #include "video.h"
 #include "avfilter.h"
-#include "internal.h"
 #include "window_func.h"
 
 enum DataMode       { MAGNITUDE, PHASE, DELAY, NB_DATA };
@@ -51,6 +52,9 @@ typedef struct ShowFreqsContext {
     int ascale, fscale;
     int avg;
     int win_func;
+    char *ch_layout_str;
+    uint8_t *bypass;
+    AVChannelLayout ch_layout;
     AVTXContext *fft;
     av_tx_fn tx_fn;
     AVComplexFloat **fft_input;
@@ -62,10 +66,14 @@ typedef struct ShowFreqsContext {
     float minamp;
     int hop_size;
     int nb_channels;
+    int nb_draw_channels;
     int nb_freq;
     int win_size;
     float scale;
     char *colors;
+    int64_t pts;
+    int64_t old_pts;
+    AVRational frame_rate;
 } ShowFreqsContext;
 
 #define OFFSET(x) offsetof(ShowFreqsContext, x)
@@ -74,63 +82,57 @@ typedef struct ShowFreqsContext {
 static const AVOption showfreqs_options[] = {
     { "size", "set video size", OFFSET(w), AV_OPT_TYPE_IMAGE_SIZE, {.str = "1024x512"}, 0, 0, FLAGS },
     { "s",    "set video size", OFFSET(w), AV_OPT_TYPE_IMAGE_SIZE, {.str = "1024x512"}, 0, 0, FLAGS },
-    { "mode", "set display mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=BAR}, 0, NB_MODES-1, FLAGS, "mode" },
-        { "line", "show lines",  0, AV_OPT_TYPE_CONST, {.i64=LINE},   0, 0, FLAGS, "mode" },
-        { "bar",  "show bars",   0, AV_OPT_TYPE_CONST, {.i64=BAR},    0, 0, FLAGS, "mode" },
-        { "dot",  "show dots",   0, AV_OPT_TYPE_CONST, {.i64=DOT},    0, 0, FLAGS, "mode" },
-    { "ascale", "set amplitude scale", OFFSET(ascale), AV_OPT_TYPE_INT, {.i64=AS_LOG}, 0, NB_ASCALES-1, FLAGS, "ascale" },
-        { "lin",  "linear",      0, AV_OPT_TYPE_CONST, {.i64=AS_LINEAR}, 0, 0, FLAGS, "ascale" },
-        { "sqrt", "square root", 0, AV_OPT_TYPE_CONST, {.i64=AS_SQRT},   0, 0, FLAGS, "ascale" },
-        { "cbrt", "cubic root",  0, AV_OPT_TYPE_CONST, {.i64=AS_CBRT},   0, 0, FLAGS, "ascale" },
-        { "log",  "logarithmic", 0, AV_OPT_TYPE_CONST, {.i64=AS_LOG},    0, 0, FLAGS, "ascale" },
-    { "fscale", "set frequency scale", OFFSET(fscale), AV_OPT_TYPE_INT, {.i64=FS_LINEAR}, 0, NB_FSCALES-1, FLAGS, "fscale" },
-        { "lin",  "linear",              0, AV_OPT_TYPE_CONST, {.i64=FS_LINEAR}, 0, 0, FLAGS, "fscale" },
-        { "log",  "logarithmic",         0, AV_OPT_TYPE_CONST, {.i64=FS_LOG},    0, 0, FLAGS, "fscale" },
-        { "rlog", "reverse logarithmic", 0, AV_OPT_TYPE_CONST, {.i64=FS_RLOG},   0, 0, FLAGS, "fscale" },
+    { "rate", "set video rate",  OFFSET(frame_rate), AV_OPT_TYPE_VIDEO_RATE, {.str = "25"}, 0, INT_MAX, FLAGS },
+    { "r",    "set video rate",  OFFSET(frame_rate), AV_OPT_TYPE_VIDEO_RATE, {.str = "25"}, 0, INT_MAX, FLAGS },
+    { "mode", "set display mode", OFFSET(mode), AV_OPT_TYPE_INT, {.i64=BAR}, 0, NB_MODES-1, FLAGS, .unit = "mode" },
+        { "line", "show lines",  0, AV_OPT_TYPE_CONST, {.i64=LINE},   0, 0, FLAGS, .unit = "mode" },
+        { "bar",  "show bars",   0, AV_OPT_TYPE_CONST, {.i64=BAR},    0, 0, FLAGS, .unit = "mode" },
+        { "dot",  "show dots",   0, AV_OPT_TYPE_CONST, {.i64=DOT},    0, 0, FLAGS, .unit = "mode" },
+    { "ascale", "set amplitude scale", OFFSET(ascale), AV_OPT_TYPE_INT, {.i64=AS_LOG}, 0, NB_ASCALES-1, FLAGS, .unit = "ascale" },
+        { "lin",  "linear",      0, AV_OPT_TYPE_CONST, {.i64=AS_LINEAR}, 0, 0, FLAGS, .unit = "ascale" },
+        { "sqrt", "square root", 0, AV_OPT_TYPE_CONST, {.i64=AS_SQRT},   0, 0, FLAGS, .unit = "ascale" },
+        { "cbrt", "cubic root",  0, AV_OPT_TYPE_CONST, {.i64=AS_CBRT},   0, 0, FLAGS, .unit = "ascale" },
+        { "log",  "logarithmic", 0, AV_OPT_TYPE_CONST, {.i64=AS_LOG},    0, 0, FLAGS, .unit = "ascale" },
+    { "fscale", "set frequency scale", OFFSET(fscale), AV_OPT_TYPE_INT, {.i64=FS_LINEAR}, 0, NB_FSCALES-1, FLAGS, .unit = "fscale" },
+        { "lin",  "linear",              0, AV_OPT_TYPE_CONST, {.i64=FS_LINEAR}, 0, 0, FLAGS, .unit = "fscale" },
+        { "log",  "logarithmic",         0, AV_OPT_TYPE_CONST, {.i64=FS_LOG},    0, 0, FLAGS, .unit = "fscale" },
+        { "rlog", "reverse logarithmic", 0, AV_OPT_TYPE_CONST, {.i64=FS_RLOG},   0, 0, FLAGS, .unit = "fscale" },
     { "win_size", "set window size", OFFSET(fft_size), AV_OPT_TYPE_INT, {.i64=2048}, 16, 65536, FLAGS },
     WIN_FUNC_OPTION("win_func", OFFSET(win_func), FLAGS, WFUNC_HANNING),
     { "overlap",  "set window overlap", OFFSET(overlap), AV_OPT_TYPE_FLOAT, {.dbl=1.}, 0., 1., FLAGS },
     { "averaging", "set time averaging", OFFSET(avg), AV_OPT_TYPE_INT, {.i64=1}, 0, INT32_MAX, FLAGS },
     { "colors", "set channels colors", OFFSET(colors), AV_OPT_TYPE_STRING, {.str = "red|green|blue|yellow|orange|lime|pink|magenta|brown" }, 0, 0, FLAGS },
-    { "cmode", "set channel mode", OFFSET(cmode), AV_OPT_TYPE_INT, {.i64=COMBINED}, 0, NB_CMODES-1, FLAGS, "cmode" },
-        { "combined", "show all channels in same window",  0, AV_OPT_TYPE_CONST, {.i64=COMBINED}, 0, 0, FLAGS, "cmode" },
-        { "separate", "show each channel in own window",   0, AV_OPT_TYPE_CONST, {.i64=SEPARATE}, 0, 0, FLAGS, "cmode" },
+    { "cmode", "set channel mode", OFFSET(cmode), AV_OPT_TYPE_INT, {.i64=COMBINED}, 0, NB_CMODES-1, FLAGS, .unit = "cmode" },
+        { "combined", "show all channels in same window",  0, AV_OPT_TYPE_CONST, {.i64=COMBINED}, 0, 0, FLAGS, .unit = "cmode" },
+        { "separate", "show each channel in own window",   0, AV_OPT_TYPE_CONST, {.i64=SEPARATE}, 0, 0, FLAGS, .unit = "cmode" },
     { "minamp",  "set minimum amplitude", OFFSET(minamp), AV_OPT_TYPE_FLOAT, {.dbl=1e-6}, FLT_MIN, 1e-6, FLAGS },
-    { "data", "set data mode", OFFSET(data_mode), AV_OPT_TYPE_INT, {.i64=MAGNITUDE}, 0, NB_DATA-1, FLAGS, "data" },
-        { "magnitude", "show magnitude",  0, AV_OPT_TYPE_CONST, {.i64=MAGNITUDE}, 0, 0, FLAGS, "data" },
-        { "phase",     "show phase",      0, AV_OPT_TYPE_CONST, {.i64=PHASE},     0, 0, FLAGS, "data" },
-        { "delay",     "show group delay",0, AV_OPT_TYPE_CONST, {.i64=DELAY},     0, 0, FLAGS, "data" },
+    { "data", "set data mode", OFFSET(data_mode), AV_OPT_TYPE_INT, {.i64=MAGNITUDE}, 0, NB_DATA-1, FLAGS, .unit = "data" },
+        { "magnitude", "show magnitude",  0, AV_OPT_TYPE_CONST, {.i64=MAGNITUDE}, 0, 0, FLAGS, .unit = "data" },
+        { "phase",     "show phase",      0, AV_OPT_TYPE_CONST, {.i64=PHASE},     0, 0, FLAGS, .unit = "data" },
+        { "delay",     "show group delay",0, AV_OPT_TYPE_CONST, {.i64=DELAY},     0, 0, FLAGS, .unit = "data" },
+    { "channels", "set channels to draw", OFFSET(ch_layout_str), AV_OPT_TYPE_STRING, {.str="all"}, 0, 0, FLAGS },
     { NULL }
 };
 
 AVFILTER_DEFINE_CLASS(showfreqs);
 
-static int query_formats(AVFilterContext *ctx)
+static int query_formats(const AVFilterContext *ctx,
+                         AVFilterFormatsConfig **cfg_in,
+                         AVFilterFormatsConfig **cfg_out)
 {
     AVFilterFormats *formats = NULL;
-    AVFilterChannelLayouts *layouts = NULL;
-    AVFilterLink *inlink = ctx->inputs[0];
-    AVFilterLink *outlink = ctx->outputs[0];
     static const enum AVSampleFormat sample_fmts[] = { AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_NONE };
     static const enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_RGBA, AV_PIX_FMT_NONE };
     int ret;
 
     /* set input audio formats */
     formats = ff_make_format_list(sample_fmts);
-    if ((ret = ff_formats_ref(formats, &inlink->outcfg.formats)) < 0)
-        return ret;
-
-    layouts = ff_all_channel_layouts();
-    if ((ret = ff_channel_layouts_ref(layouts, &inlink->outcfg.channel_layouts)) < 0)
-        return ret;
-
-    formats = ff_all_samplerates();
-    if ((ret = ff_formats_ref(formats, &inlink->outcfg.samplerates)) < 0)
+    if ((ret = ff_formats_ref(formats, &cfg_in[0]->formats)) < 0)
         return ret;
 
     /* set output video format */
     formats = ff_make_format_list(pix_fmts);
-    if ((ret = ff_formats_ref(formats, &outlink->incfg.formats)) < 0)
+    if ((ret = ff_formats_ref(formats, &cfg_out[0]->formats)) < 0)
         return ret;
 
     return 0;
@@ -138,12 +140,14 @@ static int query_formats(AVFilterContext *ctx)
 
 static int config_output(AVFilterLink *outlink)
 {
+    FilterLink *l = ff_filter_link(outlink);
     AVFilterContext *ctx = outlink->src;
     AVFilterLink *inlink = ctx->inputs[0];
     ShowFreqsContext *s = ctx->priv;
-    float overlap, scale;
+    float overlap, scale = 1.f;
     int i, ret;
 
+    s->old_pts = AV_NOPTS_VALUE;
     s->nb_freq = s->fft_size / 2;
     s->win_size = s->fft_size;
     av_tx_uninit(&s->fft);
@@ -162,11 +166,15 @@ static int config_output(AVFilterLink *outlink)
         av_freep(&s->fft_data[i]);
         av_freep(&s->avg_data[i]);
     }
+    av_freep(&s->bypass);
     av_freep(&s->fft_input);
     av_freep(&s->fft_data);
     av_freep(&s->avg_data);
     s->nb_channels = inlink->ch_layout.nb_channels;
 
+    s->bypass = av_calloc(s->nb_channels, sizeof(*s->bypass));
+    if (!s->bypass)
+        return AVERROR(ENOMEM);
     s->fft_input = av_calloc(s->nb_channels, sizeof(*s->fft_input));
     if (!s->fft_input)
         return AVERROR(ENOMEM);
@@ -206,11 +214,31 @@ static int config_output(AVFilterLink *outlink)
     if (!s->window)
         return AVERROR(ENOMEM);
 
-    outlink->frame_rate = av_make_q(inlink->sample_rate, s->hop_size);
-    outlink->time_base = av_inv_q(outlink->frame_rate);
+    l->frame_rate = s->frame_rate;
+    outlink->time_base = av_inv_q(l->frame_rate);
     outlink->sample_aspect_ratio = (AVRational){1,1};
     outlink->w = s->w;
     outlink->h = s->h;
+
+    ret = av_channel_layout_copy(&s->ch_layout, &inlink->ch_layout);
+    if (ret < 0)
+        return ret;
+    s->nb_draw_channels = s->nb_channels;
+
+    if (strcmp(s->ch_layout_str, "all")) {
+        int nb_draw_channels = 0;
+        av_channel_layout_from_string(&s->ch_layout,
+                                      s->ch_layout_str);
+
+        for (int ch = 0; ch < s->nb_channels; ch++) {
+            const enum AVChannel channel = av_channel_layout_channel_from_index(&inlink->ch_layout, ch);
+
+            s->bypass[ch] = av_channel_layout_index_from_channel(&s->ch_layout, channel) < 0;
+            nb_draw_channels += s->bypass[ch] == 0;
+        }
+
+        s->nb_draw_channels = nb_draw_channels;
+    }
 
     return 0;
 }
@@ -260,6 +288,7 @@ static inline void plot_freq(ShowFreqsContext *s, int ch,
                              double a, int f, uint8_t fg[4], int *prev_y,
                              AVFrame *out, AVFilterLink *outlink)
 {
+    FilterLink *outl = ff_filter_link(outlink);
     const int w = s->w;
     const float min = s->minamp;
     const float avg = s->avg_data[ch][f];
@@ -288,8 +317,8 @@ static inline void plot_freq(ShowFreqsContext *s, int ch,
         y = a * outlink->h - 1;
         break;
     case SEPARATE:
-        end = (outlink->h / s->nb_channels) * (ch + 1);
-        y = (outlink->h / s->nb_channels) * ch + a * (outlink->h / s->nb_channels) - 1;
+        end = (outlink->h / s->nb_draw_channels) * (ch + 1);
+        y = (outlink->h / s->nb_draw_channels) * ch + a * (outlink->h / s->nb_draw_channels) - 1;
         break;
     default:
         av_assert0(0);
@@ -299,13 +328,13 @@ static inline void plot_freq(ShowFreqsContext *s, int ch,
 
     switch (s->avg) {
     case 0:
-        y = s->avg_data[ch][f] = !outlink->frame_count_in ? y : FFMIN(avg, y);
+        y = s->avg_data[ch][f] = !outl->frame_count_in ? y : FFMIN(0, y);
         break;
     case 1:
         break;
     default:
-        s->avg_data[ch][f] = avg + y * (y - avg) / (FFMIN(outlink->frame_count_in + 1, s->avg) * y);
-        y = s->avg_data[ch][f];
+        s->avg_data[ch][f] = avg + y * (y - avg) / (FFMIN(outl->frame_count_in + 1, s->avg) * (float)y);
+        y = av_clip(s->avg_data[ch][f], 0, outlink->h - 1);
         break;
     }
 
@@ -350,16 +379,12 @@ static int plot_freqs(AVFilterLink *inlink, int64_t pts)
     AVFrame *out;
     int ch, n;
 
-    out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
-    if (!out)
-        return AVERROR(ENOMEM);
-
-    for (n = 0; n < outlink->h; n++)
-        memset(out->data[0] + out->linesize[0] * n, 0, outlink->w * 4);
-
     /* fill FFT input with the number of samples available */
     for (ch = 0; ch < s->nb_channels; ch++) {
         const float *p = (float *)in->extended_data[ch];
+
+        if (s->bypass[ch])
+            continue;
 
         for (n = 0; n < win_size; n++) {
             s->fft_input[ch][n].re = p[n] * s->window_func_lut[n];
@@ -369,8 +394,16 @@ static int plot_freqs(AVFilterLink *inlink, int64_t pts)
 
     /* run FFT on each samples set */
     for (ch = 0; ch < s->nb_channels; ch++) {
-        s->tx_fn(s->fft, s->fft_data[ch], s->fft_input[ch], sizeof(float));
+        if (s->bypass[ch])
+            continue;
+
+        s->tx_fn(s->fft, s->fft_data[ch], s->fft_input[ch], sizeof(AVComplexFloat));
     }
+
+    s->pts = av_rescale_q(pts, inlink->time_base, outlink->time_base);
+    if (s->old_pts >= s->pts)
+        return 0;
+    s->old_pts = s->pts;
 
 #define RE(x, ch) s->fft_data[ch][x].re
 #define IM(x, ch) s->fft_data[ch][x].im
@@ -378,10 +411,17 @@ static int plot_freqs(AVFilterLink *inlink, int64_t pts)
 #define P(a, b) (atan2((b), (a)))
 
     colors = av_strdup(s->colors);
-    if (!colors) {
-        av_frame_free(&out);
+    if (!colors)
+        return AVERROR(ENOMEM);
+
+    out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+    if (!out) {
+        av_free(colors);
         return AVERROR(ENOMEM);
     }
+
+    for (n = 0; n < outlink->h; n++)
+        memset(out->data[0] + out->linesize[0] * n, 0, outlink->w * 4);
 
     for (ch = 0; ch < s->nb_channels; ch++) {
         uint8_t fg[4] = { 0xff, 0xff, 0xff, 0xff };
@@ -392,31 +432,26 @@ static int plot_freqs(AVFilterLink *inlink, int64_t pts)
         if (color)
             av_parse_color(fg, color, -1, ctx);
 
+        if (s->bypass[ch])
+            continue;
+
         switch (s->data_mode) {
         case MAGNITUDE:
-            a = av_clipd(M(RE(0, ch), 0) / s->scale, 0, 1);
-            plot_freq(s, ch, a, 0, fg, &prev_y, out, outlink);
-
-            for (f = 1; f < s->nb_freq; f++) {
+            for (f = 0; f < s->nb_freq; f++) {
                 a = av_clipd(M(RE(f, ch), IM(f, ch)) / s->scale, 0, 1);
 
                 plot_freq(s, ch, a, f, fg, &prev_y, out, outlink);
             }
             break;
         case PHASE:
-            a = av_clipd((M_PI + P(RE(0, ch), 0)) / (2. * M_PI), 0, 1);
-            plot_freq(s, ch, a, 0, fg, &prev_y, out, outlink);
-
-            for (f = 1; f < s->nb_freq; f++) {
+            for (f = 0; f < s->nb_freq; f++) {
                 a = av_clipd((M_PI + P(RE(f, ch), IM(f, ch))) / (2. * M_PI), 0, 1);
 
                 plot_freq(s, ch, a, f, fg, &prev_y, out, outlink);
             }
             break;
         case DELAY:
-            plot_freq(s, ch, 0, 0, fg, &prev_y, out, outlink);
-
-            for (f = 1; f < s->nb_freq; f++) {
+            for (f = 0; f < s->nb_freq; f++) {
                 a = av_clipd((M_PI - P(IM(f, ch) * RE(f-1, ch) - IM(f-1, ch) * RE(f, ch),
                                        RE(f, ch) * RE(f-1, ch) + IM(f, ch) * IM(f-1, ch))) / (2. * M_PI), 0, 1);
 
@@ -427,7 +462,8 @@ static int plot_freqs(AVFilterLink *inlink, int64_t pts)
     }
 
     av_free(colors);
-    out->pts = av_rescale_q(pts, inlink->time_base, outlink->time_base);
+    out->pts = s->pts;
+    out->duration = 1;
     out->sample_aspect_ratio = (AVRational){1,1};
     return ff_filter_frame(outlink, out);
 }
@@ -471,6 +507,11 @@ static int activate(AVFilterContext *ctx)
     if (ret < 0)
         return ret;
 
+    if (ff_inlink_queued_samples(inlink) >= s->hop_size) {
+        ff_filter_set_ready(ctx, 10);
+        return 0;
+    }
+
     FF_FILTER_FORWARD_STATUS(inlink, outlink);
     FF_FILTER_FORWARD_WANTED(outlink, inlink);
 
@@ -482,6 +523,7 @@ static av_cold void uninit(AVFilterContext *ctx)
     ShowFreqsContext *s = ctx->priv;
     int i;
 
+    av_channel_layout_uninit(&s->ch_layout);
     av_tx_uninit(&s->fft);
     for (i = 0; i < s->nb_channels; i++) {
         if (s->fft_input)
@@ -491,19 +533,13 @@ static av_cold void uninit(AVFilterContext *ctx)
         if (s->avg_data)
             av_freep(&s->avg_data[i]);
     }
+    av_freep(&s->bypass);
     av_freep(&s->fft_input);
     av_freep(&s->fft_data);
     av_freep(&s->avg_data);
     av_freep(&s->window_func_lut);
     av_frame_free(&s->window);
 }
-
-static const AVFilterPad showfreqs_inputs[] = {
-    {
-        .name         = "default",
-        .type         = AVMEDIA_TYPE_AUDIO,
-    },
-};
 
 static const AVFilterPad showfreqs_outputs[] = {
     {
@@ -513,14 +549,14 @@ static const AVFilterPad showfreqs_outputs[] = {
     },
 };
 
-const AVFilter ff_avf_showfreqs = {
-    .name          = "showfreqs",
-    .description   = NULL_IF_CONFIG_SMALL("Convert input audio to a frequencies video output."),
+const FFFilter ff_avf_showfreqs = {
+    .p.name        = "showfreqs",
+    .p.description = NULL_IF_CONFIG_SMALL("Convert input audio to a frequencies video output."),
+    .p.priv_class  = &showfreqs_class,
     .uninit        = uninit,
     .priv_size     = sizeof(ShowFreqsContext),
     .activate      = activate,
-    FILTER_INPUTS(showfreqs_inputs),
+    FILTER_INPUTS(ff_audio_default_filterpad),
     FILTER_OUTPUTS(showfreqs_outputs),
-    FILTER_QUERY_FUNC(query_formats),
-    .priv_class    = &showfreqs_class,
+    FILTER_QUERY_FUNC2(query_formats),
 };
