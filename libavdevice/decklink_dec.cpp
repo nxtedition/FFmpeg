@@ -854,8 +854,9 @@ HRESULT decklink_input_callback::VideoInputFrameArrived(
 
             if (!no_video) {
                 av_log(avctx, AV_LOG_WARNING, "Frame received (#%lu) - No input signal detected "
-                        "- Frames dropped %u\n", ctx->frameCount, ++ctx->dropped);
+                        "- Frames dropped %u\n", ctx->frameCount, ctx->dropped);
             }
+            ++ctx->dropped;
             no_video = 1;
         } else {
             if (ctx->signal_loss_action == SIGNAL_LOSS_REPEAT) {
@@ -867,8 +868,18 @@ HRESULT decklink_input_callback::VideoInputFrameArrived(
             if (no_video) {
                 av_log(avctx, AV_LOG_WARNING, "Frame received (#%lu) - Input returned "
                         "- Frames dropped %u\n", ctx->frameCount, ++ctx->dropped);
+
+                // Need to restart the streams to avoid audio/video desync after signal loss
+                // https://www.blackmagicdesign.com/support/faq/59024
+                // https://forum.blackmagicdesign.com/viewtopic.php?f=12&t=122276
+                // https://forum.blackmagicdesign.com/viewtopic.php?t=55578
+                ctx->dli->StopStreams();
+                ctx->dli->FlushStreams();
+                ctx->dli->StartStreams();
+
+                no_video = 0;
+                return S_OK;
             }
-            no_video = 0;
 
             // Handle Timecode (if requested)
             if (ctx->tc_format) {
