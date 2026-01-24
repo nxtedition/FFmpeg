@@ -1996,7 +1996,7 @@ by ":". See the SVT-AV1 encoder user guide for a list of accepted parameters.
 
 @end table
 
-@section libsvtav1
+@section libsvtjpegxs
 
 SVT-JPEG-XS encoder wrapper.
 
@@ -3082,6 +3082,10 @@ Quantizer curve compression factor
 @item forced-idr
 Normally, when forcing a I-frame type, the encoder can select any type
 of I-frame. This option forces it to choose an IDR-frame.
+
+@item x265-stats
+Specify the file name for 2-pass stats. This is set automatically when using
+the @option{-passlogfile} option.
 
 @item udu_sei @var{boolean}
 Import user data unregistered SEI if available into output. Default is 0 (off).
