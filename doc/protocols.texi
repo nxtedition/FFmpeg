@@ -169,6 +169,7 @@ Read angle 2 of playlist 4 from BluRay mounted to /mnt/bluray, start from chapte
 -playlist 4 -angle 2 -chapter 2 bluray:/mnt/bluray
 @end example
 
+@anchor{cache}
 @section cache
 
 Caching wrapper for input stream.
@@ -1566,6 +1567,43 @@ If set to any value, listen for an incoming connection. Outgoing connection is d
 @item max_streams
 Set the maximum number of streams. By default no limit is set.
 @end table
+
+@section shared
+
+Thread-safe, persistent, cross-process cache wrapper for input streams. Caches
+the input stream to a file in the specified directory. This is similar to
+@ref{cache}, but with a persistent cache on disk that may be shared between
+multiple processes or demuxers, even concurrently.
+
+The filename of the cache is obtained by hashing the input URL, so there is
+some risk of collision if the same URL is used for different content (e.g.
+as a result of extra POST data being used to select the stream ID). To avoid
+this, make sure to only use this protocol for URLs that uniquely identify
+the content; otherwise you may get a garbled mix of sources.
+
+The accepted options are:
+@table @option
+
+@item cache_dir
+Path to the directory where cache files are stored. This option is required.
+
+@item block_shift
+Shift factor (log2) of the block size used for internal reads/writes. Defaults
+to 15, i.e. 32KB blocks. This value must agree between multiple processes,
+otherwise an error is raised.
+
+@item read_only
+If true, use the shared cache for reads but don't write any new blocks to it.
+Default is false. Note that even with this option enabled, the cache file will
+be initialized if it does not already exist, and metadata such as the filesize
+will still be updated.
+
+@end table
+
+URL Syntax is
+@example
+shared:@var{URL}
+@end example
 
 @section srt
 
