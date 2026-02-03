@@ -541,7 +541,10 @@ retry:
             return inner_pos;
         }
 
+        av_log(h, AV_LOG_INFO, "Seeked underlying protocol to 0x%"PRIx64"\n", inner_pos);
         s->inner_pos = inner_pos;
+    } else {
+        av_log(h, AV_LOG_DEBUG, "Position 0x%"PRIx64" already matches inner -> skipping seek\n", inner_pos);
     }
 
     if (read_only) {
@@ -583,6 +586,9 @@ retry:
     }
 
     if (bytes_read > 0) {
+        av_assert0(inner_pos == block_pos);
+        av_log(h, AV_LOG_VERBOSE, "Read %d bytes from %"PRIx64" (new inner pos 0x%"PRIx64"), caching to block 0x%"PRIx64"\n",
+               bytes_read, inner_pos, s->inner_pos, block);
         ret = pwrite_loop(s->fd, tmp, bytes_read, inner_pos);
         if (ret == bytes_read) {
             atomic_store_explicit(block_state, BLOCK_CACHED, memory_order_release);
@@ -597,8 +603,10 @@ retry:
 
     const int wanted = FFMIN(bytes_read - offset, size);
     av_assert0(wanted >= 0);
-    if (tmp != buf)
+    if (tmp != buf) {
+        av_log(h, AV_LOG_DEBUG, "Served partial read at 0x%"PRIx64" for %d bytes\n", s->pos, wanted);
         memcpy(buf, &s->tmp_buf[offset], wanted);
+    }
     s->pos += wanted;
     return wanted;
 }
@@ -609,14 +617,19 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
     const int64_t filesize = get_filesize(h);
 
     if (whence == SEEK_SET) {
+        av_log(h, AV_LOG_INFO, "Seeking (absolute) to 0x%"PRIx64"\n", pos);
         return s->pos = pos;
     } else if (whence == SEEK_CUR) {
+        av_log(h, AV_LOG_INFO, "Seeking (relative) to 0x%"PRIx64"\n", s->pos + pos);
         return s->pos += pos;
     } else if (whence == SEEK_END) {
-        if (filesize)
+        if (filesize) {
+            av_log(h, AV_LOG_INFO, "Seeking (end) to 0x%"PRIx64"\n", filesize + pos);
             return s->pos = filesize + pos;
+        }
         /* Defer to underlying protocol if filesize is unknown */
         int64_t res = ffurl_seek(s->inner, pos, whence);
+        av_log(h, AV_LOG_INFO, "Inner SEEK_END to 0x%"PRIx64" returned 0x%"PRIx64"\n", pos, res);
         if (res < 0)
             return res;
         set_filesize(h, res - pos); /* Opportunistically update known filesize */
@@ -625,6 +638,7 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
         if (filesize)
             return filesize;
         int64_t res = ffurl_seek(s->inner, pos, whence);
+        av_log(h, AV_LOG_INFO, "Inner AVSEEK_SIZE returned 0x%"PRIx64"\n", res);
         if (res < 0)
             return res;
         set_filesize(h, res);
