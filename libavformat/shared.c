@@ -205,7 +205,8 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     int ret;
 
     if (!s->cache_dir || !s->cache_dir[0]) {
-        av_log(h, AV_LOG_ERROR, "Missing path for shared cache!\n");
+        av_log(h, AV_LOG_ERROR, "Missing path for shared cache! Specify a "
+               "directory using the -cache_dir option.\n");
         return AVERROR(EINVAL);
     }
 
@@ -372,16 +373,20 @@ static int spacemap_grow(URLContext *h, int64_t block)
     if (map_bytes < num_blocks)
         return AVERROR(EINVAL); /* overflow */
 
+    const off_t old_size = s->map_size;
     int ret = spacemap_remap(h, map_bytes);
     if (ret < 0)
         return ret;
 
     /* Report new size after successful grow */
-    num_blocks = s->map_size - sizeof(Spacemap);
-    av_log(h, AV_LOG_DEBUG, "%s %zu bytes, capacity: %"PRId64" blocks = %zu MB\n",
-           ret ? "Resized spacemap to" : "Mapped spacemap with",
-           (size_t) s->map_size, num_blocks,
-           (num_blocks * (int64_t) s->block_size) >> 20);
+    if (s->map_size > old_size) {
+        num_blocks = s->map_size - sizeof(Spacemap);
+        av_log(h, AV_LOG_DEBUG,
+               "%s %zu bytes, capacity: %"PRId64" blocks = %zu MB\n",
+               ret ? "Resized spacemap to" : "Mapped spacemap with",
+               (size_t) s->map_size, num_blocks,
+               (num_blocks * (int64_t) s->block_size) >> 20);
+    }
     return 0;
 }
 
@@ -544,11 +549,9 @@ retry:
         if (inner_pos < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to seek underlying protocol: %s\n",
                    av_err2str(inner_pos));
-            /**
-             * Release pending state to avoid stalling other threads. Don't
+            /* Release pending state to avoid stalling other threads. Don't
              * mark this as failed, since the seek error may be unrelated to
-             * the block and should probably be tried again.
-             */
+             * the block and should probably be tried again. */
             atomic_compare_exchange_strong_explicit(block_state, &state,
                                                     BLOCK_NONE,
                                                     memory_order_relaxed,
@@ -556,6 +559,7 @@ retry:
             return inner_pos;
         }
 
+        av_log(h, AV_LOG_DEBUG, "Inner seek to 0x%"PRIx64"\n", inner_pos);
         s->inner_pos = inner_pos;
     }
 
@@ -576,6 +580,8 @@ retry:
         if (!ret || ret == AVERROR_EOF)
             break;
         else if (ret < 0) {
+            av_log(h, AV_LOG_ERROR, "Failed to read block 0x%"PRIx64": %s\n",
+                   block, av_err2str(ret));
             /* Try to mark block as failed; ignore errors - any mismatch
              * here will mean that either another thread already marked it
              * as failed, or successfully cached it in the meantime */
@@ -598,17 +604,18 @@ retry:
     }
 
     if (bytes_read > 0) {
+        av_assert0(inner_pos == block_pos);
         ret = pwrite_loop(s->fd, tmp, bytes_read, inner_pos);
         if (ret == bytes_read) {
+            av_log(h, AV_LOG_TRACE, "Cached %d bytes to block 0x%"PRIx64" at "
+                   "offset 0x%"PRIx64"\n", bytes_read, block, inner_pos);
             atomic_store_explicit(block_state, BLOCK_CACHED, memory_order_release);
         } else {
             av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
                    av_err2str(AVERROR(errno)));
             s->write_err = 1;
-            /**
-             * Mark as NONE, not FAILED, since the block itself is fine -
-             * just absent from the cache.
-             */
+            /* Mark as NONE, not FAILED, since the block itself is fine -
+             * just absent from the cache. */
             atomic_compare_exchange_strong_explicit(block_state, &state,
                                                     BLOCK_NONE,
                                                     memory_order_relaxed,
@@ -630,31 +637,39 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
 {
     SharedContext *s = h->priv_data;
     const int64_t filesize = get_filesize(h);
+    int64_t res;
 
-    if (whence == SEEK_SET) {
-        return s->pos = pos;
-    } else if (whence == SEEK_CUR) {
-        return s->pos += pos;
-    } else if (whence == SEEK_END) {
+    switch (whence) {
+    case AVSEEK_SIZE:
         if (filesize)
-            return s->pos = filesize + pos;
+            return filesize;
+        res = ffurl_seek(s->inner, pos, whence);
+        if (res > 0)
+            set_filesize(h, res);
+        return res;
+    case SEEK_SET:
+        break;
+    case SEEK_CUR:
+        pos += s->pos;
+        break;
+    case SEEK_END:
+        if (filesize) {
+            pos += filesize;
+            break;
+        }
         /* Defer to underlying protocol if filesize is unknown */
-        int64_t res = ffurl_seek(s->inner, pos, whence);
+        res = ffurl_seek(s->inner, pos, whence);
         if (res < 0)
             return res;
         set_filesize(h, res - pos); /* Opportunistically update known filesize */
+        av_log(h, AV_LOG_DEBUG, "Inner seek to 0x%"PRIx64"\n", res);
         return s->pos = s->inner_pos = res;
-    } else if (whence == AVSEEK_SIZE) {
-        if (filesize)
-            return filesize;
-        int64_t res = ffurl_seek(s->inner, pos, whence);
-        if (res < 0)
-            return res;
-        set_filesize(h, res);
-        return res;
-    } else {
+    default:
         return AVERROR(EINVAL);
     }
+
+    av_log(h, AV_LOG_DEBUG, "Virtual seek to 0x%"PRIx64"\n", pos);
+    return s->pos = pos;
 }
 
 static int shared_get_file_handle(URLContext *h)
