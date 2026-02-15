@@ -416,6 +416,8 @@ redo:
             ret = AVERROR(ENOMEM);
             goto fail;
         }
+        if (redirects++ >= MAX_REDIRECTS)
+            return AVERROR(EIO);
         goto redo;
     }
 
