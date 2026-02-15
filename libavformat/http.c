@@ -154,8 +154,8 @@ typedef struct HTTPContext {
     int nb_retries;
     int nb_reconnects;
     int nb_redirects;
-    int sum_latency; /* divide by nb_requests */
-    int max_latency;
+    int64_t sum_latency; /* divide by nb_requests */
+    int64_t max_latency;
 } HTTPContext;
 
 #define OFFSET(x) offsetof(HTTPContext, x)
@@ -416,6 +416,8 @@ redo:
             ret = AVERROR(ENOMEM);
             goto fail;
         }
+        if (redirects++ >= MAX_REDIRECTS)
+            return AVERROR(EIO);
         goto redo;
     }
 
@@ -505,6 +507,7 @@ redo:
     return 0;
 
 fail:
+    s->off = off;
     if (s->hd)
         ffurl_closep(&s->hd);
     if (ret < 0)
@@ -1157,7 +1160,7 @@ static void parse_cache_control(HTTPContext *s, const char *p)
     }
 
     if (age) {
-        s->expires = time(NULL) + atoi(p + offset);
+        s->expires = time(NULL) + atoi(age + offset);
     }
 }
 
@@ -1679,7 +1682,15 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     if (s->new_location)
         s->off = off;
 
-    err = (off == s->off) ? 0 : -1;
+    if (off != s->off) {
+        av_log(h, AV_LOG_ERROR,
+               "Unexpected offset: expected %"PRIu64", got %"PRIu64"\n",
+               off, s->off);
+        err = AVERROR(EIO);
+        goto done;
+    }
+
+    err = 0;
 done:
     av_freep(&authstr);
     av_freep(&proxyauthstr);
@@ -1823,6 +1834,8 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
     if (s->compressed)
         return http_buf_read_compressed(h, buf, size);
 #endif /* CONFIG_ZLIB */
+
+retry:
     read_ret = http_buf_read(h, buf, size);
     while (read_ret < 0) {
         uint64_t target = h->is_streamed ? 0 : s->off;
@@ -1866,11 +1879,11 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
         conn_attempts++;
         seek_ret = http_seek_internal(h, target, SEEK_SET, 1);
         if (seek_ret >= 0 && seek_ret != target) {
+            ffurl_close(&s->hd);
             av_log(h, AV_LOG_ERROR, "Failed to reconnect at %"PRIu64".\n", target);
             return read_ret;
         }
 
-retry:
         read_ret = http_buf_read(h, buf, size);
     }
 
