@@ -262,10 +262,10 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     int64_t filesize = get_filesize(h);
     if (!filesize) {
         /* Filesize is not yet known, try to get it from the underlying URL */
-        filesize = ffurl_size(s->inner);
+        ret = filesize = ffurl_size(s->inner);
         if (ret < 0 && ret != AVERROR(ENOSYS))
             goto fail;
-        else if (ret > 0)
+        else if (filesize > 0)
             set_filesize(h, filesize);
     }
 
@@ -274,7 +274,7 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
         int64_t last_block = last_pos >> atomic_load(&s->spacemap->block_shift);
         ret = spacemap_grow(h, last_block);
         if (ret < 0)
-            return ret;
+            goto fail;
     }
 
     h->max_packet_size = s->block_size;
@@ -324,8 +324,10 @@ static int spacemap_remap(URLContext *h, size_t map_size)
         goto skip_resize;
 
     ret = ftruncate(s->mapfd, map_size);
-    if (ret < 0)
+    if (ret < 0) {
+        ret = AVERROR(errno);
         goto fail;
+    }
     st.st_size = map_size;
     did_grow = 1;
 
@@ -487,6 +489,8 @@ retry:
             ret = AVERROR(errno);
             av_log(h, AV_LOG_ERROR, "Failed to read from cache file: %s\n", av_err2str(ret));
             return ret;
+        } else if (ret == 0) {
+            return AVERROR_EOF;
         }
 
         s->nb_hit++;
@@ -498,6 +502,8 @@ retry:
             return AVERROR(EIO);
         /* fall through */
     case BLOCK_NONE:
+        if (s->read_only)
+            break; /* don't mark block as pending */
         if (atomic_compare_exchange_weak_explicit(block_state, &state,
                                                   BLOCK_PENDING,
                                                   memory_order_acquire,
@@ -538,13 +544,19 @@ retry:
         if (inner_pos < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to seek underlying protocol: %s\n",
                    av_err2str(inner_pos));
+            /**
+             * Release pending state to avoid stalling other threads. Don't
+             * mark this as failed, since the seek error may be unrelated to
+             * the block and should probably be tried again.
+             */
+            atomic_compare_exchange_strong_explicit(block_state, &state,
+                                                    BLOCK_NONE,
+                                                    memory_order_relaxed,
+                                                    memory_order_relaxed);
             return inner_pos;
         }
 
-        av_log(h, AV_LOG_INFO, "Seeked underlying protocol to 0x%"PRIx64"\n", inner_pos);
         s->inner_pos = inner_pos;
-    } else {
-        av_log(h, AV_LOG_DEBUG, "Position 0x%"PRIx64" already matches inner -> skipping seek\n", inner_pos);
     }
 
     if (read_only) {
@@ -586,9 +598,6 @@ retry:
     }
 
     if (bytes_read > 0) {
-        av_assert0(inner_pos == block_pos);
-        av_log(h, AV_LOG_VERBOSE, "Read %d bytes from %"PRIx64" (new inner pos 0x%"PRIx64"), caching to block 0x%"PRIx64"\n",
-               bytes_read, inner_pos, s->inner_pos, block);
         ret = pwrite_loop(s->fd, tmp, bytes_read, inner_pos);
         if (ret == bytes_read) {
             atomic_store_explicit(block_state, BLOCK_CACHED, memory_order_release);
@@ -596,6 +605,14 @@ retry:
             av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
                    av_err2str(AVERROR(errno)));
             s->write_err = 1;
+            /**
+             * Mark as NONE, not FAILED, since the block itself is fine -
+             * just absent from the cache.
+             */
+            atomic_compare_exchange_strong_explicit(block_state, &state,
+                                                    BLOCK_NONE,
+                                                    memory_order_relaxed,
+                                                    memory_order_relaxed);
         }
     } else {
         return AVERROR_EOF;
@@ -603,10 +620,8 @@ retry:
 
     const int wanted = FFMIN(bytes_read - offset, size);
     av_assert0(wanted >= 0);
-    if (tmp != buf) {
-        av_log(h, AV_LOG_DEBUG, "Served partial read at 0x%"PRIx64" for %d bytes\n", s->pos, wanted);
+    if (tmp != buf)
         memcpy(buf, &s->tmp_buf[offset], wanted);
-    }
     s->pos += wanted;
     return wanted;
 }
@@ -617,19 +632,14 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
     const int64_t filesize = get_filesize(h);
 
     if (whence == SEEK_SET) {
-        av_log(h, AV_LOG_INFO, "Seeking (absolute) to 0x%"PRIx64"\n", pos);
         return s->pos = pos;
     } else if (whence == SEEK_CUR) {
-        av_log(h, AV_LOG_INFO, "Seeking (relative) to 0x%"PRIx64"\n", s->pos + pos);
         return s->pos += pos;
     } else if (whence == SEEK_END) {
-        if (filesize) {
-            av_log(h, AV_LOG_INFO, "Seeking (end) to 0x%"PRIx64"\n", filesize + pos);
+        if (filesize)
             return s->pos = filesize + pos;
-        }
         /* Defer to underlying protocol if filesize is unknown */
         int64_t res = ffurl_seek(s->inner, pos, whence);
-        av_log(h, AV_LOG_INFO, "Inner SEEK_END to 0x%"PRIx64" returned 0x%"PRIx64"\n", pos, res);
         if (res < 0)
             return res;
         set_filesize(h, res - pos); /* Opportunistically update known filesize */
@@ -638,7 +648,6 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
         if (filesize)
             return filesize;
         int64_t res = ffurl_seek(s->inner, pos, whence);
-        av_log(h, AV_LOG_INFO, "Inner AVSEEK_SIZE returned 0x%"PRIx64"\n", res);
         if (res < 0)
             return res;
         set_filesize(h, res);
