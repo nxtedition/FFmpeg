@@ -263,10 +263,11 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     int64_t filesize = get_filesize(h);
     if (!filesize) {
         /* Filesize is not yet known, try to get it from the underlying URL */
-        ret = filesize = ffurl_size(s->inner);
-        if (ret < 0 && ret != AVERROR(ENOSYS))
+        filesize = ffurl_size(s->inner);
+        if (filesize < 0 && filesize != AVERROR(ENOSYS)) {
+            ret = (int) filesize;
             goto fail;
-        else if (filesize > 0)
+        } else if (filesize > 0)
             set_filesize(h, filesize);
     }
 
