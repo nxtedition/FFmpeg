@@ -133,7 +133,9 @@ typedef struct SharedContext {
     int write_err; ///< write error occurred
 
     /* cache file */
+    uint8_t *cache_data; ///< optional mmap of the cache file
     char *cache_path;
+    off_t cache_size; ///< size of mapped memory region (for munmap)
     int fd;
 
     /* space map */
@@ -152,6 +154,8 @@ static int shared_close(URLContext *h)
     SharedContext *s = h->priv_data;
 
     ffurl_close(s->inner);
+    if (s->cache_data)
+        munmap(s->cache_data, s->cache_size);
     if (s->spacemap)
         munmap(s->spacemap, s->map_size);
     if (s->fd != -1)
@@ -167,6 +171,7 @@ static int shared_close(URLContext *h)
     return 0;
 }
 
+static int cache_map(URLContext *h, int64_t filesize);
 static int spacemap_init(URLContext *h, const uint8_t hash[HASH_SIZE]);
 static int spacemap_grow(URLContext *h, int64_t block);
 
@@ -191,9 +196,9 @@ static int set_filesize(URLContext *h, int64_t new_size)
                 (uint64_t) atomic_load(&s->spacemap->filesize));
         return ret;
     } else if (ret) {
-        /* Opportunistically set the filesize metadata, ignoring failure as
-         * this is not relevant to the cache logic */
-        ftruncate(s->fd, new_size);
+        /* Opportunistically map the file; this also sets the correct filesize.
+         * Ignore errors as this is not critical to the cache logic. */
+        cache_map(h, new_size);
     }
 
     return ret;
@@ -254,11 +259,6 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
         goto fail;
 
     s->block_size = 1 << atomic_load(&s->spacemap->block_shift);
-    s->tmp_buf = av_malloc(s->block_size);
-    if (!s->tmp_buf) {
-        ret = AVERROR(ENOMEM);
-        goto fail;
-    }
 
     int64_t filesize = get_filesize(h);
     if (!filesize) {
@@ -277,6 +277,23 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
         ret = spacemap_grow(h, last_block);
         if (ret < 0)
             goto fail;
+
+        /* If filesize is known, we can directly mmap() the cache file */
+        ret = cache_map(h, filesize);
+        if (ret < 0) {
+            av_log(h, AV_LOG_WARNING, "Failed to map cache file: %s. Falling "
+                   "back to normal read/write\n", av_err2str(ret));
+            ret = 0;
+        }
+    }
+
+    if (!s->cache_data) {
+        /* Temporary buffer needed for pread/pwrite() fallback */
+        s->tmp_buf = av_malloc(s->block_size);
+        if (!s->tmp_buf) {
+            ret = AVERROR(ENOMEM);
+            goto fail;
+        }
     }
 
     h->max_packet_size = s->block_size;
@@ -286,6 +303,42 @@ fail:
     if (ret < 0)
         shared_close(h);
     return ret;
+}
+
+static int cache_map(URLContext *h, int64_t filesize)
+{
+    SharedContext *s = h->priv_data;
+    if (s->cache_size >= filesize)
+        return 0;
+
+    if (s->cache_data) {
+        munmap(s->cache_data, s->cache_size);
+        s->cache_data = NULL;
+        s->cache_size = 0;
+    }
+
+    struct stat st;
+    int ret = fstat(s->fd, &st);
+    if (ret < 0)
+        return AVERROR(errno);
+
+    if (st.st_size != filesize) {
+        /* Ensure the file size is correct before mapping; this can happen if
+         * another process wrote the correct filesize to the header but
+         * crashed right before actually successfully resizing the file. */
+        ret = ftruncate(s->fd, filesize);
+        if (ret < 0)
+            return AVERROR(errno);
+    }
+
+    s->cache_data = mmap(NULL, filesize, PROT_READ | PROT_WRITE, MAP_SHARED, s->fd, 0);
+    if (s->cache_data == MAP_FAILED) {
+        s->cache_data = NULL;
+        return AVERROR(errno);
+    }
+
+    s->cache_size = filesize;
+    return 0;
 }
 
 static int spacemap_remap(URLContext *h, size_t map_size)
@@ -444,11 +497,28 @@ static int spacemap_init(URLContext *h, const uint8_t hash[HASH_SIZE])
     return ret;
 }
 
-static ssize_t pwrite_loop(int fd, const uint8_t *buf, size_t size, off_t offset)
+static ssize_t read_cache(SharedContext *s, uint8_t *buf, size_t size, off_t offset)
 {
+    if (s->cache_data) {
+        av_assert1(offset + size <= s->cache_size);
+        memcpy(buf, s->cache_data + offset, size);
+        return size;
+    }
+
+    return pread(s->fd, buf, size, offset);
+}
+
+static ssize_t write_cache(SharedContext *s, const uint8_t *buf, size_t size, off_t offset)
+{
+    if (s->cache_data) {
+        av_assert1(offset + size <= s->cache_size);
+        memcpy(s->cache_data + offset, buf, size);
+        return size;
+    }
+
     const size_t total = size;
     while (size) {
-        ssize_t ret = pwrite(fd, buf, size, offset);
+        ssize_t ret = pwrite(s->fd, buf, size, offset);
         if (ret < 0)
             return ret;
         buf    += ret;
@@ -490,7 +560,7 @@ retry:
     switch (state) {
     case BLOCK_CACHED:
         size = FFMIN(size, s->block_size - offset);
-        ret = pread(s->fd, buf, size, s->pos);
+        ret = read_cache(s, buf, size, s->pos);
         if (ret < 0) {
             ret = AVERROR(errno);
             av_log(h, AV_LOG_ERROR, "Failed to read from cache file: %s\n", av_err2str(ret));
@@ -572,9 +642,24 @@ retry:
         return ret;
     }
 
-    /* Try and fetch the entire block; reuse the output buffer if possible */
+    /* Try and fetch the entire block */
     const int block_size = filesize ? FFMIN(filesize - inner_pos, s->block_size) : s->block_size;
-    uint8_t *const tmp = (size >= block_size && !offset) ? buf : s->tmp_buf;
+
+    uint8_t *tmp;
+    int write_back = 1;
+    if (s->cache_data) {
+        /* Read directly into memory mapped cache file */
+        tmp = s->cache_data + block_pos;
+        write_back = 0;
+    } else if (size >= block_size && !offset) {
+        /* Read directly into output buffer if aligned and large enough */
+        tmp = buf;
+    } else {
+        /* Read into temporary buffer and copy later */
+        tmp = s->tmp_buf;
+    }
+
+    av_assert0(inner_pos == block_pos);
     int bytes_read = 0;
     while (bytes_read < block_size) {
         ret = ffurl_read(s->inner, &tmp[bytes_read], block_size - bytes_read);
@@ -605,11 +690,10 @@ retry:
     }
 
     if (bytes_read > 0) {
-        av_assert0(inner_pos == block_pos);
-        ret = pwrite_loop(s->fd, tmp, bytes_read, inner_pos);
+        ret = write_back ? write_cache(s, tmp, bytes_read, block_pos) : bytes_read;
         if (ret == bytes_read) {
             av_log(h, AV_LOG_TRACE, "Cached %d bytes to block 0x%"PRIx64" at "
-                   "offset 0x%"PRIx64"\n", bytes_read, block, inner_pos);
+                   "offset 0x%"PRIx64"\n", bytes_read, block, block_pos);
             atomic_store_explicit(block_state, BLOCK_CACHED, memory_order_release);
         } else {
             av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
@@ -629,7 +713,7 @@ retry:
     const int wanted = FFMIN(bytes_read - offset, size);
     av_assert0(wanted >= 0);
     if (tmp != buf)
-        memcpy(buf, &s->tmp_buf[offset], wanted);
+        memcpy(buf, &tmp[offset], wanted);
     s->pos += wanted;
     return wanted;
 }
