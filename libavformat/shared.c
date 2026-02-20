@@ -23,6 +23,7 @@
 
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
+#include "libavutil/crc.h"
 #include "libavutil/hash.h"
 #include "libavutil/file_open.h"
 #include "libavutil/mem.h"
@@ -74,17 +75,35 @@ static int hash_uri(uint8_t hash[HASH_SIZE], const char *uri)
 }
 
 #define HEADER_MAGIC   MKTAG(u'\xFF', 'S', 'h', '$')
-#define HEADER_VERSION 1
+#define HEADER_VERSION 2
 
 enum BlockState {
-    BLOCK_NONE,
-    BLOCK_CACHED,  ///< block was cached successfully
-    BLOCK_PENDING, ///< a thread is currently trying to write this block
-    BLOCK_FAILED,  ///< the underlying I/O source failed to read this block
+    /* Reserved block state values */
+    BLOCK_NONE = 0, ///< block is not cached
+    BLOCK_PENDING,  ///< a thread is currently trying to write this block
+    BLOCK_FAILED,   ///< the underlying I/O source failed to read this block
+
+    /**
+     * All other block states represent valid cached blocks, with the value
+     * being the CRC of the block data.
+     */
 };
 
+static uint16_t get_block_crc(const uint8_t *block, size_t block_size)
+{
+    uint16_t crc = av_crc(av_crc_get_table(AV_CRC_16_ANSI), 0, block, block_size);
+    switch (crc) {
+    case BLOCK_NONE:
+    case BLOCK_FAILED:
+    case BLOCK_PENDING:
+        return ~crc; /* avoid reserved block states */
+    default:
+        return crc;
+    }
+}
+
 typedef struct Block {
-    atomic_uchar state; /* enum BlockState */
+    atomic_ushort state; /* enum BlockState */
 } Block;
 
 typedef struct Spacemap {
@@ -501,81 +520,109 @@ static int spacemap_init(URLContext *h, const uint8_t hash[HASH_SIZE])
     return ret;
 }
 
-static ssize_t read_cache(SharedContext *s, uint8_t *buf, size_t size, off_t offset)
+static int read_cache(SharedContext *s, uint8_t *buf, size_t size, off_t offset)
 {
     if (s->cache_data) {
         av_assert1(offset + size <= s->cache_size);
         memcpy(buf, s->cache_data + offset, size);
-        return size;
+        return 0;
     }
 
-    return pread(s->fd, buf, size, offset);
-}
-
-static ssize_t write_cache(SharedContext *s, const uint8_t *buf, size_t size, off_t offset)
-{
-    if (s->cache_data) {
-        av_assert1(offset + size <= s->cache_size);
-        memcpy(s->cache_data + offset, buf, size);
-        return size;
-    }
-
-    const size_t total = size;
     while (size) {
-        ssize_t ret = pwrite(s->fd, buf, size, offset);
-        if (ret < 0)
-            return ret;
+        ssize_t ret = pread(s->fd, buf, size, offset);
+        if (ret <= 0)
+            return ret ? AVERROR(errno) : AVERROR(EIO);
         buf    += ret;
         offset += ret;
         size   -= ret;
     }
-    return total;
+
+    return 0;
+}
+
+static int write_cache(SharedContext *s, const uint8_t *buf, size_t size, off_t offset)
+{
+    if (s->cache_data) {
+        av_assert1(offset + size <= s->cache_size);
+        memcpy(s->cache_data + offset, buf, size);
+        return 0;
+    }
+
+    while (size) {
+        ssize_t ret = pwrite(s->fd, buf, size, offset);
+        if (ret <= 0)
+            return ret ? AVERROR(errno) : AVERROR(EIO);
+        buf    += ret;
+        offset += ret;
+        size   -= ret;
+    }
+
+    return 0;
+}
+
+static size_t clamp_size(URLContext *h, size_t size, int64_t pos)
+{
+    const int64_t filesize = get_filesize(h);
+    return filesize ? FFMIN(filesize - pos, size) : size;
 }
 
 static int shared_read(URLContext *h, unsigned char *buf, int size)
 {
     SharedContext *s = h->priv_data;
+    uint8_t *tmp;
     int ret;
 
     if (size <= 0)
         return 0;
 
-    int64_t filesize = get_filesize(h);
-    if (filesize) { /* limit read request to true filesize if known */
-        if (s->pos + size >= filesize)
-            size = filesize - s->pos;
-        if (size <= 0)
-            return AVERROR_EOF;
-    }
+    size = clamp_size(h, size, s->pos);
+    if (size <= 0)
+        return AVERROR_EOF;
 
     const int shift = atomic_load_explicit(&s->spacemap->block_shift, memory_order_relaxed);
     const int64_t block_id = s->pos >> shift;
     const int64_t offset = s->pos & (s->block_size - 1);
     const int64_t block_pos = block_id * s->block_size;
+    int block_size = clamp_size(h, s->block_size, block_pos);
     ret = spacemap_grow(h, block_id);
     if (ret < 0)
         return ret;
 
     Block *const block = &s->spacemap->blocks[block_id];
-    unsigned char state = atomic_load_explicit(&block->state, memory_order_acquire);
+    unsigned short state = atomic_load_explicit(&block->state, memory_order_acquire);
     int64_t pending_since = 0;
 
 retry:
     switch (state) {
-    case BLOCK_CACHED:
-        size = FFMIN(size, s->block_size - offset);
-        ret = read_cache(s, buf, size, s->pos);
-        if (ret < 0) {
-            ret = AVERROR(errno);
-            av_log(h, AV_LOG_ERROR, "Failed to read from cache file: %s\n", av_err2str(ret));
-            return ret;
-        } else if (ret == 0) {
-            return AVERROR_EOF;
+    default:
+        /* We always need to read the entire block to verify integrity */
+        block_size = clamp_size(h, block_size, block_pos); /* filesize may have changed */
+        if (s->cache_data) {
+            av_assert1(block_pos + block_size <= s->cache_size);
+            tmp = s->cache_data + block_pos;
+        } else {
+            tmp = s->tmp_buf;
+            ret = read_cache(s, tmp, block_size, block_pos);
+            if (ret < 0) {
+                av_log(h, AV_LOG_ERROR, "Failed to read from cache file: %s\n", av_err2str(ret));
+                return ret;
+            }
         }
 
+        uint16_t crc = get_block_crc(tmp, block_size);
+        if (crc != state) {
+            av_log(h, AV_LOG_ERROR, "Cache corruption detected for block 0x%"PRIx64" at "
+                   "offset 0x%"PRIx64": expected CRC: 0x%04X, got: 0x%04X\n",
+                   block_id, block_pos, state, crc);
+            return AVERROR(EIO);
+        }
+
+        size = FFMIN(size, block_size - offset);
+        memcpy(buf, tmp + offset, size);
+
         s->nb_hit++;
-        s->pos += ret;
-        return ret;
+        s->pos += size;
+        return size;
 
     case BLOCK_FAILED:
         if (!s->retry_errors)
@@ -646,10 +693,6 @@ retry:
         return ret;
     }
 
-    /* Try and fetch the entire block */
-    const int block_size = filesize ? FFMIN(filesize - inner_pos, s->block_size) : s->block_size;
-
-    uint8_t *tmp;
     int write_back = 1;
     if (s->cache_data) {
         /* Read directly into memory mapped cache file */
@@ -663,6 +706,7 @@ retry:
         tmp = s->tmp_buf;
     }
 
+    /* Try and fetch the entire block */
     av_assert0(inner_pos == block_pos);
     int bytes_read = 0;
     while (bytes_read < block_size) {
@@ -694,14 +738,10 @@ retry:
     }
 
     if (bytes_read > 0) {
-        ret = write_back ? write_cache(s, tmp, bytes_read, block_pos) : bytes_read;
-        if (ret == bytes_read) {
-            av_log(h, AV_LOG_TRACE, "Cached %d bytes to block 0x%"PRIx64" at "
-                   "offset 0x%"PRIx64"\n", bytes_read, block_id, block_pos);
-            atomic_store_explicit(&block->state, BLOCK_CACHED, memory_order_release);
-        } else {
+        ret = write_back ? write_cache(s, tmp, bytes_read, block_pos) : 0;
+        if (ret < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
-                   av_err2str(AVERROR(errno)));
+                   av_err2str(ret));
             s->write_err = 1;
             /* Mark as NONE, not FAILED, since the block itself is fine -
              * just absent from the cache. */
@@ -709,17 +749,23 @@ retry:
                                                     BLOCK_NONE,
                                                     memory_order_relaxed,
                                                     memory_order_relaxed);
+        } else {
+            uint16_t crc = get_block_crc(tmp, bytes_read);
+            av_log(h, AV_LOG_TRACE, "Cached %d bytes to block 0x%"PRIx64" at "
+                   "offset 0x%"PRIx64", CRC 0x%04X\n", bytes_read, block_id,
+                   block_pos, crc);
+            atomic_store_explicit(&block->state, crc, memory_order_release);
         }
     } else {
         return AVERROR_EOF;
     }
 
-    const int wanted = FFMIN(bytes_read - offset, size);
-    av_assert0(wanted >= 0);
+    size = FFMIN(bytes_read - offset, size);
+    av_assert0(size > 0);
     if (tmp != buf)
-        memcpy(buf, &tmp[offset], wanted);
-    s->pos += wanted;
-    return wanted;
+        memcpy(buf, &tmp[offset], size);
+    s->pos += size;
+    return size;
 }
 
 static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
