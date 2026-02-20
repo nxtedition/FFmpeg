@@ -124,7 +124,7 @@ typedef struct Spacemap {
         ctype prev = 0;                                                         \
         av_assert1(value != 0);                                                 \
         if (atomic_compare_exchange_strong_explicit(                            \
-                ptr, &prev, value, memory_order_acquire, memory_order_relaxed)) \
+                ptr, &prev, value, memory_order_release, memory_order_relaxed)) \
             return 1;                                                           \
         else if (prev == value)                                                 \
             return 0;                                                           \
