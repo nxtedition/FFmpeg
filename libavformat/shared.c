@@ -83,6 +83,10 @@ enum BlockState {
     BLOCK_FAILED,  ///< the underlying I/O source failed to read this block
 };
 
+typedef struct Block {
+    atomic_uchar state; /* enum BlockState */
+} Block;
+
 typedef struct Spacemap {
     atomic_uint header_magic;
     atomic_ushort version;
@@ -91,7 +95,7 @@ typedef struct Spacemap {
     atomic_uchar hash[HASH_SIZE]; /* hash of resource URI / filename */
     char reserved[80];
 
-    atomic_uchar blocks[];
+    Block blocks[];
 } Spacemap;
 
 /* Set to value iff the current value is unset (zero) */
@@ -415,7 +419,7 @@ static int spacemap_grow(URLContext *h, int64_t block)
 {
     SharedContext *s = h->priv_data;
     int64_t num_blocks = block + 1;
-    size_t map_bytes = sizeof(Spacemap) + num_blocks;
+    size_t map_bytes = sizeof(Spacemap) + num_blocks * sizeof(Block);
 
     /* When streaming files without known size, round up the number of blocks
      * to the nearest multiple of the block size to reduce the rate of resizes */
@@ -434,7 +438,7 @@ static int spacemap_grow(URLContext *h, int64_t block)
 
     /* Report new size after successful grow */
     if (s->map_size > old_size) {
-        num_blocks = s->map_size - sizeof(Spacemap);
+        num_blocks = (s->map_size - sizeof(Spacemap)) / sizeof(Block);
         av_log(h, AV_LOG_DEBUG,
                "%s %zu bytes, capacity: %"PRId64" blocks = %zu MB\n",
                ret ? "Resized spacemap to" : "Mapped spacemap with",
@@ -470,7 +474,7 @@ static int spacemap_init(URLContext *h, const uint8_t hash[HASH_SIZE])
         const int shift = atomic_load(&s->spacemap->block_shift);
         av_log(h, AV_LOG_WARNING, "Shared cache uses block shift %d, "
                "but requested block shift is %d.\n", shift, s->block_shift);
-        if (shift < 9 || shift > 16) {
+        if (shift < 9 || shift > 30) {
             av_log(h, AV_LOG_ERROR, "Invalid block shift %d in cache file!\n", shift);
             return AVERROR(EINVAL);
         }
@@ -545,15 +549,15 @@ static int shared_read(URLContext *h, unsigned char *buf, int size)
     }
 
     const int shift = atomic_load_explicit(&s->spacemap->block_shift, memory_order_relaxed);
-    const int64_t block = s->pos >> shift;
+    const int64_t block_id = s->pos >> shift;
     const int64_t offset = s->pos & (s->block_size - 1);
-    const int64_t block_pos = block * s->block_size;
-    ret = spacemap_grow(h, block);
+    const int64_t block_pos = block_id * s->block_size;
+    ret = spacemap_grow(h, block_id);
     if (ret < 0)
         return ret;
 
-    atomic_uchar *const block_state = &s->spacemap->blocks[block];
-    unsigned char state = atomic_load_explicit(block_state, memory_order_acquire);
+    Block *const block = &s->spacemap->blocks[block_id];
+    unsigned char state = atomic_load_explicit(&block->state, memory_order_acquire);
     int64_t pending_since = 0;
 
 retry:
@@ -580,7 +584,7 @@ retry:
     case BLOCK_NONE:
         if (s->read_only)
             break; /* don't mark block as pending */
-        if (atomic_compare_exchange_weak_explicit(block_state, &state,
+        if (atomic_compare_exchange_weak_explicit(&block->state, &state,
                                                   BLOCK_PENDING,
                                                   memory_order_acquire,
                                                   memory_order_acquire))
@@ -606,7 +610,7 @@ retry:
 
         /* Make sure we try a few times before giving up */
         av_usleep(s->timeout >> 4);
-        state = atomic_load_explicit(block_state, memory_order_acquire);
+        state = atomic_load_explicit(&block->state, memory_order_acquire);
         goto retry;
     }
 
@@ -623,7 +627,7 @@ retry:
             /* Release pending state to avoid stalling other threads. Don't
              * mark this as failed, since the seek error may be unrelated to
              * the block and should probably be tried again. */
-            atomic_compare_exchange_strong_explicit(block_state, &state,
+            atomic_compare_exchange_strong_explicit(&block->state, &state,
                                                     BLOCK_NONE,
                                                     memory_order_relaxed,
                                                     memory_order_relaxed);
@@ -667,11 +671,11 @@ retry:
             break;
         else if (ret < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to read block 0x%"PRIx64": %s\n",
-                   block, av_err2str(ret));
+                   block_id, av_err2str(ret));
             /* Try to mark block as failed; ignore errors - any mismatch
              * here will mean that either another thread already marked it
              * as failed, or successfully cached it in the meantime */
-            atomic_compare_exchange_strong_explicit(block_state, &state,
+            atomic_compare_exchange_strong_explicit(&block->state, &state,
                                                     BLOCK_FAILED,
                                                     memory_order_relaxed,
                                                     memory_order_relaxed);
@@ -693,15 +697,15 @@ retry:
         ret = write_back ? write_cache(s, tmp, bytes_read, block_pos) : bytes_read;
         if (ret == bytes_read) {
             av_log(h, AV_LOG_TRACE, "Cached %d bytes to block 0x%"PRIx64" at "
-                   "offset 0x%"PRIx64"\n", bytes_read, block, block_pos);
-            atomic_store_explicit(block_state, BLOCK_CACHED, memory_order_release);
+                   "offset 0x%"PRIx64"\n", bytes_read, block_id, block_pos);
+            atomic_store_explicit(&block->state, BLOCK_CACHED, memory_order_release);
         } else {
             av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
                    av_err2str(AVERROR(errno)));
             s->write_err = 1;
             /* Mark as NONE, not FAILED, since the block itself is fine -
              * just absent from the cache. */
-            atomic_compare_exchange_strong_explicit(block_state, &state,
+            atomic_compare_exchange_strong_explicit(&block->state, &state,
                                                     BLOCK_NONE,
                                                     memory_order_relaxed,
                                                     memory_order_relaxed);
@@ -779,7 +783,7 @@ static const AVOption options[] = {
     { "cache_dir",      "Directory path for shared file cache",             OFFSET(cache_dir),      AV_OPT_TYPE_STRING, {.str = NULL}, .flags = D },
     { "block_shift",    "Set the base 2 logarithm of the block size",       OFFSET(block_shift),    AV_OPT_TYPE_INT, {.i64 = 15}, 9, 30, .flags = D },
     { "read_only",      "Don't write data to the cache, only read from it", OFFSET(read_only),      AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = D },
-    { "timeout",        "Time in us to wait before re-fetching pending blocks", OFFSET(timeout),    AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, .flags = D },
+    { "cache_timeout",  "Time in us to wait before re-fetching pending blocks", OFFSET(timeout),    AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, .flags = D },
     { "retry_errors",   "Re-request blocks even if they previously failed", OFFSET(retry_errors),   AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, .flags = D },
     {0},
 };

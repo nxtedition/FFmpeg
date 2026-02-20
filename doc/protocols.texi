@@ -1620,7 +1620,7 @@ Default is false. Note that even with this option enabled, the cache file will
 be initialized if it does not already exist, and metadata such as the filesize
 or information about inaccessible blocks will still be updated.
 
-@item timeout
+@item cache_timeout
 If set to a nonzero value, specifies the maximum time (in microseconds) to wait
 for data to become available, if another process is currently trying to fetch
 and cache the same block at the same time. If this timeout elapses, it's
