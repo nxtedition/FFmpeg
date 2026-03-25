@@ -20,6 +20,7 @@ OBJS = allformats.o         \
        id3v1.o              \
        id3v2.o              \
        isom_tags.o          \
+       lcevc.o              \
        metadata.o           \
        mux.o                \
        mux_utils.o          \
@@ -678,7 +679,6 @@ OBJS-$(CONFIG_VAPOURSYNTH_DEMUXER)       += vapoursynth.o
 # protocols I/O
 OBJS-$(CONFIG_ANDROID_CONTENT_PROTOCOL)  += file.o
 OBJS-$(CONFIG_ASYNC_PROTOCOL)            += async.o
-OBJS-$(CONFIG_APPLEHTTP_PROTOCOL)        += hlsproto.o
 OBJS-$(CONFIG_BLURAY_PROTOCOL)           += bluray.o
 OBJS-$(CONFIG_CACHE_PROTOCOL)            += cache.o
 OBJS-$(CONFIG_CONCAT_PROTOCOL)           += concat.o
@@ -692,7 +692,6 @@ OBJS-$(CONFIG_FD_PROTOCOL)               += file.o
 OBJS-$(CONFIG_FTP_PROTOCOL)              += ftp.o
 OBJS-$(CONFIG_GOPHER_PROTOCOL)           += gopher.o
 OBJS-$(CONFIG_GOPHERS_PROTOCOL)          += gopher.o
-OBJS-$(CONFIG_HLS_PROTOCOL)              += hlsproto.o
 OBJS-$(CONFIG_HTTP_PROTOCOL)             += http.o httpauth.o
 OBJS-$(CONFIG_HTTPPROXY_PROTOCOL)        += http.o httpauth.o
 OBJS-$(CONFIG_HTTPS_PROTOCOL)            += http.o httpauth.o
@@ -743,7 +742,8 @@ OBJS-$(CONFIG_LIBSSH_PROTOCOL)           += libssh.o
 OBJS-$(CONFIG_LIBZMQ_PROTOCOL)           += libzmq.o
 
 # Objects duplicated from other libraries for shared builds
-SHLIBOBJS                                += log2_tab.o to_upper4.o
+SHLIBOBJS                                += log2_tab.o to_upper4.o \
+                                            h2645_parse.o lcevctab.o
 SHLIBOBJS-$(CONFIG_ISO_MEDIA)            += mpegaudiotabs.o
 SHLIBOBJS-$(CONFIG_ISO_WRITER)           += golomb_tab.o
 SHLIBOBJS-$(CONFIG_FLV_MUXER)            += mpeg4audio_sample_rates.o
