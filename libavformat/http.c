@@ -688,7 +688,7 @@ static int http_write_reply(URLContext* h, int status_code)
                  content_type,
                  s->headers ? s->headers : "");
     }
-    av_log(h, AV_LOG_TRACE, "HTTP reply header: \n%s----\n", message);
+    av_log(h, AV_LOG_INFO, "HTTP reply header: \n%s----\n", message);
     if ((ret = ffurl_write(s->hd, message, message_len)) < 0)
         return ret;
     return 0;
@@ -1593,6 +1593,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     // server supports seeking by analysing the reply headers.
     if (!has_header(s->headers, "\r\nRange: ") && !post && (s->off > 0 || s->end_off || s->seekable != 0)) {
         av_bprintf(&request, "Range: bytes=%"PRIu64"-", s->off);
+        av_log(h, AV_LOG_INFO, "Requesting Range start from 0x%"PRIx64"\n", s->off);
         if ((s->initial_requests || s->request_size) && s->seekable != 0) {
             uint64_t req_size = s->initial_requests ? s->initial_request_size : s->request_size;
             uint64_t target_off = s->off + req_size;
@@ -1769,7 +1770,7 @@ static int http_buf_read(URLContext *h, uint8_t *buf, int size)
         if ((!len || len == AVERROR_EOF) &&
             (!s->willclose || s->chunksize == UINT64_MAX) && s->off < target_end) {
             av_log(h, AV_LOG_ERROR,
-                   "Stream ends prematurely at %"PRIu64", should be %"PRIu64"\n",
+                   "Stream ends prematurely at 0x%"PRIx64", should be 0x%"PRIx64"\n",
                    s->off, target_end
                   );
             return AVERROR(EIO);
@@ -1991,6 +1992,7 @@ static int http_read(URLContext *h, uint8_t *buf, int size)
     size = http_read_stream(h, buf, size);
     if (size > 0)
         s->icy_data_read += size;
+    av_log(h, AV_LOG_INFO, "Read %d bytes from HTTP\n", size);
     return size;
 }
 
@@ -2142,7 +2144,7 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
     uint64_t remaining = s->range_end - old_off - old_buf_size;
     if (s->hd && !s->willclose && s->range_end && remaining <= ffurl_get_short_seek(h)) {
         /* drain remaining data left on the wire from previous request */
-        av_log(h, AV_LOG_DEBUG, "Soft-seeking to offset %"PRIu64" by draining "
+        av_log(h, AV_LOG_INFO, "Soft-seeking to offset 0x%"PRIx64" by draining "
                "%"PRIu64" remaining byte(s)\n", s->off, remaining);
         while (remaining) {
             ret = ffurl_read(s->hd, discard, FFMIN(remaining, sizeof(discard)));

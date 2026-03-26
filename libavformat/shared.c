@@ -265,7 +265,7 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
         goto fail;
     }
 
-    av_log(h, AV_LOG_VERBOSE, "Opening cache file '%s' for URI: '%s'\n",
+    av_log(h, AV_LOG_WARNING, "Opening cache file '%s' for URI: '%s'\n",
            s->cache_path, s->inner->filename);
 
     s->fd    = avpriv_open(s->cache_path, O_RDWR | O_CREAT, 0660);
@@ -458,7 +458,7 @@ static int spacemap_grow(URLContext *h, int64_t block)
     /* Report new size after successful grow */
     if (s->map_size > old_size) {
         num_blocks = (s->map_size - sizeof(Spacemap)) / sizeof(Block);
-        av_log(h, AV_LOG_DEBUG,
+        av_log(h, AV_LOG_WARNING,
                "%s %zu bytes, capacity: %"PRId64" blocks = %zu MB\n",
                ret ? "Resized spacemap to" : "Mapped spacemap with",
                (size_t) s->map_size, num_blocks,
@@ -515,7 +515,7 @@ static int spacemap_init(URLContext *h, const uint8_t hash[HASH_SIZE])
     }
 
     if (ret) /* set_once() return 1 if this is the first time setting the value */
-        av_log(h, AV_LOG_DEBUG, "Initialized new cache spacemap.\n");
+        av_log(h, AV_LOG_WARNING, "Initialized new cache spacemap.\n");
 
     return ret;
 }
@@ -667,6 +667,7 @@ retry:
     const int read_only = s->read_only || s->write_err;
     int64_t inner_pos = read_only ? s->pos : block_pos;
     if (s->inner_pos != inner_pos) {
+        av_log(h, AV_LOG_WARNING, "[Issuing] Inner seek to 0x%"PRIx64"\n", inner_pos);
         inner_pos = ffurl_seek(s->inner, inner_pos, SEEK_SET);
         if (inner_pos < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to seek underlying protocol: %s\n",
@@ -681,7 +682,7 @@ retry:
             return inner_pos;
         }
 
-        av_log(h, AV_LOG_DEBUG, "Inner seek to 0x%"PRIx64"\n", inner_pos);
+        av_log(h, AV_LOG_WARNING, "[Completed] Inner seek to 0x%"PRIx64"\n", inner_pos);
         s->inner_pos = inner_pos;
     }
 
@@ -751,7 +752,7 @@ retry:
                                                     memory_order_relaxed);
         } else {
             uint16_t crc = get_block_crc(tmp, bytes_read);
-            av_log(h, AV_LOG_TRACE, "Cached %d bytes to block 0x%"PRIx64" at "
+            av_log(h, AV_LOG_INFO, "Cached %d bytes to block 0x%"PRIx64" at "
                    "offset 0x%"PRIx64", CRC 0x%04X\n", bytes_read, block_id,
                    block_pos, crc);
             atomic_store_explicit(&block->state, crc, memory_order_release);
@@ -793,17 +794,18 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
             break;
         }
         /* Defer to underlying protocol if filesize is unknown */
+        av_log(h, AV_LOG_WARNING, "[Issuing] Inner seek to END - 0x%"PRIx64"\n", -pos);
         res = ffurl_seek(s->inner, pos, whence);
         if (res < 0)
             return res;
         set_filesize(h, res - pos); /* Opportunistically update known filesize */
-        av_log(h, AV_LOG_DEBUG, "Inner seek to 0x%"PRIx64"\n", res);
+        av_log(h, AV_LOG_WARNING, "[Completed] Inner seek to 0x%"PRIx64"\n", res);
         return s->pos = s->inner_pos = res;
     default:
         return AVERROR(EINVAL);
     }
 
-    av_log(h, AV_LOG_DEBUG, "Virtual seek to 0x%"PRIx64"\n", pos);
+    av_log(h, AV_LOG_INFO, "Virtual seek to 0x%"PRIx64"\n", pos);
     return s->pos = pos;
 }
 
