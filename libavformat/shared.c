@@ -33,6 +33,8 @@
 #include "url.h"
 
 #include <errno.h>
+#include <stdarg.h>
+#include <time.h>
 #include <fcntl.h>
 #include <stdatomic.h>
 #include <sys/file.h>
@@ -170,7 +172,43 @@ typedef struct SharedContext {
     /* statistics */
     int64_t nb_hit;
     int64_t nb_miss;
+
+    /* debug logs */
+    int writelogfd;
+    int readlogfd;
 } SharedContext;
+
+static void dbg_log(int fd, const char *fmt, ...)
+{
+    char buf[1024];
+    struct timespec ts;
+    int off;
+
+    if (fd < 0)
+        return;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+    off = snprintf(buf, sizeof(buf), "[%02d:%02d:%02d.%09ld] pid=%d ",
+                   tm.tm_hour, tm.tm_min, tm.tm_sec,
+                   ts.tv_nsec, (int)getpid());
+
+    va_list ap;
+    va_start(ap, fmt);
+    off += vsnprintf(buf + off, sizeof(buf) - off, fmt, ap);
+    va_end(ap);
+
+    if (off > (int)sizeof(buf))
+        off = sizeof(buf);
+
+    /* Single write() call is atomic for sizes <= PIPE_BUF on POSIX,
+     * and generally atomic for regular files with O_APPEND */
+    write(fd, buf, off);
+}
+
+#define dbg_writelog(s, ...) dbg_log((s)->writelogfd, __VA_ARGS__)
+#define dbg_readlog(s, ...)  dbg_log((s)->readlogfd, __VA_ARGS__)
 
 static int shared_close(URLContext *h)
 {
@@ -185,6 +223,10 @@ static int shared_close(URLContext *h)
         close(s->fd);
     if (s->mapfd != -1)
         close(s->mapfd);
+    if (s->writelogfd >= 0)
+        close(s->writelogfd);
+    if (s->readlogfd >= 0)
+        close(s->readlogfd);
     av_freep(&s->cache_path);
     av_freep(&s->map_path);
     av_freep(&s->tmp_buf);
@@ -214,11 +256,13 @@ static int set_filesize(URLContext *h, int64_t new_size)
 
     ret = set_once_ullong(&s->spacemap->filesize, new_size);
     if (ret < 0) {
+        dbg_readlog(s, "set_filesize: new_size=%"PRId64" ret=%d\n", new_size, ret);
         av_log(h, AV_LOG_ERROR, "Cached file size mismatch, expected: "
                 "%"PRId64", got: %"PRIu64"!\n", new_size,
                 (uint64_t) atomic_load(&s->spacemap->filesize));
         return ret;
     } else if (ret) {
+        dbg_writelog(s, "set_filesize: new_size=%"PRId64" ret=%d\n", new_size, ret);
         /* Opportunistically map the file; this also sets the correct filesize.
          * Ignore errors as this is not critical to the cache logic. */
         cache_map(h, new_size);
@@ -239,6 +283,7 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     }
 
     s->fd = s->mapfd = -1; /* Set these early for shared_close() failure path */
+    s->writelogfd = s->readlogfd = -1;
 
     /* Open underlying protocol */
     av_strstart(arg, "shared:", &arg);
@@ -267,6 +312,22 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
 
     av_log(h, AV_LOG_WARNING, "Opening cache file '%s' for URI: '%s'\n",
            s->cache_path, s->inner->filename);
+
+    /* Open debug log files (O_APPEND for atomic writes) */
+    {
+        char *wlog_path = av_asprintf("%s/%s.writelog", s->cache_dir, filename);
+        char *rlog_path = av_asprintf("%s/%s.readlog",  s->cache_dir, filename);
+        if (wlog_path) {
+            s->writelogfd = open(wlog_path, O_WRONLY | O_CREAT | O_APPEND, 0660);
+            av_free(wlog_path);
+        }
+        if (rlog_path) {
+            s->readlogfd = open(rlog_path, O_WRONLY | O_CREAT | O_APPEND, 0660);
+            av_free(rlog_path);
+        }
+        dbg_writelog(s, "=== OPEN uri=%s cache=%s ===\n", s->inner->filename, s->cache_path);
+        dbg_readlog(s, "=== OPEN uri=%s cache=%s ===\n", s->inner->filename, s->cache_path);
+    }
 
     s->fd    = avpriv_open(s->cache_path, O_RDWR | O_CREAT, 0660);
     s->mapfd = avpriv_open(s->map_path,   O_RDWR | O_CREAT, 0660);
@@ -349,11 +410,14 @@ static int cache_map(URLContext *h, int64_t filesize)
         /* Ensure the file size is correct before mapping; this can happen if
          * another process wrote the correct filesize to the header but
          * crashed right before actually successfully resizing the file. */
+        dbg_writelog(s, "cache_map: ftruncate cache fd to %"PRId64" (was %"PRId64")\n",
+                    filesize, (int64_t)st.st_size);
         ret = ftruncate(s->fd, filesize);
         if (ret < 0)
             return AVERROR(errno);
     }
 
+    dbg_readlog(s, "cache_map: mmap cache size=%"PRId64"\n", filesize);
     s->cache_data = mmap(NULL, filesize, PROT_READ | PROT_WRITE, MAP_SHARED, s->fd, 0);
     if (s->cache_data == MAP_FAILED) {
         s->cache_data = NULL;
@@ -408,6 +472,8 @@ static int spacemap_remap(URLContext *h, size_t map_size)
     }
     st.st_size = map_size;
     did_grow = 1;
+    dbg_writelog(s, "spacemap_remap: ftruncate mapfd to %zu bytes (was %zu)\n",
+                (size_t)map_size, (size_t)s->map_size);
 
 skip_resize:
     if (s->spacemap)
@@ -514,49 +580,76 @@ static int spacemap_init(URLContext *h, const uint8_t hash[HASH_SIZE])
         }
     }
 
-    if (ret) /* set_once() return 1 if this is the first time setting the value */
+    if (ret) { /* set_once() return 1 if this is the first time setting the value */
         av_log(h, AV_LOG_WARNING, "Initialized new cache spacemap.\n");
+        dbg_writelog(s, "spacemap_init: initialized new spacemap magic=0x%X ver=%d block_shift=%d\n",
+                     HEADER_MAGIC, HEADER_VERSION, s->block_shift);
+    }
 
     return ret;
 }
 
 static int read_cache(SharedContext *s, uint8_t *buf, size_t size, off_t offset)
 {
+    dbg_readlog(s, "read_cache: offset=0x%"PRIx64" size=%zu mmap=%d\n",
+                (int64_t)offset, size, !!s->cache_data);
+
     if (s->cache_data) {
         av_assert1(offset + size <= s->cache_size);
         memcpy(buf, s->cache_data + offset, size);
+        uint16_t crc = av_crc(av_crc_get_table(AV_CRC_16_ANSI), 0, buf, size);
+        dbg_readlog(s, "read_cache: completed (mmap) crc=0x%04X\n", crc);
         return 0;
     }
 
+    size_t orig_size = size;
     while (size) {
         ssize_t ret = pread(s->fd, buf, size, offset);
-        if (ret <= 0)
-            return ret ? AVERROR(errno) : AVERROR(EIO);
+        if (ret <= 0) {
+            int err = ret ? AVERROR(errno) : AVERROR(EIO);
+            dbg_readlog(s, "read_cache: FAILED at offset=0x%"PRIx64" remaining=%zu err=%d\n",
+                        (int64_t)offset, size, err);
+            return err;
+        }
         buf    += ret;
         offset += ret;
         size   -= ret;
     }
 
+    uint16_t crc = av_crc(av_crc_get_table(AV_CRC_16_ANSI), 0, buf - orig_size, orig_size);
+    dbg_readlog(s, "read_cache: completed (pread) crc=0x%04X\n", crc);
     return 0;
 }
 
 static int write_cache(SharedContext *s, const uint8_t *buf, size_t size, off_t offset)
 {
+    uint16_t crc = av_crc(av_crc_get_table(AV_CRC_16_ANSI), 0, buf, size);
+    dbg_writelog(s, "write_cache: offset=0x%"PRIx64" size=%zu crc=0x%04X mmap=%d\n",
+                (int64_t)offset, size, crc, !!s->cache_data);
+
     if (s->cache_data) {
         av_assert1(offset + size <= s->cache_size);
         memcpy(s->cache_data + offset, buf, size);
         return 0;
     }
 
+    size_t orig_size = size;
+    off_t orig_offset = offset;
     while (size) {
         ssize_t ret = pwrite(s->fd, buf, size, offset);
-        if (ret <= 0)
-            return ret ? AVERROR(errno) : AVERROR(EIO);
+        if (ret <= 0) {
+            int err = ret ? AVERROR(errno) : AVERROR(EIO);
+            dbg_writelog(s, "write_cache: FAILED at offset=0x%"PRIx64" remaining=%zu err=%d\n",
+                        (int64_t)offset, size, err);
+            return err;
+        }
         buf    += ret;
         offset += ret;
         size   -= ret;
     }
 
+    dbg_writelog(s, "write_cache: completed offset=0x%"PRIx64" size=%zu\n",
+                (int64_t)orig_offset, orig_size);
     return 0;
 }
 
@@ -592,11 +685,16 @@ static int shared_read(URLContext *h, unsigned char *buf, int size)
     unsigned short state = atomic_load_explicit(&block->state, memory_order_acquire);
     int64_t pending_since = 0;
 
+    dbg_readlog(s, "shared_read: pos=0x%"PRIx64" size=%d block=0x%"PRIx64" offset=0x%"PRIx64" state=0x%04X\n",
+                s->pos, size, block_id, offset, state);
+
 retry:
     switch (state) {
     default:
         /* We always need to read the entire block to verify integrity */
         block_size = clamp_size(h, block_size, block_pos); /* filesize may have changed */
+        dbg_readlog(s, "shared_read: cache HIT block=0x%"PRIx64" state=0x%04X block_size=%d\n",
+                    block_id, state, block_size);
         if (s->cache_data) {
             av_assert1(block_pos + block_size <= s->cache_size);
             tmp = s->cache_data + block_pos;
@@ -605,6 +703,8 @@ retry:
             ret = read_cache(s, tmp, block_size, block_pos);
             if (ret < 0) {
                 av_log(h, AV_LOG_ERROR, "Failed to read from cache file: %s\n", av_err2str(ret));
+                dbg_readlog(s, "shared_read: cache read FAILED block=0x%"PRIx64" err=%d\n",
+                            block_id, ret);
                 return ret;
             }
         }
@@ -614,21 +714,29 @@ retry:
             av_log(h, AV_LOG_ERROR, "Cache corruption detected for block 0x%"PRIx64" at "
                    "offset 0x%"PRIx64": expected CRC: 0x%04X, got: 0x%04X\n",
                    block_id, block_pos, state, crc);
+            dbg_readlog(s, "shared_read: CORRUPTION block=0x%"PRIx64" expected_crc=0x%04X got_crc=0x%04X\n",
+                        block_id, state, crc);
             return AVERROR(EIO);
         }
 
         size = FFMIN(size, block_size - offset);
         memcpy(buf, tmp + offset, size);
 
+        dbg_readlog(s, "shared_read: HIT OK block=0x%"PRIx64" returned=%d crc=0x%04X\n",
+                    block_id, size, crc);
         s->nb_hit++;
         s->pos += size;
         return size;
 
     case BLOCK_FAILED:
+        dbg_readlog(s, "shared_read: block=0x%"PRIx64" FAILED state retry_errors=%d\n",
+                    block_id, s->retry_errors);
         if (!s->retry_errors)
             return AVERROR(EIO);
         /* fall through */
     case BLOCK_NONE:
+        dbg_readlog(s, "shared_read: block=0x%"PRIx64" state=%s read_only=%d\n",
+                    block_id, state == BLOCK_NONE ? "NONE" : "FAILED", s->read_only);
         if (s->read_only)
             break; /* don't mark block as pending */
         if (atomic_compare_exchange_weak_explicit(&block->state, &state,
@@ -637,13 +745,17 @@ retry:
                                                   memory_order_acquire))
         {
             /* Acquired pending state, proceed to fetch the block */
+            dbg_writelog(s, "shared_read: block=0x%"PRIx64" state NONE->PENDING (CAS ok)\n", block_id);
             state = BLOCK_PENDING;
             break;
         }
         /* CAS failed, another thread changed the state; reload it */
+        dbg_readlog(s, "shared_read: block=0x%"PRIx64" CAS failed, new state=0x%04X\n",
+                    block_id, state);
         goto retry;
 
     case BLOCK_PENDING:
+        dbg_readlog(s, "shared_read: block=0x%"PRIx64" PENDING (waiting)\n", block_id);
         /* Another thread is busy fetching this block, wait for it to finish */
         if (!s->timeout) {
             break; /* no timeout requested, immediately race to fetch block */
@@ -675,6 +787,8 @@ retry:
             /* Release pending state to avoid stalling other threads. Don't
              * mark this as failed, since the seek error may be unrelated to
              * the block and should probably be tried again. */
+            dbg_writelog(s, "shared_read: block=0x%"PRIx64" seek FAILED, marking BLOCK_NONE\n", block_id);
+            dbg_readlog(s, "shared_read: block=0x%"PRIx64" seek FAILED err=%"PRId64"\n", block_id, inner_pos);
             atomic_compare_exchange_strong_explicit(&block->state, &state,
                                                     BLOCK_NONE,
                                                     memory_order_relaxed,
@@ -720,6 +834,8 @@ retry:
             /* Try to mark block as failed; ignore errors - any mismatch
              * here will mean that either another thread already marked it
              * as failed, or successfully cached it in the meantime */
+            dbg_writelog(s, "shared_read: block=0x%"PRIx64" fetch FAILED, marking BLOCK_FAILED\n", block_id);
+            dbg_readlog(s, "shared_read: block=0x%"PRIx64" fetch FAILED err=%d\n", block_id, ret);
             atomic_compare_exchange_strong_explicit(&block->state, &state,
                                                     BLOCK_FAILED,
                                                     memory_order_relaxed,
@@ -746,6 +862,7 @@ retry:
             s->write_err = 1;
             /* Mark as NONE, not FAILED, since the block itself is fine -
              * just absent from the cache. */
+            dbg_writelog(s, "shared_read: block=0x%"PRIx64" write_cache FAILED, marking BLOCK_NONE\n", block_id);
             atomic_compare_exchange_strong_explicit(&block->state, &state,
                                                     BLOCK_NONE,
                                                     memory_order_relaxed,
@@ -755,6 +872,8 @@ retry:
             av_log(h, AV_LOG_INFO, "Cached %d bytes to block 0x%"PRIx64" at "
                    "offset 0x%"PRIx64", CRC 0x%04X\n", bytes_read, block_id,
                    block_pos, crc);
+            dbg_writelog(s, "shared_read: block=0x%"PRIx64" CACHED bytes=%d offset=0x%"PRIx64" crc=0x%04X\n",
+                        block_id, bytes_read, block_pos, crc);
             atomic_store_explicit(&block->state, crc, memory_order_release);
         }
     } else {
@@ -766,6 +885,7 @@ retry:
     if (tmp != buf)
         memcpy(buf, &tmp[offset], size);
     s->pos += size;
+    dbg_readlog(s, "shared_read: MISS completed block=0x%"PRIx64" returned=%d\n", block_id, size);
     return size;
 }
 
