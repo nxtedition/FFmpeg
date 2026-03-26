@@ -1453,7 +1453,7 @@ static int http_read_header(URLContext *h)
             return err;
         }
 
-        av_log(h, AV_LOG_TRACE, "header='%s'\n", line);
+        av_log(h, AV_LOG_INFO, "header='%s'\n", line);
 
         err = process_line(h, line, s->line_count, &parsed_http_code);
         if (err < 0) {
