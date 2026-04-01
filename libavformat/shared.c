@@ -148,6 +148,7 @@ typedef struct SharedContext {
     int read_only;
     int64_t timeout;
     int retry_errors;
+    int verify;
 
     /* misc state */
     int64_t pos; ///< current logical position
@@ -295,7 +296,7 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     }
 
     if (filesize > 0) {
-        int64_t last_pos = filesize;
+        int64_t last_pos = filesize - 1;
         int64_t last_block = last_pos >> atomic_load(&s->spacemap->block_shift);
         ret = spacemap_grow(h, last_block);
         if (ret < 0)
@@ -591,6 +592,7 @@ static int shared_read(URLContext *h, unsigned char *buf, int size)
     Block *const block = &s->spacemap->blocks[block_id];
     unsigned short state = atomic_load_explicit(&block->state, memory_order_acquire);
     int64_t pending_since = 0;
+    int verify_read = 0;
 
 retry:
     switch (state) {
@@ -617,9 +619,14 @@ retry:
             return AVERROR(EIO);
         }
 
+        tmp += (ptrdiff_t) offset;
         size = FFMIN(size, block_size - offset);
-        memcpy(buf, tmp + offset, size);
+        if (s->verify) {
+            verify_read = 1;
+            break; /* fall through to the cache miss logic */
+        }
 
+        memcpy(buf, tmp, size);
         s->nb_hit++;
         s->pos += size;
         return size;
@@ -664,20 +671,22 @@ retry:
     /* Cache miss, fetch this block from underlying protocol */
     s->nb_miss++;
 
-    const int read_only = s->read_only || s->write_err;
+    const int read_only = s->read_only || s->write_err || verify_read;
     int64_t inner_pos = read_only ? s->pos : block_pos;
     if (s->inner_pos != inner_pos) {
         inner_pos = ffurl_seek(s->inner, inner_pos, SEEK_SET);
         if (inner_pos < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to seek underlying protocol: %s\n",
                    av_err2str(inner_pos));
-            /* Release pending state to avoid stalling other threads. Don't
-             * mark this as failed, since the seek error may be unrelated to
-             * the block and should probably be tried again. */
-            atomic_compare_exchange_strong_explicit(&block->state, &state,
-                                                    BLOCK_NONE,
-                                                    memory_order_relaxed,
-                                                    memory_order_relaxed);
+            if (!read_only) {
+                /* Release pending state to avoid stalling other threads. Don't
+                 * mark this as failed, since the seek error may be unrelated to
+                 * the block and should probably be tried again. */
+                atomic_compare_exchange_strong_explicit(&block->state, &state,
+                                                        BLOCK_NONE,
+                                                        memory_order_relaxed,
+                                                        memory_order_relaxed);
+            }
             return inner_pos;
         }
 
@@ -688,8 +697,17 @@ retry:
     if (read_only) {
         /* Directly defer to the underlying protocol */
         ret = ffurl_read(s->inner, buf, size);
-        if (ret >= 0)
-            s->pos = s->inner_pos = inner_pos + ret;
+        if (ret < 0)
+            return ret;
+
+        /* Verify the read data against the cached data if requested */
+        if (verify_read && memcmp(buf, tmp, ret)) {
+            av_log(h, AV_LOG_ERROR, "Cache verification failed for %d bytes "
+                   "in block 0x%"PRIx64" at offset 0x%"PRIx64" + %"PRId64"!\n",
+                   ret, block_id, block_pos, offset);
+        }
+
+        s->pos = s->inner_pos = inner_pos + ret;
         return ret;
     }
 
@@ -829,6 +847,7 @@ static const AVOption options[] = {
     { "cache_dir",      "Directory path for shared file cache",             OFFSET(cache_dir),      AV_OPT_TYPE_STRING, {.str = NULL}, .flags = D },
     { "block_shift",    "Set the base 2 logarithm of the block size",       OFFSET(block_shift),    AV_OPT_TYPE_INT, {.i64 = 15}, 9, 30, .flags = D },
     { "read_only",      "Don't write data to the cache, only read from it", OFFSET(read_only),      AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = D },
+    { "cache_verify",   "Verify correctness of the cache against the source",   OFFSET(verify),     AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = D },
     { "cache_timeout",  "Time in us to wait before re-fetching pending blocks", OFFSET(timeout),    AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, .flags = D },
     { "retry_errors",   "Re-request blocks even if they previously failed", OFFSET(retry_errors),   AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, .flags = D },
     {0},
