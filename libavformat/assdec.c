@@ -79,8 +79,8 @@ static int read_dialogue(ASSContext *ass, AVBPrint *dst, const uint8_t *p,
 
         /* right strip the buffer */
         while (dst->len > 0 &&
-               dst->str[dst->len - 1] == '\r' ||
-               dst->str[dst->len - 1] == '\n')
+               (dst->str[dst->len - 1] == '\r' ||
+                dst->str[dst->len - 1] == '\n'))
             dst->str[--dst->len] = 0;
         return 0;
     }
