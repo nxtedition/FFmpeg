@@ -226,7 +226,7 @@ static int ndi_find_sources(AVFormatContext *avctx, const char *name, NDIlib_sou
 static int ndi_read_header(AVFormatContext *avctx)
 {
     int ret;
-    NDIlib_recv_create_v3_t recv_create_desc;
+    NDIlib_recv_create_v3_t recv_create_desc = {0};
     const NDIlib_tally_t tally_state = { .on_program = true, .on_preview = false };
     struct NDIContext *ctx = avctx->priv_data;
 
