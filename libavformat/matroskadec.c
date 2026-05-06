@@ -34,6 +34,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+#include "libavutil/attributes.h"
 #include "libavutil/avstring.h"
 #include "libavutil/base64.h"
 #include "libavutil/bprint.h"
@@ -1602,6 +1603,7 @@ static void ebml_free(EbmlSyntax *syntax, void *data)
                 list->alloc_elem_size = 0;
             } else
                 ebml_free(syntax[i].def.n, data_off);
+            break;
         default:
             break;
         }
@@ -2517,7 +2519,7 @@ static int mkv_parse_block_addition_mappings(AVFormatContext *s, AVStream *st, M
                    "Explicit block Addition Mapping type \"Use BlockAddIDValue\", value %"PRIu64","
                    " name \"%s\" found.\n", mapping->value, mapping->name ? mapping->name : "");
             type = MATROSKA_BLOCK_ADD_ID_TYPE_OPAQUE;
-            // fall-through
+            av_fallthrough;
         case MATROSKA_BLOCK_ADD_ID_TYPE_OPAQUE:
         case MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35:
             if (mapping->value != type) {
@@ -2783,6 +2785,10 @@ static int mka_parse_audio_codec(MatroskaTrack *track, AVCodecParameters *par,
             par->block_align  = track->audio.sub_packet_size;
             *extradata_offset = 78;
         }
+        if (par->block_align <= 0 ||
+            track->audio.sub_packet_h * (unsigned)track->audio.frame_size > INT_MAX ||
+            track->audio.frame_size * track->audio.sub_packet_h < par->block_align)
+            return AVERROR_INVALIDDATA;
         track->audio.buf = av_malloc_array(track->audio.sub_packet_h,
                                             track->audio.frame_size);
         if (!track->audio.buf)
@@ -3959,6 +3965,31 @@ static int matroska_parse_block_additional(MatroskaDemuxContext *matroska,
                     (res = av_packet_add_side_data(pkt, AV_PKT_DATA_DYNAMIC_HDR10_PLUS,
                                                    (uint8_t *)hdrplus, hdrplus_size)) < 0) {
                     av_free(hdrplus);
+                    return res;
+                }
+
+                break;
+            }
+            case ITU_T_T35_PROVIDER_CODE_SMPTE: {
+                AVDynamicHDRSmpte2094App5 *hdr_smpte_2094_app5;
+                size_t hdr_smpte_2094_app5_size;
+
+                provider_oriented_code = bytestream2_get_be16u(&bc);
+                if (provider_oriented_code != 1)
+                    break; // ignore
+
+                hdr_smpte_2094_app5 = av_dynamic_hdr_smpte2094_app5_alloc(&hdr_smpte_2094_app5_size);
+                if (!hdr_smpte_2094_app5)
+                    return AVERROR(ENOMEM);
+
+                if ((res = av_dynamic_hdr_smpte2094_app5_from_t35(hdr_smpte_2094_app5,
+                                                                  bc.buffer,
+                                                                  bytestream2_get_bytes_left(&bc))) < 0 ||
+                    (res = av_packet_add_side_data(pkt,
+                                                   AV_PKT_DATA_DYNAMIC_HDR_SMPTE_2094_APP5,
+                                                   (uint8_t *)hdr_smpte_2094_app5,
+                                                   hdr_smpte_2094_app5_size)) < 0) {
+                    av_free(hdr_smpte_2094_app5);
                     return res;
                 }
 
