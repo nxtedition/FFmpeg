@@ -1338,7 +1338,7 @@ static void unchoke_downstream(Scheduler *sch, SchedulerNode *dst)
     switch (dst->type) {
     case SCH_NODE_TYPE_DEC:
         dec = &sch->dec[dst->idx];
-        if (!dec->waiter.choked) {
+        if (!dec->waiter.choked_next) {
             for (int i = 0; i < dec->nb_outputs; i++)
                 unchoke_downstream(sch, dec->outputs[i].dst);
         }
@@ -1480,12 +1480,14 @@ static void schedule_update_locked(Scheduler *sch)
 
             // unblock sources for output streams that are not finished
             // and not too far ahead of the trailing stream
-            if ((dts != AV_NOPTS_VALUE && ms->last_dts - dts >= SCHEDULE_TOLERANCE) ||
-                ms->source_finished) {
+            if (ms->source_finished) {
                 // still allow decoders to drain
                 unchoke_for_stream(sch, ms->src, UNCHOKE_DECODE);
                 continue;
-            } else if (dts == AV_NOPTS_VALUE && ms->last_dts != AV_NOPTS_VALUE)
+            }
+            if (dts == AV_NOPTS_VALUE && ms->last_dts != AV_NOPTS_VALUE)
+                continue;
+            if (dts != AV_NOPTS_VALUE && ms->last_dts - dts >= SCHEDULE_TOLERANCE)
                 continue;
 
             // resolve the source to unchoke
@@ -2255,7 +2257,7 @@ int sch_mux_receive(Scheduler *sch, unsigned mux_idx, AVPacket *pkt)
     av_assert0(mux_idx < sch->nb_mux);
     mux = &sch->mux[mux_idx];
 
-    ret = tq_receive(mux->queue, &stream_idx, pkt);
+    ret = tq_receive(mux->queue, &stream_idx, pkt, 0);
     pkt->stream_index = stream_idx;
     return ret;
 }
@@ -2355,7 +2357,7 @@ retry:
         dec->expect_end_ts = 0;
     }
 
-    ret = tq_receive(dec->queue, &dummy, pkt);
+    ret = tq_receive(dec->queue, &dummy, pkt, 0);
     av_assert0(dummy <= 0);
 
     // drain packets from overflow queue before returning EOF
@@ -2514,7 +2516,7 @@ int sch_enc_receive(Scheduler *sch, unsigned enc_idx, AVFrame *frame)
     av_assert0(enc_idx < sch->nb_enc);
     enc = &sch->enc[enc_idx];
 
-    ret = tq_receive(enc->queue, &dummy, frame);
+    ret = tq_receive(enc->queue, &dummy, frame, 0);
     av_assert0(dummy <= 0);
 
     return ret;
@@ -2603,6 +2605,7 @@ int sch_filter_receive(Scheduler *sch, unsigned fg_idx,
                        unsigned *in_idx, AVFrame *frame)
 {
     SchFilterGraph *fg;
+    int ret, idx;
 
     av_assert0(fg_idx < sch->nb_filters);
     fg = &sch->filters[fg_idx];
@@ -2623,14 +2626,20 @@ int sch_filter_receive(Scheduler *sch, unsigned fg_idx,
     }
 
     if (*in_idx == fg->nb_inputs) {
+        // drain incoming frames before waiting, to avoid blocking downstream
+        ret = tq_receive(fg->queue, &idx, frame, THREAD_QUEUE_FLAG_NO_BLOCK);
+        if (ret >= 0) {
+            av_assert0(idx >= 0);
+            *in_idx = idx;
+            return 0;
+        }
+
         int terminate = waiter_wait(sch, &fg->waiter);
         return terminate ? AVERROR_EOF : AVERROR(EAGAIN);
     }
 
     while (1) {
-        int ret, idx;
-
-        ret = tq_receive(fg->queue, &idx, frame);
+        ret = tq_receive(fg->queue, &idx, frame, 0);
         if (idx < 0)
             return AVERROR_EOF;
         else if (ret >= 0) {
