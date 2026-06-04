@@ -70,6 +70,7 @@ static inline int ff_http_averror(int status_code, int default_averror)
         case 401: return AVERROR_HTTP_UNAUTHORIZED;
         case 403: return AVERROR_HTTP_FORBIDDEN;
         case 404: return AVERROR_HTTP_NOT_FOUND;
+        case 416: return AVERROR_HTTP_RANGE_NOT_SATISFIABLE;
         case 429: return AVERROR_HTTP_TOO_MANY_REQUESTS;
         default: break;
     }
