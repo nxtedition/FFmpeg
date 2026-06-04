@@ -55,6 +55,7 @@
     E(HTTP_FORBIDDEN,           "Server returned 403 Forbidden (access denied)")                \
     E(HTTP_NOT_FOUND,           "Server returned 404 Not Found")                                \
     E(HTTP_TOO_MANY_REQUESTS,   "Server returned 429 Too Many Requests")                        \
+    E(HTTP_RANGE_NOT_SATISFIABLE,"Server returned 416 Range Not Satisfiable")                   \
     E(HTTP_OTHER_4XX,           "Server returned 4XX Client Error, but not one of 40{0,1,3,4}") \
     E(HTTP_SERVER_ERROR,        "Server returned 5XX Server Error reply")                       \
 
