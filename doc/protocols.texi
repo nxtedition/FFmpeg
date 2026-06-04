@@ -575,6 +575,11 @@ include specific status codes (e.g. '503') or the strings '4xx' / '5xx'.
 @item reconnect_streamed
 If set then even streamed/non seekable streams will be reconnected on errors.
 
+@item reconnect_partial
+If set then partial / growing files are reconnected when the requested range is
+not (yet) satisfiable, i.e. on HTTP 416 (Range Not Satisfiable) responses. This
+is useful for following files that are still being written.
+
 @item reconnect_delay_max
 Set the maximum delay in seconds after which to give up reconnecting.
 
@@ -586,8 +591,8 @@ Set the maximum total delay in seconds after which to give up reconnecting.
 
 @item respect_retry_after
 If enabled, and a Retry-After header is encountered, its requested reconnection
-delay will be honored, rather than using exponential backoff. Useful for 429 and
-503 errors. Default enabled.
+delay will be honored, rather than using exponential backoff. Useful for 429,
+416 and 503 errors. Default enabled.
 
 @item listen
 If set to 1 enables experimental HTTP server. This can be used to send data when

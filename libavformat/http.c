@@ -102,6 +102,7 @@ typedef struct HTTPContext {
     int reconnect_at_eof;
     int reconnect_on_network_error;
     int reconnect_streamed;
+    int reconnect_partial;
     int reconnect_max_retries;
     int reconnect_delay_max;
     int reconnect_delay_total_max;
@@ -219,6 +220,7 @@ static const AVOption http_options[] = {
     { "reconnect_on_network_error", "auto reconnect in case of tcp/tls error during connect", OFFSET(reconnect_on_network_error), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
     { "reconnect_streamed", "auto reconnect streamed / non seekable streams", OFFSET(reconnect_streamed), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
+    { "reconnect_partial", "auto reconnect partial / growing files", OFFSET(reconnect_partial), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "reconnect_delay_max", "max reconnect delay in seconds after which to give up", OFFSET(reconnect_delay_max), AV_OPT_TYPE_INT, { .i64 = 120 }, 0, UINT_MAX/1000/1000, D },
     { "reconnect_max_retries", "the max number of times to retry a connection", OFFSET(reconnect_max_retries), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, D },
     { "reconnect_delay_total_max", "max total reconnect delay in seconds after which to give up", OFFSET(reconnect_delay_total_max), AV_OPT_TYPE_INT, { .i64 = 256 }, 0, UINT_MAX/1000/1000, D },
@@ -352,11 +354,14 @@ static int http_should_reconnect(HTTPContext *s, int err)
     char http_code[4];
 
     switch (err) {
+    case AVERROR_HTTP_RANGE_NOT_SATISFIABLE:
+        if (s->reconnect_partial)
+            return 1;
+        av_fallthrough;
     case AVERROR_HTTP_BAD_REQUEST:
     case AVERROR_HTTP_UNAUTHORIZED:
     case AVERROR_HTTP_FORBIDDEN:
     case AVERROR_HTTP_NOT_FOUND:
-    case AVERROR_HTTP_RANGE_NOT_SATISFIABLE:
     case AVERROR_HTTP_TOO_MANY_REQUESTS:
     case AVERROR_HTTP_OTHER_4XX:
         status_group = "4xx";
@@ -918,11 +923,12 @@ static int http_get_line(HTTPContext *s, char *line, int line_size)
 static int check_http_code(URLContext *h, int http_code, const char *end)
 {
     HTTPContext *s = h->priv_data;
-    /* error codes are 4xx and 5xx, but regard 401 as a success, so we
+    /* error codes are 4xx and 5xx, but regard 401 and 416 as a success, so we
      * don't abort until all headers have been parsed. */
     if (http_code >= 400 && http_code < 600 &&
         (http_code != 401 || s->auth_state.auth_type != HTTP_AUTH_NONE) &&
-        (http_code != 407 || s->proxy_auth_state.auth_type != HTTP_AUTH_NONE)) {
+        (http_code != 407 || s->proxy_auth_state.auth_type != HTTP_AUTH_NONE) &&
+        (http_code != 416 || !s->reconnect_partial)) {
         end += strspn(end, SPACE_CHARS);
         av_log(h, AV_LOG_WARNING, "HTTP error %d %s\n", http_code, end);
         return ff_http_averror(http_code, AVERROR(EIO));
@@ -1506,6 +1512,11 @@ static int http_read_header(URLContext *h)
     }
     if (http_err)
         return http_err;
+    else if (s->http_code == 416) {
+        av_assert0(s->reconnect_partial); // should have errored otherwise
+        s->filesize_unknown = 1;
+        return AVERROR_HTTP_RANGE_NOT_SATISFIABLE;
+    }
 
     // filesize from Content-Range can always be used, even if using chunked Transfer-Encoding
     if (s->filesize_from_content_range != UINT64_MAX) {
