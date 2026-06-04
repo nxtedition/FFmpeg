@@ -170,6 +170,7 @@ typedef struct HTTPContext {
 
     /* Temporary during header parsing */
     uint64_t filesize_from_content_range;
+    int filesize_unknown;
     int line_count;
 
     /******************
@@ -952,8 +953,13 @@ static void parse_content_range(URLContext *h, const char *p)
         s->off = strtoull(p, NULL, 10);
         if ((end = strchr(p, '-')) && strlen(end) > 0)
             s->range_end = strtoull(end + 1, NULL, 10) + 1;
-        if ((slash = strchr(p, '/')) && strlen(slash) > 0)
-            s->filesize_from_content_range = strtoull(slash + 1, NULL, 10);
+        if ((slash = strchr(p, '/')) && strlen(slash) > 0) {
+            const char *size = slash + 1;
+            if (!strcmp(size, "*"))
+                s->filesize_unknown = 1;
+            else
+                s->filesize_from_content_range = strtoull(size, NULL, 10);
+        }
     }
     if (s->seekable == -1 && (!s->is_akamai || s->filesize != 2147483647))
         h->is_streamed = 0; /* we _can_ in fact seek */
@@ -1502,8 +1508,11 @@ static int http_read_header(URLContext *h)
         return http_err;
 
     // filesize from Content-Range can always be used, even if using chunked Transfer-Encoding
-    if (s->filesize_from_content_range != UINT64_MAX)
+    if (s->filesize_from_content_range != UINT64_MAX) {
         s->filesize = s->filesize_from_content_range;
+        s->filesize_unknown = 0; /* the case of a 416 error is already handled above */
+    } else if (s->filesize_unknown)
+        s->filesize = UINT64_MAX;
 
     if (s->seekable == -1 && s->is_mediagateway && s->filesize == 2000000000)
         h->is_streamed = 1; /* we can in fact _not_ seek */

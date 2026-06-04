@@ -458,7 +458,8 @@ encountering partial files).
 @item request_size
 Limit the size of requests made. This is useful for some pathological servers
 that throttle unbounded range requests, as well as when expecting to seek
-frequently. Disabled (set to 0) by default.
+frequently, or when requesting growing resources with unknown size. Disabled
+(set to 0) by default.
 
 Note that if enabling this option, it's strongly recommended to also set
 @option{short_seek_size} to the same value or higher. Doing so allows FFmpeg
