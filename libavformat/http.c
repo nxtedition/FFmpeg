@@ -71,18 +71,13 @@ typedef enum {
 
 typedef struct HTTPContext {
     const AVClass *class;
-    URLContext *hd;
     unsigned char buffer[BUFFER_SIZE], *buf_ptr, *buf_end;
-    int line_count;
-    int http_code;
-    /* Used if "Transfer-Encoding: chunked" otherwise -1. */
-    uint64_t chunksize;
-    int chunkend;
-    uint64_t off, end_off, filesize, range_end;
-    char *uri;
+
+    /*************************
+     * Configuration options *
+     *************************/
+    uint64_t off, end_off; /* `off` is also mutated by seeking / reading */
     char *location;
-    HTTPAuthState auth_state;
-    HTTPAuthState proxy_auth_state;
     char *http_proxy;
     char *headers;
     char *mime_type;
@@ -90,38 +85,16 @@ typedef struct HTTPContext {
     char *user_agent;
     char *referer;
     char *content_type;
-    /* Set if the server correctly handles Connection: close and will close
-     * the connection after feeding us the content. */
-    int willclose;
     int seekable;           /**< Control seekability, 0 = disable, 1 = enable, -1 = probe. */
     int chunked_post;
-    /* A flag which indicates if the end of chunked encoding has been sent. */
-    int end_chunked_post;
-    /* A flag which indicates we have finished to read POST reply. */
-    int end_header;
-    /* A flag which indicates if we use persistent connections. */
-    int multiple_requests;
+    int multiple_requests; /**< A flag which indicates if we use persistent connections. */
     uint8_t *post_data;
     int post_datalen;
-    int is_akamai;
-    int is_mediagateway;
     char *cookies;          ///< holds newline (\n) delimited Set-Cookie header field values (without the "Set-Cookie: " field name)
-    /* A dictionary containing cookies keyed by cookie name */
-    AVDictionary *cookie_dict;
     int icy;
-    /* how much data was read since the last ICY metadata packet */
-    uint64_t icy_data_read;
-    /* after how many bytes of read data a new metadata packet will be found */
-    uint64_t icy_metaint;
     char *icy_metadata_headers;
     char *icy_metadata_packet;
     AVDictionary *metadata;
-#if CONFIG_ZLIB
-    int compressed;
-    z_stream inflate_stream;
-    uint8_t *inflate_buffer;
-#endif /* CONFIG_ZLIB */
-    AVDictionary *chained_options;
     /* -1 = try to send if applicable, 0 = always disabled, 1 = always enabled */
     int send_expect_100;
     char *method;
@@ -129,26 +102,33 @@ typedef struct HTTPContext {
     int reconnect_at_eof;
     int reconnect_on_network_error;
     int reconnect_streamed;
+    int reconnect_partial;
+    int reconnect_max_retries;
     int reconnect_delay_max;
+    int reconnect_delay_total_max;
     char *reconnect_on_http_error;
     int listen;
     char *resource;
     int reply_code;
-    int is_multi_client;
-    HandshakeState handshake_step;
-    int is_connected_server;
     int short_seek_size;
-    int64_t expires;
-    char *new_location;
-    AVDictionary *redirect_cache;
-    uint64_t filesize_from_content_range;
+    int max_redirects;
     int respect_retry_after;
-    unsigned int retry_after;
-    int reconnect_max_retries;
-    int reconnect_delay_total_max;
-    uint64_t initial_request_size;
     uint64_t request_size;
-    int initial_requests; /* whether or not to limit requests to initial_request_size */
+    uint64_t initial_request_size;
+
+    /**********************
+     * Context-wide state *
+     **********************/
+    HTTPAuthState auth_state; /* auth_state.auth_type is also a config option */
+    HTTPAuthState proxy_auth_state;
+    uint64_t filesize;
+    int is_akamai;
+    int is_mediagateway;
+    /* A dictionary containing cookies keyed by cookie name */
+    AVDictionary *cookie_dict;
+    AVDictionary *chained_options;
+    AVDictionary *redirect_cache;
+
     /* Connection statistics */
     int nb_connections;
     int nb_requests;
@@ -157,7 +137,50 @@ typedef struct HTTPContext {
     int nb_redirects;
     int64_t sum_latency; /* divide by nb_requests */
     int64_t max_latency;
-    int max_redirects;
+
+    /************************
+     * Per-connection state *
+     ************************/
+    URLContext *hd;
+    char *uri;
+    char *new_location;
+    int http_code;
+    int64_t expires;
+    /* Used if "Transfer-Encoding: chunked" otherwise -1. */
+    uint64_t chunksize;
+    int chunkend;
+    uint64_t range_end;
+    /* Set if the server correctly handles Connection: close and will close
+     * the connection after feeding us the content. */
+    int willclose;
+    /* A flag which indicates if the end of chunked encoding has been sent. */
+    int end_chunked_post;
+    /* A flag which indicates we have finished to read POST reply. */
+    int end_header;
+    /* how much data was read since the last ICY metadata packet */
+    uint64_t icy_data_read;
+    /* after how many bytes of read data a new metadata packet will be found */
+    uint64_t icy_metaint;
+#if CONFIG_ZLIB
+    int compressed;
+    z_stream inflate_stream;
+    uint8_t *inflate_buffer;
+#endif /* CONFIG_ZLIB */
+    unsigned int retry_after;
+    int initial_requests; /* whether or not to limit requests to initial_request_size */
+
+    /* Temporary during header parsing */
+    uint64_t filesize_from_content_range;
+    int filesize_unknown;
+    int line_count;
+
+    /******************
+     * Listener state *
+     ******************/
+    /* URLContext *hd; */
+    HandshakeState handshake_step;
+    int is_multi_client;
+    int is_connected_server;
 } HTTPContext;
 
 #define OFFSET(x) offsetof(HTTPContext, x)
@@ -173,7 +196,7 @@ static const AVOption http_options[] = {
     { "content_type", "set a specific content type for the POST messages", OFFSET(content_type), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "user_agent", "override User-Agent header", OFFSET(user_agent), AV_OPT_TYPE_STRING, { .str = DEFAULT_USER_AGENT }, 0, 0, D },
     { "referer", "override referer header", OFFSET(referer), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
-    { "multiple_requests", "use persistent connections", OFFSET(multiple_requests), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D | E },
+    { "multiple_requests", "use persistent connections", OFFSET(multiple_requests), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, D | E },
     { "request_size", "size (in bytes) of requests to make", OFFSET(request_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "initial_request_size", "size (in bytes) of initial requests made during probing / header parsing", OFFSET(initial_request_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "post_data", "set custom HTTP post data", OFFSET(post_data), AV_OPT_TYPE_BINARY, .flags = D | E },
@@ -197,6 +220,7 @@ static const AVOption http_options[] = {
     { "reconnect_on_network_error", "auto reconnect in case of tcp/tls error during connect", OFFSET(reconnect_on_network_error), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
     { "reconnect_streamed", "auto reconnect streamed / non seekable streams", OFFSET(reconnect_streamed), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
+    { "reconnect_partial", "auto reconnect partial / growing files", OFFSET(reconnect_partial), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "reconnect_delay_max", "max reconnect delay in seconds after which to give up", OFFSET(reconnect_delay_max), AV_OPT_TYPE_INT, { .i64 = 120 }, 0, UINT_MAX/1000/1000, D },
     { "reconnect_max_retries", "the max number of times to retry a connection", OFFSET(reconnect_max_retries), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, D },
     { "reconnect_delay_total_max", "max total reconnect delay in seconds after which to give up", OFFSET(reconnect_delay_total_max), AV_OPT_TYPE_INT, { .i64 = 256 }, 0, UINT_MAX/1000/1000, D },
@@ -330,6 +354,10 @@ static int http_should_reconnect(HTTPContext *s, int err)
     char http_code[4];
 
     switch (err) {
+    case AVERROR_HTTP_RANGE_NOT_SATISFIABLE:
+        if (s->reconnect_partial)
+            return 1;
+        av_fallthrough;
     case AVERROR_HTTP_BAD_REQUEST:
     case AVERROR_HTTP_UNAUTHORIZED:
     case AVERROR_HTTP_FORBIDDEN:
@@ -449,7 +477,8 @@ redo:
             s->nb_retries++;
         }
 
-        av_log(h, AV_LOG_WARNING, "Will reconnect at %"PRIu64" in %d second(s).\n", off, reconnect_delay);
+        av_log(h, AV_LOG_WARNING, "Will %s at %"PRIu64" in %d second(s).\n",
+               s->willclose ? "reconnect" : "retry", off, reconnect_delay);
         ret = ff_network_sleep_interruptible(1000U * 1000 * reconnect_delay, &h->interrupt_callback);
         if (ret != AVERROR(ETIMEDOUT))
             goto fail;
@@ -596,6 +625,7 @@ int ff_http_averror(int status_code, int default_averror)
         case 401: return AVERROR_HTTP_UNAUTHORIZED;
         case 403: return AVERROR_HTTP_FORBIDDEN;
         case 404: return AVERROR_HTTP_NOT_FOUND;
+        case 416: return AVERROR_HTTP_RANGE_NOT_SATISFIABLE;
         case 429: return AVERROR_HTTP_TOO_MANY_REQUESTS;
         default: break;
     }
@@ -638,6 +668,11 @@ static int http_write_reply(URLContext* h, int status_code)
     case 404:
         reply_code = 404;
         reply_text = "Not Found";
+        break;
+    case AVERROR_HTTP_RANGE_NOT_SATISFIABLE:
+    case 416:
+        reply_code = 416;
+        reply_text = "Range Not Satisfiable";
         break;
     case AVERROR_HTTP_TOO_MANY_REQUESTS:
     case 429:
@@ -888,11 +923,12 @@ static int http_get_line(HTTPContext *s, char *line, int line_size)
 static int check_http_code(URLContext *h, int http_code, const char *end)
 {
     HTTPContext *s = h->priv_data;
-    /* error codes are 4xx and 5xx, but regard 401 as a success, so we
+    /* error codes are 4xx and 5xx, but regard 401 and 416 as a success, so we
      * don't abort until all headers have been parsed. */
     if (http_code >= 400 && http_code < 600 &&
         (http_code != 401 || s->auth_state.auth_type != HTTP_AUTH_NONE) &&
-        (http_code != 407 || s->proxy_auth_state.auth_type != HTTP_AUTH_NONE)) {
+        (http_code != 407 || s->proxy_auth_state.auth_type != HTTP_AUTH_NONE) &&
+        (http_code != 416 || !s->reconnect_partial)) {
         end += strspn(end, SPACE_CHARS);
         av_log(h, AV_LOG_WARNING, "HTTP error %d %s\n", http_code, end);
         return ff_http_averror(http_code, AVERROR(EIO));
@@ -923,8 +959,13 @@ static void parse_content_range(URLContext *h, const char *p)
         s->off = strtoull(p, NULL, 10);
         if ((end = strchr(p, '-')) && strlen(end) > 0)
             s->range_end = strtoull(end + 1, NULL, 10) + 1;
-        if ((slash = strchr(p, '/')) && strlen(slash) > 0)
-            s->filesize_from_content_range = strtoull(slash + 1, NULL, 10);
+        if ((slash = strchr(p, '/')) && strlen(slash) > 0) {
+            const char *size = slash + 1;
+            if (!strcmp(size, "*"))
+                s->filesize_unknown = 1;
+            else
+                s->filesize_from_content_range = strtoull(size, NULL, 10);
+        }
     }
     if (s->seekable == -1 && (!s->is_akamai || s->filesize != 2147483647))
         h->is_streamed = 0; /* we _can_ in fact seek */
@@ -1471,10 +1512,18 @@ static int http_read_header(URLContext *h)
     }
     if (http_err)
         return http_err;
+    else if (s->http_code == 416) {
+        av_assert0(s->reconnect_partial); // should have errored otherwise
+        s->filesize_unknown = 1;
+        return AVERROR_HTTP_RANGE_NOT_SATISFIABLE;
+    }
 
     // filesize from Content-Range can always be used, even if using chunked Transfer-Encoding
-    if (s->filesize_from_content_range != UINT64_MAX)
+    if (s->filesize_from_content_range != UINT64_MAX) {
         s->filesize = s->filesize_from_content_range;
+        s->filesize_unknown = 0; /* the case of a 416 error is already handled above */
+    } else if (s->filesize_unknown)
+        s->filesize = UINT64_MAX;
 
     if (s->seekable == -1 && s->is_mediagateway && s->filesize == 2000000000)
         h->is_streamed = 1; /* we can in fact _not_ seek */
@@ -1518,6 +1567,14 @@ static void bprint_escaped_path(AVBPrint *bp, const char *path)
         }
         av_bprint_append_data(bp, buf, q - buf);
     }
+}
+
+static uint64_t request_size(URLContext *h)
+{
+    HTTPContext *s = h->priv_data;
+    if (s->initial_requests)
+        return s->initial_request_size;
+    return s->request_size;
 }
 
 static int http_connect(URLContext *h, const char *path, const char *local_path,
@@ -1589,17 +1646,20 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     // Note: we send the Range header on purpose, even when we're probing,
     // since it allows us to detect more reliably if a (non-conforming)
     // server supports seeking by analysing the reply headers.
+    int is_partial_request = 0;
     if (!has_header(s->headers, "\r\nRange: ") && !post && (s->off > 0 || s->end_off || s->seekable != 0)) {
         av_bprintf(&request, "Range: bytes=%"PRIu64"-", s->off);
-        if ((s->initial_requests || s->request_size) && s->seekable != 0) {
-            uint64_t req_size = s->initial_requests ? s->initial_request_size : s->request_size;
+        uint64_t req_size = request_size(h);
+        if (req_size && s->seekable != 0) {
             uint64_t target_off = s->off + req_size;
             if (target_off < s->off) /* overflow */
                 target_off = UINT64_MAX;
             if (s->end_off)
                 target_off = FFMIN(target_off, s->end_off);
-            if (target_off != UINT64_MAX)
+            if (target_off != UINT64_MAX) {
                 av_bprintf(&request, "%"PRId64, target_off - 1);
+                is_partial_request = 1;
+            }
         } else if (s->end_off)
             av_bprintf(&request, "%"PRId64, s->end_off - 1);
         av_bprintf(&request, "\r\n");
@@ -1607,8 +1667,12 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     if (send_expect_100 && !has_header(s->headers, "\r\nExpect: "))
         av_bprintf(&request, "Expect: 100-continue\r\n");
 
-    if (!has_header(s->headers, "\r\nConnection: "))
-        av_bprintf(&request, "Connection: %s\r\n", s->multiple_requests ? "keep-alive" : "close");
+    if (!has_header(s->headers, "\r\nConnection: ")) {
+        int keep_alive = s->multiple_requests > 0;
+        if (s->multiple_requests < 0 /* auto */ && is_partial_request)
+            keep_alive = 1;
+        av_bprintf(&request, "Connection: %s\r\n", keep_alive ? "keep-alive" : "close");
+    }
 
     if (!has_header(s->headers, "\r\nHost: "))
         av_bprintf(&request, "Host: %s\r\n", hoststr);
@@ -1876,7 +1940,8 @@ retry:
             reconnect_delay_total > s->reconnect_delay_total_max)
             return AVERROR(EIO);
 
-        av_log(h, AV_LOG_WARNING, "Will reconnect at %"PRIu64" in %d second(s), error=%s.\n", s->off, reconnect_delay, av_err2str(read_ret));
+        av_log(h, AV_LOG_WARNING, "Will %s at %"PRIu64" in %d second(s), error=%s.\n", s->willclose ? "reconnect" : "retry",
+               s->off, reconnect_delay, av_err2str(read_ret));
         err = ff_network_sleep_interruptible(1000U*1000*reconnect_delay, &h->interrupt_callback);
         if (err != AVERROR(ETIMEDOUT))
             return err;

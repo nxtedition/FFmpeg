@@ -453,15 +453,17 @@ string describing the libavformat build. ("Lavf/<version>")
 Set the Referer header. Include 'Referer: URL' header in HTTP request.
 
 @item multiple_requests
-Use persistent connections if set to 1, default is 0.
+Force persistent connections if set to 1, or disable if 0. Default is -1,
+which means auto (implies keep-alive when using -multiple_requests or
+encountering partial files).
 
 @item request_size
 Limit the size of requests made. This is useful for some pathological servers
 that throttle unbounded range requests, as well as when expecting to seek
-frequently. Disabled (set to 0) by default.
+frequently, or when requesting growing resources with unknown size. Disabled
+(set to 0) by default.
 
-Note that if enabling this option, it's strongly recommended to also enable
-the @option{multiple_requests} option, as well as setting
+Note that if enabling this option, it's strongly recommended to also set
 @option{short_seek_size} to the same value or higher. Doing so allows FFmpeg
 to reuse a single HTTP connection wherever possible.
 
@@ -575,6 +577,11 @@ include specific status codes (e.g. '503') or the strings '4xx' / '5xx'.
 @item reconnect_streamed
 If set then even streamed/non seekable streams will be reconnected on errors.
 
+@item reconnect_partial
+If set then partial / growing files are reconnected when the requested range is
+not (yet) satisfiable, i.e. on HTTP 416 (Range Not Satisfiable) responses. This
+is useful for following files that are still being written.
+
 @item reconnect_delay_max
 Set the maximum delay in seconds after which to give up reconnecting.
 
@@ -586,8 +593,8 @@ Set the maximum total delay in seconds after which to give up reconnecting.
 
 @item respect_retry_after
 If enabled, and a Retry-After header is encountered, its requested reconnection
-delay will be honored, rather than using exponential backoff. Useful for 429 and
-503 errors. Default enabled.
+delay will be honored, rather than using exponential backoff. Useful for 429,
+416 and 503 errors. Default enabled.
 
 @item listen
 If set to 1 enables experimental HTTP server. This can be used to send data when
