@@ -1176,6 +1176,22 @@ static av_cold int aac_encode_init(AVCodecContext *avctx)
         }
     }
 
+    if (avctx->strict_std_compliance < FF_COMPLIANCE_STRICT &&
+        !s->needs_pce && chcfg == 7 /* 7.1(wide) */)
+    {
+        /**
+         * FFmpeg used to produce out-of-spec AAC files that mistagged 7.1
+         * as 7.1(wide), and this wark-around is still enabled by default in
+         * aacdec.c, so avoid producing such files in the rare case that the
+         * user correctly passed 7.1(wide) channel layout content.
+         */
+        av_log(avctx, AV_LOG_INFO, "Forcing the use of PCE to encode 7.1(wide) "
+               "channel layout to avoid ambiguity. Set -strict %d to override "
+               "this behavior and force the use of spec-compliant channel "
+               "configuration ID.\n", FF_COMPLIANCE_STRICT);
+        s->needs_pce = 1;
+    }
+
     if (s->needs_pce) {
         char buf[64];
         for (i = 0; i < FF_ARRAY_ELEMS(aac_pce_configs); i++)
