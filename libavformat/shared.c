@@ -721,7 +721,7 @@ retry:
     }
 
     int write_back = 1;
-    if (s->cache_data) {
+    if (s->cache_data && !pending_since) {
         /* Read directly into memory mapped cache file */
         tmp = s->cache_data + block_pos;
         write_back = 0;
