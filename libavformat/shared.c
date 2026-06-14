@@ -775,9 +775,11 @@ retry:
     if (bytes_read > 0) {
         ret = write_back ? write_cache(s, tmp, bytes_read, block_pos) : 0;
         if (ret < 0) {
-            av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
-                   av_err2str(ret));
-            s->write_err = 1;
+            if (ret != AVERROR(EINTR)) {
+                av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
+                    av_err2str(ret));
+                s->write_err = 1;
+            }
             goto soft_fail;
         } else {
             uint16_t crc = get_block_crc(tmp, bytes_read);
