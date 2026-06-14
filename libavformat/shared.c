@@ -675,8 +675,14 @@ retry:
             pending_since = av_gettime_relative();
         }
 
+        if (h->flags & AVIO_FLAG_NONBLOCK)
+            return AVERROR(EAGAIN);
+
         /* Make sure we try a few times before giving up */
         av_usleep(s->timeout >> 4);
+        if (ff_check_interrupt(&h->interrupt_callback))
+            return AVERROR_EXIT;
+
         state = atomic_load_explicit(&block->state, memory_order_acquire);
         goto retry;
     }
