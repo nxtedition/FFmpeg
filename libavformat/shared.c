@@ -752,6 +752,8 @@ read_block:
         if (ret < 0) {
             av_assert1(!acquired);
             return ret;
+        } else {
+            s->pos = s->inner_pos = inner_pos + ret;
         }
 
         /* Verify the read data against the cached data if requested */
@@ -759,9 +761,9 @@ read_block:
             av_log(h, AV_LOG_ERROR, "Cache verification failed for %d bytes "
                    "in block 0x%"PRIx64" at offset 0x%"PRIx64" + %"PRId64"!\n",
                    ret, block_id, block_pos, offset);
+            ret = AVERROR(EIO);
         }
 
-        s->pos = s->inner_pos = inner_pos + ret;
         return ret;
     }
 
