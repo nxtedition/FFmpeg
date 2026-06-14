@@ -580,6 +580,8 @@ static int shared_read(URLContext *h, unsigned char *buf, int size)
     SharedContext *s = h->priv_data;
     uint8_t *tmp;
     int ret;
+    if (!s->spacemap)
+        return AVERROR(EIO);
 
     if (size <= 0)
         return 0;
@@ -807,6 +809,8 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
     SharedContext *s = h->priv_data;
     const int64_t filesize = get_filesize(h);
     int64_t res;
+    if (!s->spacemap)
+        return AVERROR(EIO);
 
     switch (whence) {
     case AVSEEK_SIZE:
