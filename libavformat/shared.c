@@ -600,7 +600,7 @@ static int shared_read(URLContext *h, unsigned char *buf, int size)
     Block *const block = &s->spacemap->blocks[block_id];
     unsigned short state = atomic_load_explicit(&block->state, memory_order_acquire);
     int64_t pending_since = 0;
-    int verify_read = 0, is_race = 0;
+    int verify_read = 0, acquired = 0;
 
 retry:
     switch (state) {
@@ -652,6 +652,7 @@ retry:
                                                   memory_order_acquire))
         {
             /* Acquired pending state, proceed to fetch the block */
+            acquired = 1;
             state = BLOCK_PENDING;
             break;
         }
@@ -661,14 +662,11 @@ retry:
     case BLOCK_PENDING:
         /* Another thread is busy fetching this block, wait for it to finish */
         if (!s->timeout) {
-            is_race = 1;
             break; /* no timeout requested, immediately race to fetch block */
         } else if (pending_since) {
             int64_t new = av_gettime_relative();
-            if (new - pending_since >= s->timeout) {
-                is_race = 1;
+            if (new - pending_since >= s->timeout)
                 break; /* timeout expired, try to fetch the block ourselves */
-            }
         } else {
             pending_since = av_gettime_relative();
         }
@@ -689,16 +687,8 @@ retry:
         if (inner_pos < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to seek underlying protocol: %s\n",
                    av_err2str(inner_pos));
-            if (!read_only) {
-                /* Release pending state to avoid stalling other threads. Don't
-                 * mark this as failed, since the seek error may be unrelated to
-                 * the block and should probably be tried again. */
-                atomic_compare_exchange_strong_explicit(&block->state, &state,
-                                                        BLOCK_NONE,
-                                                        memory_order_relaxed,
-                                                        memory_order_relaxed);
-            }
-            return inner_pos;
+            ret = inner_pos;
+            goto soft_fail;
         }
 
         av_log(h, AV_LOG_DEBUG, "Inner seek to 0x%"PRIx64"\n", inner_pos);
@@ -708,8 +698,10 @@ retry:
     if (read_only) {
         /* Directly defer to the underlying protocol */
         ret = ffurl_read(s->inner, buf, size);
-        if (ret < 0)
+        if (ret < 0) {
+            av_assert1(!acquired);
             return ret;
+        }
 
         /* Verify the read data against the cached data if requested */
         if (verify_read && memcmp(buf, tmp, ret)) {
@@ -723,7 +715,7 @@ retry:
     }
 
     int write_back = 1;
-    if (s->cache_data && !is_race) {
+    if (s->cache_data && acquired) {
         /* Read directly into memory mapped cache file */
         tmp = s->cache_data + block_pos;
         write_back = 0;
@@ -745,15 +737,14 @@ retry:
         else if (ret < 0) {
             av_log(h, AV_LOG_ERROR, "Failed to read block 0x%"PRIx64": %s\n",
                    block_id, av_err2str(ret));
-            int new_state = BLOCK_FAILED;
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EXIT)
-                new_state = BLOCK_NONE; /* transient error, allow retries */
+                goto soft_fail;  /* transient error, allow retries */
 
             /* Try to mark block as failed; ignore errors - any mismatch
              * here will mean that either another thread already marked it
              * as failed, or successfully cached it in the meantime */
             atomic_compare_exchange_strong_explicit(&block->state, &state,
-                                                    new_state,
+                                                    BLOCK_FAILED,
                                                     memory_order_relaxed,
                                                     memory_order_relaxed);
             return ret;
@@ -767,7 +758,7 @@ retry:
         /* Learned location of true EOF, update filesize */
         ret = set_filesize(h, inner_pos + bytes_read);
         if (ret < 0)
-            return ret;
+            goto soft_fail;
     }
 
     if (bytes_read > 0) {
@@ -776,12 +767,7 @@ retry:
             av_log(h, AV_LOG_ERROR, "Failed to write to cache file: %s\n",
                    av_err2str(ret));
             s->write_err = 1;
-            /* Mark as NONE, not FAILED, since the block itself is fine -
-             * just absent from the cache. */
-            atomic_compare_exchange_strong_explicit(&block->state, &state,
-                                                    BLOCK_NONE,
-                                                    memory_order_relaxed,
-                                                    memory_order_relaxed);
+            goto soft_fail;
         } else {
             uint16_t crc = get_block_crc(tmp, bytes_read);
             av_log(h, AV_LOG_TRACE, "Cached %d bytes to block 0x%"PRIx64" at "
@@ -790,7 +776,8 @@ retry:
             atomic_store_explicit(&block->state, crc, memory_order_release);
         }
     } else {
-        return AVERROR_EOF;
+        ret = AVERROR_EOF;
+        goto soft_fail;
     }
 
     size = FFMIN(bytes_read - offset, size);
@@ -800,6 +787,17 @@ retry:
         memcpy(buf, &tmp[offset], size);
     s->pos += size;
     return size;
+
+soft_fail:
+    if (acquired) {
+        /* Release pending state on failure to avoid stalling other threads */
+        av_assert1(state == BLOCK_PENDING);
+        atomic_compare_exchange_strong_explicit(&block->state, &state,
+                                                BLOCK_NONE,
+                                                memory_order_relaxed,
+                                                memory_order_relaxed);
+    }
+    return ret;
 }
 
 static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
