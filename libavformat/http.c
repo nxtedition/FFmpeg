@@ -596,6 +596,7 @@ int ff_http_do_new_request2(URLContext *h, const char *uri, AVDictionary **opts)
 
     s->end_chunked_post = 0;
     s->chunkend      = 0;
+    s->range_end     = 0;
     s->off           = 0;
     s->icy_data_read = 0;
 
@@ -1727,6 +1728,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     s->off              = 0;
     s->icy_data_read    = 0;
     s->filesize         = UINT64_MAX;
+    s->range_end        = 0;
     s->willclose        = 0;
     s->end_chunked_post = 0;
     s->end_header       = 0;
@@ -1896,7 +1898,7 @@ static int http_read_stream(URLContext *h, uint8_t *buf, int size)
     int conn_attempts = 1;
 
     if (!s->hd)
-        return AVERROR_EOF;
+        return s->off < s->filesize ? AVERROR(EIO) : AVERROR_EOF;
 
     if (s->end_chunked_post && !s->end_header) {
         err = http_read_header(h);
@@ -2206,8 +2208,14 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
     memcpy(old_buf, s->buf_ptr, old_buf_size);
 
     /* try to reuse existing connection for small seeks */
-    uint64_t remaining = s->range_end - old_off - old_buf_size;
-    if (s->hd && !s->willclose && s->range_end && remaining <= ffurl_get_short_seek(h)) {
+    int short_seek = ffurl_get_short_seek(h);
+    uint64_t old_read_pos = old_off + old_buf_size;
+    if (s->hd && !s->willclose && s->range_end && short_seek > 0 &&
+        old_read_pos + short_seek >= s->range_end)
+    {
+        uint64_t remaining = s->range_end - old_read_pos;
+        av_assert1(remaining <= short_seek);
+
         /* drain remaining data left on the wire from previous request */
         av_log(h, AV_LOG_DEBUG, "Soft-seeking to offset %"PRIu64" by draining "
                "%"PRIu64" remaining byte(s)\n", s->off, remaining);
@@ -2220,22 +2228,35 @@ static int64_t http_seek_internal(URLContext *h, int64_t off, int whence, int fo
             }
             remaining -= ret;
         }
+
+        ret = http_open_cnx(h, &options);
+        if (ret >= 0) {
+            goto done;
+        } else {
+            /* fall back to normal reconnection */
+            ffurl_closep(&s->hd);
+            old_hd = NULL;
+        }
     } else {
         /* can't soft seek; always open new connection */
         old_hd = s->hd;
         s->hd = NULL;
     }
 
-    /* if it fails, continue on old connection */
     if ((ret = http_open_cnx(h, &options)) < 0) {
+        /* if it fails, continue on old connection if possible */
+        if (old_hd) {
+            memcpy(s->buffer, old_buf, old_buf_size);
+            s->buf_ptr = s->buffer;
+            s->buf_end = s->buffer + old_buf_size;
+            s->hd      = old_hd;
+            s->off     = old_off;
+        }
         av_dict_free(&options);
-        memcpy(s->buffer, old_buf, old_buf_size);
-        s->buf_ptr = s->buffer;
-        s->buf_end = s->buffer + old_buf_size;
-        s->hd      = old_hd;
-        s->off     = old_off;
         return ret;
     }
+
+done:
     av_dict_free(&options);
     ffurl_close(old_hd);
     return off;
