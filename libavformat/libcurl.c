@@ -620,8 +620,10 @@ static int curl_loop_attach(CurlContext *c, void *fmt_ctx)
 
     pthread_mutex_lock(&curl_loop_lock);
     c->loop = ffformatcontext(fmt_ctx)->curl_loop;
-    if (!c->loop)
+    if (!c->loop) {
         c->loop = curl_loop_create();
+        ffformatcontext(fmt_ctx)->curl_loop = c->loop;
+    }
     pthread_mutex_unlock(&curl_loop_lock);
 
     return c->loop ? 0 : AVERROR(ENOMEM);
