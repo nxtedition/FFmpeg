@@ -270,8 +270,9 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
 
     curl_easy_getinfo(c->easy, CURLINFO_RESPONSE_CODE, &status);
 
-    /* Redirects produce an intermediate header block, wait for the final one. */
-    if (status >= 300 && status < 400)
+    /* Interim (1xx) and redirect (3xx) responses produce an intermediate header
+     * block, wait for the final one. */
+    if (status < 200 || (status >= 300 && status < 400))
         return len;
 
     pthread_mutex_lock(&c->mutex);
