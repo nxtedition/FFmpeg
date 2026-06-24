@@ -132,6 +132,8 @@ struct CurlContext {
     /* Per-response-block header scratch, loop thread only. */
     int             hdr_accept_ranges;
     int             hdr_compressed;
+    int64_t         hdr_content_start;
+    int64_t         hdr_content_end;
     int64_t         hdr_content_total;
 
     /* Probe result. Set by the loop thread, read by url_open() once probed. */
@@ -224,14 +226,20 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdat
     return bytes;
 }
 
-/* Parse the total length out of a "Content-Range: bytes a-b/total" value.
- * Returns the total, or -1 if unknown ("*") or unparsable. */
-static int64_t parse_content_range_total(const char *v)
+/* "bytes $from-$to/$document_size" */
+static void parse_content_range(CurlContext *c, const char *v)
 {
-    const char *slash = strchr(v, '/');
-    if (!slash || slash[1] == '*')
-        return -1;
-    return strtoll(slash + 1, NULL, 10);
+    while (av_isspace(*v))
+        v++;
+
+    if (!strncmp(v, "bytes ", 6)) {
+        const char *end, *slash;
+        c->hdr_content_start = strtoll(v + 6, NULL, 10);
+        if ((end = strchr(v, '-')) && strlen(end) > 0)
+            c->hdr_content_end = strtoll(end + 1, NULL, 10);
+        if ((slash = strchr(v, '/')) && strlen(slash) > 0)
+            c->hdr_content_total = strtoll(slash + 1, NULL, 10);
+    }
 }
 
 static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userdata)
@@ -244,6 +252,8 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
     if (av_strncasecmp(ptr, "HTTP/", 5) == 0) {
         c->hdr_accept_ranges = 0;
         c->hdr_compressed    = 0;
+        c->hdr_content_start = -1;
+        c->hdr_content_end   = -1;
         c->hdr_content_total = -1;
         return len;
     }
@@ -256,7 +266,7 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
         return len;
     }
     if (av_strncasecmp(ptr, "Content-Range:", 14) == 0) {
-        c->hdr_content_total = parse_content_range_total(ptr + 14);
+        parse_content_range(c, ptr + 14);
         return len;
     }
 
