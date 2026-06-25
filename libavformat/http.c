@@ -362,7 +362,6 @@ static int http_should_reconnect(HTTPContext *s, int err)
     case AVERROR_HTTP_UNAUTHORIZED:
     case AVERROR_HTTP_FORBIDDEN:
     case AVERROR_HTTP_NOT_FOUND:
-    case AVERROR_HTTP_RANGE_NOT_SATISFIABLE:
     case AVERROR_HTTP_TOO_MANY_REQUESTS:
     case AVERROR_HTTP_OTHER_4XX:
         status_group = "4xx";
