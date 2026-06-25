@@ -39,6 +39,7 @@
 #include "libavutil/time.h"
 
 #include "avformat.h"
+#include "http.h"
 #include "internal.h"
 #include "url.h"
 #include "version.h"
@@ -118,6 +119,8 @@ struct CurlContext {
     int             http_version;
     int64_t         buffer_size;
     int64_t         request_size;
+    int64_t         initial_request_size;
+    int64_t         short_seek_size;
     int             max_retries;
 
     int64_t         logical_pos; /* next byte url_read() will return, caller side */
@@ -126,12 +129,17 @@ struct CurlContext {
     int             active;          /* currently added to the multi */
     uint64_t        request_start;   /* absolute offset the current request began at */
     uint64_t        request_received;/* bytes delivered in the current request */
+    int64_t         request_end;     /* expected end of request, or -1 if unknown */
     int             retry_count;     /* consecutive recoverable failures */
+    int             is_initial;      /* using reduced request size */
+    int             seek_queued;     /* soft seeking; drain remaining bytes until done */
 
     /* Per-response-block header scratch, loop thread only. */
     int             hdr_accept_ranges;
     int             hdr_compressed;
-    int64_t         hdr_content_total;
+    int64_t         hdr_content_start;
+    int64_t         hdr_content_end;
+    int64_t         hdr_content_total; /* or -1 if unknown */
 
     /* Probe result. Set by the loop thread, read by url_open() once probed. */
     int             probed;
@@ -189,21 +197,6 @@ static int is_recoverable(CURLcode code)
     }
 }
 
-static int http_status_to_averror(long status)
-{
-    switch (status) {
-    case 400: return AVERROR_HTTP_BAD_REQUEST;
-    case 401: return AVERROR_HTTP_UNAUTHORIZED;
-    case 403: return AVERROR_HTTP_FORBIDDEN;
-    case 404: return AVERROR_HTTP_NOT_FOUND;
-    }
-    if (status >= 400 && status < 500)
-        return AVERROR_HTTP_OTHER_4XX;
-    if (status >= 500 && status < 600)
-        return AVERROR_HTTP_SERVER_ERROR;
-    return AVERROR(EIO);
-}
-
 /* ------------------------------------------------------------------------- */
 /* curl callbacks (run on the loop thread)                                   */
 /* ------------------------------------------------------------------------- */
@@ -219,6 +212,11 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdat
     if (c->aborted || !c->stream_ok) {
         pthread_mutex_unlock(&c->mutex);
         return CURL_WRITEFUNC_ERROR;
+    }
+
+    if (c->seek_queued) {
+        pthread_mutex_unlock(&c->mutex);
+        return bytes; /* discard */
     }
 
     space = av_fifo_can_write(c->fifo);
@@ -238,14 +236,25 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdat
     return bytes;
 }
 
-/* Parse the total length out of a "Content-Range: bytes a-b/total" value.
- * Returns the total, or -1 if unknown ("*") or unparsable. */
-static int64_t parse_content_range_total(const char *v)
+/* "bytes $from-$to/$document_size" */
+static void parse_content_range(CurlContext *c, const char *v)
 {
-    const char *slash = strchr(v, '/');
-    if (!slash || slash[1] == '*')
-        return -1;
-    return strtoll(slash + 1, NULL, 10);
+    while (av_isspace(*v))
+        v++;
+
+    if (!strncmp(v, "bytes ", 6)) {
+        const char *end, *slash;
+        c->hdr_content_start = strtoll(v + 6, NULL, 10);
+        if ((end = strchr(v, '-')) && strlen(end) > 0)
+            c->hdr_content_end = strtoll(end + 1, NULL, 10);
+        if ((slash = strchr(v, '/')) && strlen(slash) > 0) {
+            const char *size = slash + 1;
+            if (!strcmp(size, "*"))
+                c->hdr_content_total = -1;
+            else
+                c->hdr_content_total = strtoll(size, NULL, 10);
+        }
+    }
 }
 
 static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userdata)
@@ -258,6 +267,8 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
     if (av_strncasecmp(ptr, "HTTP/", 5) == 0) {
         c->hdr_accept_ranges = 0;
         c->hdr_compressed    = 0;
+        c->hdr_content_start = -1;
+        c->hdr_content_end   = -1;
         c->hdr_content_total = -1;
         return len;
     }
@@ -270,7 +281,7 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
         return len;
     }
     if (av_strncasecmp(ptr, "Content-Range:", 14) == 0) {
-        c->hdr_content_total = parse_content_range_total(ptr + 14);
+        parse_content_range(c, ptr + 14);
         return len;
     }
 
@@ -318,11 +329,22 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
                     total = cl;
             }
             c->content_size = total;
+
+            if (c->hdr_content_end >= 0)
+                c->request_end = c->hdr_content_end;
+            else if (c->content_size >= 0)
+                c->request_end = c->content_size - 1;
+            else {
+                /* e.g. server sent us a 206 response with malformed content-range */
+                c->stream_ok = 0;
+                if (!c->error)
+                    c->error = AVERROR(EIO);
+            }
         }
     } else {
         c->stream_ok = 0;
         if (!c->error)
-            c->error = http_status_to_averror(status);
+            c->error = ff_http_averror(status, AVERROR(EIO));
     }
     c->probed = 1;
     pthread_cond_broadcast(&c->cond);
@@ -349,10 +371,13 @@ static void start_request(CurlContext *c)
     if (!c->probed || c->seekable) {
         uint64_t start = c->request_start;
         char range[48];
-        if (c->request_size > 0 || c->end_off > 0) {
+        int64_t request_size = c->request_size;
+        if (c->is_initial && c->initial_request_size > 0)
+            request_size = c->initial_request_size;
+        if (request_size > 0 || c->end_off > 0) {
             uint64_t end = UINT64_MAX;
-            if (c->request_size > 0)
-                end = start + c->request_size - 1;
+            if (request_size > 0)
+                end = start + request_size - 1;
             if (c->content_size > 0)
                 end = FFMIN(end, (uint64_t)c->content_size - 1);
             if (c->end_off > 0)
@@ -367,8 +392,19 @@ static void start_request(CurlContext *c)
     }
     c->loop->num_requests++;
     c->request_received = 0;
+    c->request_end = -1;
     c->active = 1;
-    curl_multi_add_handle(c->loop->multi, c->easy);
+    CURLMcode res = curl_multi_add_handle(c->loop->multi, c->easy);
+    if (res != CURLM_OK) {
+        av_log(c->h, AV_LOG_ERROR, "curl_multi_add_handle: %s\n",
+               curl_multi_strerror(res));
+        c->active = 0;
+        pthread_mutex_lock(&c->mutex);
+        if (!c->error)
+            c->error = AVERROR(EIO);
+        pthread_cond_broadcast(&c->cond);
+        pthread_mutex_unlock(&c->mutex);
+    }
 }
 
 static void update_statistics(CurlContext *c)
@@ -408,6 +444,7 @@ static void on_done(CurlContext *c, CURLcode code)
     c->request_start    += received;
     c->request_received  = 0;
     pthread_mutex_unlock(&c->mutex);
+    update_statistics(c);
 
     if (!c->probed) {
         /* Connection died before any usable header arrived. */
@@ -421,23 +458,29 @@ static void on_done(CurlContext *c, CURLcode code)
         return;
     }
 
+    if (c->seek_queued) {
+        /* previous soft seek drain finished; can start new request now */
+        c->seek_queued = 0;
+        start_request(c);
+        return;
+    }
+
     if (code == CURLE_OK && !aborted && c->stream_ok) {
         c->retry_count = 0;
-        if (c->seekable && c->request_size > 0) {
-            int64_t file_end = c->end_off > 0 ? c->end_off : c->content_size;
-            int more = file_end > 0
-                       ? (int64_t)c->request_start < file_end
-                       : received >= (uint64_t)c->request_size;
-            if (more) {
-                start_request(c);
-                return;
-            }
+        int64_t file_end = -1;
+        if (c->content_size > 0)
+            file_end = c->content_size - 1;
+        if (c->end_off > 0)
+            file_end = FFMIN(file_end, c->end_off - 1);
+        if (c->seekable && c->request_end >= 0 && c->request_end < file_end) {
+            c->is_initial = 0;
+            start_request(c);
+            return;
         }
         pthread_mutex_lock(&c->mutex);
         c->eof = 1;
         pthread_cond_broadcast(&c->cond);
         pthread_mutex_unlock(&c->mutex);
-        update_statistics(c);
         return;
     }
 
@@ -484,7 +527,15 @@ static void execute_command(CurlLoop *loop, CurlCmd *cmd)
         curl_easy_pause(c->easy, CURLPAUSE_CONT);
         break;
     case CMD_SEEK:
-        if (c->active) {
+        if (c->active && c->request_end >= 0 && c->short_seek_size > 0 &&
+            c->request_end - c->request_start + 1 - c->request_received <= c->short_seek_size)
+        {
+            c->seek_queued = 1;
+            if (c->paused) {
+                curl_easy_pause(c->easy, CURLPAUSE_CONT);
+                c->paused = 0;
+            }
+        } else if (c->active) {
             curl_multi_remove_handle(loop->multi, c->easy);
             c->active = 0;
         }
@@ -494,9 +545,11 @@ static void execute_command(CurlLoop *loop, CurlCmd *cmd)
         c->eof    = 0;
         c->error  = 0;
         pthread_mutex_unlock(&c->mutex);
-        c->request_start = cmd->pos;
-        c->retry_count   = 0;
-        start_request(c);
+        c->request_start    = cmd->pos;
+        c->request_received = 0;
+        c->retry_count      = 0;
+        if (!c->seek_queued)
+            start_request(c);
         break;
     }
 }
@@ -870,6 +923,14 @@ static void setup_curl(CurlContext *c)
         curl_easy_setopt(e, CURLOPT_HTTPHEADER, c->header_list);
 }
 
+static void curl_cond_wait(CurlContext *c)
+{
+    int64_t t = av_gettime() + CURL_WAIT_US;
+    struct timespec ts = { .tv_sec  = t / 1000000,
+                           .tv_nsec = (t % 1000000) * 1000 };
+    pthread_cond_timedwait(&c->cond, &c->mutex, &ts);
+}
+
 /* Block until the transfer has been probed, the stream errored, or the open was
  * interrupted. Returns 0, or a negative AVERROR. */
 static int wait_for_probe(CurlContext *c)
@@ -879,18 +940,12 @@ static int wait_for_probe(CurlContext *c)
 
     pthread_mutex_lock(&c->mutex);
     while (!c->probed && !c->error) {
-        int64_t t;
-        struct timespec ts;
-
         if (ff_check_interrupt(&h->interrupt_callback)) {
             c->aborted = 1;
             ret = AVERROR_EXIT;
             break;
         }
-        t  = av_gettime() + CURL_WAIT_US;
-        ts.tv_sec  = t / 1000000;
-        ts.tv_nsec = (t % 1000000) * 1000;
-        pthread_cond_timedwait(&c->cond, &c->mutex, &ts);
+        curl_cond_wait(c);
     }
     if (!ret) {
         if (!c->stream_ok)
@@ -919,7 +974,9 @@ static int libcurl_open(URLContext *h, const char *url, int flags,
     c->h = h;
     c->content_size = -1;
     c->request_start = c->off;
+    c->request_end   = -1;
     c->logical_pos   = c->off;
+    c->is_initial    = 1;
 
     /* Report the request URL until header_callback replaces it post-redirect. */
     av_strstart(eff_url, "libcurl:", &eff_url);
@@ -953,7 +1010,7 @@ static int libcurl_open(URLContext *h, const char *url, int flags,
 
     ret = setup_protocols(c);
     if (ret < 0)
-        return ret;
+        goto fail;
 
     setup_curl(c);
 
@@ -987,8 +1044,6 @@ static int libcurl_read(URLContext *h, unsigned char *buf, int size)
     pthread_mutex_lock(&c->mutex);
     while (1) {
         size_t avail = av_fifo_can_read(c->fifo);
-        int64_t t;
-        struct timespec ts;
 
         if (avail) {
             int n = FFMIN(avail, (size_t)size);
@@ -1014,10 +1069,7 @@ static int libcurl_read(URLContext *h, unsigned char *buf, int size)
             ret = AVERROR(EAGAIN);
             break;
         }
-        t  = av_gettime() + CURL_WAIT_US;
-        ts.tv_sec  = t / 1000000;
-        ts.tv_nsec = (t % 1000000) * 1000;
-        pthread_cond_timedwait(&c->cond, &c->mutex, &ts);
+        curl_cond_wait(c);
         /* Return to the avio layer so it can poll the interrupt callback. */
         nonblock = 1;
     }
@@ -1060,6 +1112,9 @@ static int64_t libcurl_seek(URLContext *h, int64_t pos, int whence)
     if (newpos < 0)
         return AVERROR(EINVAL);
 
+    if (newpos == c->logical_pos)
+        return newpos;
+
     /* Restart the transfer at the new offset. Any failure of the new request
      * surfaces on the following url_read(). */
     curl_dispatch(c->loop, CMD_SEEK, c, newpos, 1);
@@ -1094,6 +1149,14 @@ static int libcurl_close(URLContext *h)
     return 0;
 }
 
+static int libcurl_get_short_seek(URLContext *h)
+{
+    CurlContext *c = h->priv_data;
+    if (c->short_seek_size >= 1)
+        return c->short_seek_size;
+    return AVERROR(ENOSYS);
+}
+
 #define OFFSET(x) offsetof(CurlContext, x)
 #define D AV_OPT_FLAG_DECODING_PARAM
 #define E AV_OPT_FLAG_ENCODING_PARAM
@@ -1117,6 +1180,7 @@ static const AVOption options[] = {
     { "max_retries", "maximum number of retries after a recoverable error", OFFSET(max_retries), AV_OPT_TYPE_INT, { .i64 = 5 }, 0, INT_MAX, D },
     { "buffer_size", "receive buffer size in bytes", OFFSET(buffer_size), AV_OPT_TYPE_INT64, { .i64 = CURL_DEFAULT_BUFFER_SIZE }, CURL_MAX_WRITE_SIZE, INT64_MAX, D },
     { "request_size", "split a transfer into ranged requests of at most this many bytes (0 = unlimited)", OFFSET(request_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
+    { "initial_request_size", "size (in bytes) of initial requests made during probing / header parsing", OFFSET(initial_request_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "http_version", "HTTP version to use", OFFSET(http_version), AV_OPT_TYPE_INT, { .i64 = CURL_HTTP_VERSION_NONE }, 0, INT_MAX, D, .unit = "http_version" },
         { "auto",              "negotiate the best supported version",  0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_NONE },                0, 0, D, .unit = "http_version" },
         { "1.0",               "HTTP/1.0",                              0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_1_0 },                 0, 0, D, .unit = "http_version" },
@@ -1126,6 +1190,7 @@ static const AVOption options[] = {
         { "2-prior-knowledge", "HTTP/2 without an upgrade handshake",   0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE },   0, 0, D, .unit = "http_version" },
         { "3",                 "HTTP/3, fall back to earlier versions", 0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_3 },                   0, 0, D, .unit = "http_version" },
         { "3only",             "HTTP/3 only",                           0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_3ONLY },               0, 0, D, .unit = "http_version" },
+    { "short_seek_size", "threshold to favor readahead over seek", OFFSET(short_seek_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { NULL }
 };
 
@@ -1142,6 +1207,7 @@ const URLProtocol ff_libcurl_protocol = {
     .url_read        = libcurl_read,
     .url_seek        = libcurl_seek,
     .url_close       = libcurl_close,
+    .url_get_short_seek = libcurl_get_short_seek,
     .priv_data_size  = sizeof(CurlContext),
     .priv_data_class = &libcurl_context_class,
     .flags           = URL_PROTOCOL_FLAG_NETWORK,

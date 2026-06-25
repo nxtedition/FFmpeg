@@ -362,6 +362,7 @@ static int http_should_reconnect(HTTPContext *s, int err)
     case AVERROR_HTTP_UNAUTHORIZED:
     case AVERROR_HTTP_FORBIDDEN:
     case AVERROR_HTTP_NOT_FOUND:
+    case AVERROR_HTTP_RANGE_NOT_SATISFIABLE:
     case AVERROR_HTTP_TOO_MANY_REQUESTS:
     case AVERROR_HTTP_OTHER_4XX:
         status_group = "4xx";
@@ -617,25 +618,6 @@ int ff_http_do_new_request2(URLContext *h, const char *uri, AVDictionary **opts)
     ret = http_open_cnx(h, &options);
     av_dict_free(&options);
     return ret;
-}
-
-int ff_http_averror(int status_code, int default_averror)
-{
-    switch (status_code) {
-        case 400: return AVERROR_HTTP_BAD_REQUEST;
-        case 401: return AVERROR_HTTP_UNAUTHORIZED;
-        case 403: return AVERROR_HTTP_FORBIDDEN;
-        case 404: return AVERROR_HTTP_NOT_FOUND;
-        case 416: return AVERROR_HTTP_RANGE_NOT_SATISFIABLE;
-        case 429: return AVERROR_HTTP_TOO_MANY_REQUESTS;
-        default: break;
-    }
-    if (status_code >= 400 && status_code <= 499)
-        return AVERROR_HTTP_OTHER_4XX;
-    else if (status_code >= 500)
-        return AVERROR_HTTP_SERVER_ERROR;
-    else
-        return default_averror;
 }
 
 const char* ff_http_get_new_location(URLContext *h)
@@ -1232,14 +1214,14 @@ static int process_line(URLContext *h, char *line, int line_count, int *parsed_h
             while (*p && !av_isspace(*p))
                 p++;
             if (!av_isspace(*p))
-                return ff_http_averror(400, AVERROR(EIO));
+                return AVERROR_HTTP_BAD_REQUEST;
             *(p++) = '\0';
             av_log(h, AV_LOG_TRACE, "Received method: %s\n", method);
             if (s->method) {
                 if (av_strcasecmp(s->method, method)) {
                     av_log(h, AV_LOG_ERROR, "Received and expected HTTP method do not match. (%s expected, %s received)\n",
                            s->method, method);
-                    return ff_http_averror(400, AVERROR(EIO));
+                    return AVERROR_HTTP_BAD_REQUEST;
                 }
             } else {
                 // use autodetected HTTP method to expect
@@ -1247,7 +1229,7 @@ static int process_line(URLContext *h, char *line, int line_count, int *parsed_h
                 if (av_strcasecmp(auto_method, method)) {
                     av_log(h, AV_LOG_ERROR, "Received and autodetected HTTP method did not match "
                            "(%s autodetected %s received)\n", auto_method, method);
-                    return ff_http_averror(400, AVERROR(EIO));
+                    return AVERROR_HTTP_BAD_REQUEST;
                 }
                 if (!(s->method = av_strdup(method)))
                     return AVERROR(ENOMEM);
@@ -1260,7 +1242,7 @@ static int process_line(URLContext *h, char *line, int line_count, int *parsed_h
             while (*p && !av_isspace(*p))
                 p++;
             if (!av_isspace(*p))
-                return ff_http_averror(400, AVERROR(EIO));
+                return AVERROR_HTTP_BAD_REQUEST;
             *(p++) = '\0';
             av_log(h, AV_LOG_TRACE, "Requested resource: %s\n", resource);
             if (!(s->resource = av_strdup(resource)))
@@ -1275,7 +1257,7 @@ static int process_line(URLContext *h, char *line, int line_count, int *parsed_h
             *p = '\0';
             if (av_strncasecmp(version, "HTTP/", 5)) {
                 av_log(h, AV_LOG_ERROR, "Malformed HTTP version string.\n");
-                return ff_http_averror(400, AVERROR(EIO));
+                return AVERROR_HTTP_BAD_REQUEST;
             }
             av_log(h, AV_LOG_TRACE, "HTTP version string: %s\n", version);
         } else {
