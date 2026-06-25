@@ -139,7 +139,7 @@ struct CurlContext {
     int             hdr_compressed;
     int64_t         hdr_content_start;
     int64_t         hdr_content_end;
-    int64_t         hdr_content_total;
+    int64_t         hdr_content_total; /* or -1 if unknown */
 
     /* Probe result. Set by the loop thread, read by url_open() once probed. */
     int             probed;
@@ -247,8 +247,13 @@ static void parse_content_range(CurlContext *c, const char *v)
         c->hdr_content_start = strtoll(v + 6, NULL, 10);
         if ((end = strchr(v, '-')) && strlen(end) > 0)
             c->hdr_content_end = strtoll(end + 1, NULL, 10);
-        if ((slash = strchr(v, '/')) && strlen(slash) > 0)
-            c->hdr_content_total = strtoll(slash + 1, NULL, 10);
+        if ((slash = strchr(v, '/')) && strlen(slash) > 0) {
+            const char *size = slash + 1;
+            if (!strcmp(size, "*"))
+                c->hdr_content_total = -1;
+            else
+                c->hdr_content_total = strtoll(size, NULL, 10);
+        }
     }
 }
 
@@ -327,8 +332,14 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
 
             if (c->hdr_content_end >= 0)
                 c->request_end = c->hdr_content_end;
-            else
+            else if (c->content_size >= 0)
                 c->request_end = c->content_size - 1;
+            else {
+                /* e.g. server sent us a 206 response with malformed content-range */
+                c->stream_ok = 0;
+                if (!c->error)
+                    c->error = AVERROR(EIO);
+            }
         }
     } else {
         c->stream_ok = 0;
@@ -456,7 +467,9 @@ static void on_done(CurlContext *c, CURLcode code)
 
     if (code == CURLE_OK && !aborted && c->stream_ok) {
         c->retry_count = 0;
-        int64_t file_end = c->content_size - 1;
+        int64_t file_end = -1;
+        if (c->content_size > 0)
+            file_end = c->content_size - 1;
         if (c->end_off > 0)
             file_end = FFMIN(file_end, c->end_off - 1);
         if (c->seekable && c->request_end >= 0 && c->request_end < file_end) {
