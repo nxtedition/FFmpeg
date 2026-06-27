@@ -1747,6 +1747,11 @@ If true (the default), transient read errors from the underlying input stream
 are ignored and retried again. If false, any blocks that previously failed
 being read from will be treated as permanently inaccessible.
 
+@item disable_mmap
+If true, disables memory-mapping of the cache data file, falling back to
+@code{pread}/@code{pwrite} syscalls instead. The spacemap is still
+memory-mapped regardless of this setting. Defaults to false.
+
 @end table
 
 URL Syntax is
