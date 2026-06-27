@@ -1723,7 +1723,7 @@ to 15, i.e. 32KB blocks. If this does not match the value that was specified
 when an existing cache file was created, the previously specified value will
 be used instead.
 
-@item read_only
+@item cache_read_only
 If true, use the shared cache for reads but don't write any new blocks to it.
 Default is false. Note that even with this option enabled, the cache file will
 be initialized if it does not already exist.
