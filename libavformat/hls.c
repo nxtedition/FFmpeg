@@ -667,7 +667,7 @@ static int is_native_http(AVIOContext *pb)
     return 0;
 #else
     URLContext *uc = ffio_geturlcontext(pb);
-    return uc && !strcmp(uc->prot->name, "http");
+    return uc && !strncmp(uc->prot->name, "http", 4);
 #endif
 }
 
