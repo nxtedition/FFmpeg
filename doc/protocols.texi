@@ -1752,6 +1752,10 @@ If true, disables memory-mapping of the cache data file, falling back to
 @code{pread}/@code{pwrite} syscalls instead. The spacemap is still
 memory-mapped regardless of this setting. Defaults to false.
 
+@item retry_corrupt
+If true (the default), blocks whose contents fail the CRC integrity check are
+re-fetched from the underlying input stream, overwriting the corrupt cached
+data. If false, cache corruption is treated as a fatal read error.
 @end table
 
 URL Syntax is
