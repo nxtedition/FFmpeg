@@ -76,7 +76,7 @@ typedef struct CurlLoop {
     CURLM          *multi;
     CURLSH         *share;   /* shared cookies/DNS/TLS sessions/HSTS */
 
-    pthread_mutex_t mutex;   /* guards the command queue, exit and cmd->done */
+    pthread_mutex_t mutex;   /* guards the command queue, exit, share and cmd->done */
     pthread_cond_t  cond;    /* signaled when a sync command completes */
     CurlCmd        *cmd_head, *cmd_tail;
     int             exit;
@@ -127,8 +127,8 @@ struct CurlContext {
 
     /* Producer bookkeeping, touched only by the loop thread. */
     int             active;          /* currently added to the multi */
-    uint64_t        request_start;   /* absolute offset the current request began at */
-    uint64_t        request_received;/* bytes delivered in the current request */
+    int64_t         request_start;   /* absolute offset the current request began at */
+    int64_t         request_received;/* bytes delivered in the current request */
     int64_t         request_end;     /* expected end of request, or -1 if unknown */
     int             retry_count;     /* consecutive recoverable failures */
     int             is_initial;      /* using reduced request size */
@@ -138,7 +138,7 @@ struct CurlContext {
     int             hdr_accept_ranges;
     int             hdr_compressed;
     int64_t         hdr_content_start;
-    int64_t         hdr_content_end;
+    int64_t         hdr_content_end;   /* inclusive */
     int64_t         hdr_content_total; /* or -1 if unknown */
 
     /* Probe result. Set by the loop thread, read by url_open() once probed. */
@@ -236,25 +236,31 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdat
     return bytes;
 }
 
+static int64_t parse_offset(const char *s)
+{
+    int64_t v = strtoll(s, NULL, 10);
+    return v < 0 ? -1 : v;
+}
+
 /* "bytes $from-$to/$document_size" */
 static void parse_content_range(CurlContext *c, const char *v)
 {
     while (av_isspace(*v))
         v++;
 
-    if (!strncmp(v, "bytes ", 6)) {
-        const char *end, *slash;
-        c->hdr_content_start = strtoll(v + 6, NULL, 10);
-        if ((end = strchr(v, '-')) && strlen(end) > 0)
-            c->hdr_content_end = strtoll(end + 1, NULL, 10);
-        if ((slash = strchr(v, '/')) && strlen(slash) > 0) {
-            const char *size = slash + 1;
-            if (!strcmp(size, "*"))
-                c->hdr_content_total = -1;
-            else
-                c->hdr_content_total = strtoll(size, NULL, 10);
-        }
+    if (av_strncasecmp(v, "bytes ", 6))
+        return;
+
+    const char *range = v + 6, *end;
+    if (range[0] != '*') {
+        c->hdr_content_start = parse_offset(range);
+        if ((end = strchr(range, '-')))
+            c->hdr_content_end = parse_offset(end + 1);
     }
+
+    const char *slash = strchr(range, '/');
+    if (slash && slash[1] != '*')
+        c->hdr_content_total = parse_offset(slash + 1);
 }
 
 static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userdata)
@@ -300,6 +306,19 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
 
     pthread_mutex_lock(&c->mutex);
     if (status >= 200 && status < 300) {
+        int64_t content_start = status == 206 ? c->hdr_content_start : 0;
+        if (c->probed && c->seekable && content_start != c->request_start) {
+            av_log(c->h, AV_LOG_ERROR, "Server sent back unexpected reply "
+                   "with offset %"PRId64" (expected %"PRId64")\n",
+                   content_start, c->request_start);
+            c->stream_ok = 0;
+            if (!c->error)
+                c->error = AVERROR(EIO);
+            pthread_cond_broadcast(&c->cond);
+            pthread_mutex_unlock(&c->mutex);
+            return len;
+        }
+
         c->stream_ok = 1;
         /* Capture the post-redirect URL, this is exposed as "location" AVOption
          * for compatibility with http.c. */
@@ -369,22 +388,22 @@ static int xferinfo_callback(void *userdata, curl_off_t dltotal, curl_off_t dlno
 static void start_request(CurlContext *c)
 {
     if (!c->probed || c->seekable) {
-        uint64_t start = c->request_start;
+        int64_t start = c->request_start;
         char range[48];
         int64_t request_size = c->request_size;
         if (c->is_initial && c->initial_request_size > 0)
             request_size = c->initial_request_size;
         if (request_size > 0 || c->end_off > 0) {
-            uint64_t end = UINT64_MAX;
-            if (request_size > 0)
+            int64_t end = INT64_MAX;
+            if (request_size > 0 && start <= INT64_MAX - request_size)
                 end = start + request_size - 1;
             if (c->content_size > 0)
-                end = FFMIN(end, (uint64_t)c->content_size - 1);
+                end = FFMIN(end, c->content_size - 1);
             if (c->end_off > 0)
-                end = FFMIN(end, (uint64_t)c->end_off - 1);
-            snprintf(range, sizeof(range), "%"PRIu64"-%"PRIu64, start, end);
+                end = FFMIN(end, c->end_off - 1);
+            snprintf(range, sizeof(range), "%"PRId64"-%"PRId64, start, end);
         } else {
-            snprintf(range, sizeof(range), "%"PRIu64"-", start);
+            snprintf(range, sizeof(range), "%"PRId64"-", start);
         }
         curl_easy_setopt(c->easy, CURLOPT_RANGE, range);
     } else {
@@ -434,13 +453,20 @@ static void update_statistics(CurlContext *c)
 /* Transfer finished (or failed) */
 static void on_done(CurlContext *c, CURLcode code)
 {
-    uint64_t received;
+    int64_t received;
     int aborted;
 
     pthread_mutex_lock(&c->mutex);
     aborted  = c->aborted;
     received = c->request_received;
     /* Advance past delivered bytes so a retry or seek resumes at the right offset. */
+    if (received > INT64_MAX - c->request_start) {
+        if (!c->error)
+            c->error = AVERROR(EIO);
+        received = 0;
+        aborted  = 1;
+        pthread_cond_broadcast(&c->cond);
+    }
     c->request_start    += received;
     c->request_received  = 0;
     pthread_mutex_unlock(&c->mutex);
@@ -489,7 +515,7 @@ static void on_done(CurlContext *c, CURLcode code)
         c->retry_count < c->max_retries) {
         c->retry_count++;
         c->loop->num_retries++;
-        av_log(c->h, AV_LOG_WARNING, "%s, retrying (#%d) from %"PRIu64"\n",
+        av_log(c->h, AV_LOG_WARNING, "%s, retrying (#%d) from %"PRId64"\n",
                curl_easy_strerror(code), c->retry_count, c->request_start);
         start_request(c);
         return;
@@ -643,6 +669,20 @@ static int curl_dispatch(CurlLoop *loop, enum cmd_kind kind, CurlContext *c,
     return 0;
 }
 
+static void share_lock_callback(CURL *handle, curl_lock_data data,
+                                curl_lock_access access, void *userdata)
+{
+    CurlLoop *loop = userdata;
+    pthread_mutex_lock(&loop->mutex);
+}
+
+static void share_unlock_callback(CURL *handle, curl_lock_data data,
+                                  void *userdata)
+{
+    CurlLoop *loop = userdata;
+    pthread_mutex_unlock(&loop->mutex);
+}
+
 static CurlLoop *curl_loop_create(AVFormatContext *avfc)
 {
     CurlLoop *loop = av_mallocz(sizeof(*loop));
@@ -668,8 +708,11 @@ static CurlLoop *curl_loop_create(AVFormatContext *avfc)
     loop->share = curl_share_init();
     if (!loop->share)
         goto fail3;
-    curl_share_setopt(loop->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_COOKIE);
-    curl_share_setopt(loop->share, CURLSHOPT_SHARE, CURL_LOCK_DATA_HSTS);
+    curl_share_setopt(loop->share, CURLSHOPT_USERDATA,   loop);
+    curl_share_setopt(loop->share, CURLSHOPT_LOCKFUNC,   share_lock_callback);
+    curl_share_setopt(loop->share, CURLSHOPT_UNLOCKFUNC, share_unlock_callback);
+    curl_share_setopt(loop->share, CURLSHOPT_SHARE,      CURL_LOCK_DATA_COOKIE);
+    curl_share_setopt(loop->share, CURLSHOPT_SHARE,      CURL_LOCK_DATA_HSTS);
 
     if (pthread_create(&loop->thread, NULL, curl_worker, loop))
         goto fail3;
@@ -840,6 +883,11 @@ static int setup_protocols(CurlContext *c)
 
     if (!av_bprint_is_complete(&bp))
         return AVERROR(ENOMEM);
+
+    if (!bp.len) {
+        av_log(c->h, AV_LOG_ERROR, "Set of allowed protocols is empty.\n");
+        return AVERROR(EINVAL);
+    }
 
     curl_easy_setopt(c->easy, CURLOPT_PROTOCOLS_STR, bp.str);
     curl_easy_setopt(c->easy, CURLOPT_REDIR_PROTOCOLS_STR, bp.str);
@@ -1099,11 +1147,15 @@ static int64_t libcurl_seek(URLContext *h, int64_t pos, int whence)
         newpos = pos;
         break;
     case SEEK_CUR:
+        if (pos > INT64_MAX - c->logical_pos)
+            return AVERROR(ERANGE);
         newpos = c->logical_pos + pos;
         break;
     case SEEK_END:
         if (content_size < 0)
             return AVERROR(ENOSYS);
+        if (pos > INT64_MAX - content_size)
+            return AVERROR(ERANGE);
         newpos = content_size + pos;
         break;
     default:
@@ -1174,7 +1226,7 @@ static const AVOption options[] = {
     { "ca_file", "certificate authority bundle file", OFFSET(ca_file), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "cert_file", "client certificate file", OFFSET(cert_file), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
     { "key_file", "client private key file", OFFSET(key_file), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D | E },
-    { "connect_timeout", "connection timeout in seconds (0 = libcurl default)", OFFSET(connect_timeout), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, D | E },
+    { "connect_timeout", "connection timeout in seconds (0 = libcurl default)", OFFSET(connect_timeout), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX / 1000, D | E },
     { "max_redirects", "maximum number of redirects to follow", OFFSET(max_redirects), AV_OPT_TYPE_INT, { .i64 = 16 }, 0, INT_MAX, D },
     { "multiple_requests", "reuse the connection across requests (HTTP keep-alive)", OFFSET(multiple_requests), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, D | E },
     { "max_retries", "maximum number of retries after a recoverable error", OFFSET(max_retries), AV_OPT_TYPE_INT, { .i64 = 5 }, 0, INT_MAX, D },
