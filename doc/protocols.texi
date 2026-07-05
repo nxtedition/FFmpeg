@@ -454,8 +454,8 @@ Set the Referer header. Include 'Referer: URL' header in HTTP request.
 
 @item multiple_requests
 Force persistent connections if set to 1, or disable if 0. Default is -1,
-which means auto (implies keep-alive when using -multiple_requests or
-encountering partial files).
+which means auto (implies keep-alive when using -request_size or
+-initial_request_size).
 
 @item request_size
 Limit the size of requests made. This is useful for some pathological servers
@@ -1752,10 +1752,12 @@ If true, disables memory-mapping of the cache data file, falling back to
 @code{pread}/@code{pwrite} syscalls instead. The spacemap is still
 memory-mapped regardless of this setting. Defaults to false.
 
+
 @item retry_corrupt
 If true (the default), blocks whose contents fail the CRC integrity check are
 re-fetched from the underlying input stream, overwriting the corrupt cached
 data. If false, cache corruption is treated as a fatal read error.
+
 @end table
 
 URL Syntax is

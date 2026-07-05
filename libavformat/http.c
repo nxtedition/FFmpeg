@@ -1075,7 +1075,8 @@ static int parse_cookie(HTTPContext *s, const char *p, AVDictionary **cookies)
 {
     AVDictionary *new_params = NULL;
     const AVDictionaryEntry *e, *cookie_entry;
-    char *eql, *name;
+    const char *eql;
+    char *name;
 
     // ensure the cookie is parsable
     if (parse_set_cookie(p, &new_params))
@@ -1315,7 +1316,7 @@ static int process_line(URLContext *h, char *line, int line_count, int *parsed_h
         } else if (!av_strcasecmp(tag, "Proxy-Authenticate")) {
             ff_http_auth_handle_header(&s->proxy_auth_state, tag, p);
         } else if (!av_strcasecmp(tag, "Connection")) {
-            if (!strcmp(p, "close"))
+            if (!av_strcasecmp(p, "close"))
                 s->willclose = 1;
         } else if (!av_strcasecmp(tag, "Server")) {
             if (!av_strcasecmp(p, "AkamaiGHost")) {
@@ -1574,6 +1575,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     uint64_t off = s->off;
     const char *method;
     int send_expect_100 = 0;
+    int keep_alive = 1;
 
     av_bprint_init_for_buffer(&request, s->buffer, sizeof(s->buffer));
 
@@ -1654,7 +1656,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
         av_bprintf(&request, "Expect: 100-continue\r\n");
 
     if (!has_header(s->headers, "\r\nConnection: ")) {
-        int keep_alive = s->multiple_requests > 0;
+        keep_alive = s->multiple_requests > 0;
         if (s->multiple_requests < 0 /* auto */ && is_partial_request)
             keep_alive = 1;
         av_bprintf(&request, "Connection: %s\r\n", keep_alive ? "keep-alive" : "close");
@@ -1710,7 +1712,7 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
     s->icy_data_read    = 0;
     s->filesize         = UINT64_MAX;
     s->range_end        = 0;
-    s->willclose        = 0;
+    s->willclose        = !keep_alive;
     s->end_chunked_post = 0;
     s->end_header       = 0;
 #if CONFIG_ZLIB
