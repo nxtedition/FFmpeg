@@ -555,7 +555,9 @@ static void on_done(CurlContext *c, CURLcode code)
         int64_t file_end = c->content_size > 0 ? c->content_size - 1 : -1;
         if (c->end_off > 0)
             file_end = FFMIN(file_end, c->end_off - 1);
-        if (c->seekable && c->request_end >= 0 && c->request_end < file_end) {
+        if (c->seekable && c->request_end >= 0 &&
+            (c->request_end < file_end || file_end < 0))
+        {
             c->is_initial = 0;
             start_request(c);
             return;
