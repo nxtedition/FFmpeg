@@ -179,19 +179,23 @@ static int curlcode_to_averror(CURLcode code)
     }
 }
 
-static int is_recoverable(CURLcode code)
+static int is_recoverable(CurlContext *c, CURLcode code)
 {
+    if (!c->seekable && c->request_start > 0)
+        return 0;
+
     switch (code) {
     case CURLE_RECV_ERROR:
     case CURLE_SEND_ERROR:
     case CURLE_PARTIAL_FILE:
     case CURLE_OPERATION_TIMEDOUT:
     case CURLE_GOT_NOTHING:
-    case CURLE_COULDNT_CONNECT:
-    case CURLE_COULDNT_RESOLVE_HOST:
     case CURLE_HTTP2:
     case CURLE_HTTP2_STREAM:
         return 1;
+    case CURLE_COULDNT_CONNECT:
+    case CURLE_COULDNT_RESOLVE_HOST:
+        return c->request_start > 0;
     default:
         return 0;
     }
@@ -484,8 +488,12 @@ static void on_done(CurlContext *c, CURLcode code)
         pthread_mutex_lock(&c->mutex);
         c->probed    = 1;
         c->stream_ok = 0;
-        if (!c->status)
-            c->status = curlcode_to_averror(code);
+        if (!c->status) {
+            if (is_recoverable(c, code))
+                c->status = AVERROR(EAGAIN);
+            else
+                c->status = curlcode_to_averror(code);
+        }
         c->loop->num_errors++;
         pthread_cond_broadcast(&c->cond);
         pthread_mutex_unlock(&c->mutex);
@@ -524,7 +532,7 @@ static void on_done(CurlContext *c, CURLcode code)
     }
 
     /* Resume seekable transfers after a recoverable error. */
-    if (c->seekable && is_recoverable(code)) {
+    if (is_recoverable(c, code)) {
         pthread_mutex_lock(&c->mutex);
         if (!c->status)
             c->status = AVERROR(EAGAIN);
@@ -1091,11 +1099,14 @@ static int libcurl_open(URLContext *h, const char *url, int flags,
     if (ret < 0)
         goto fail;
 
-    ret = wait_for_probe(c);
-    if (ret == AVERROR(EAGAIN))
-        ret = 0; /* this will be handled by the next libcurl_read() call */
-    if (ret < 0)
-        goto fail;
+    do {
+        ret = wait_for_probe(c);
+        if (ret == AVERROR(EAGAIN)) {
+            c->probed = 0;
+            ret = retry_request(h);
+        } else if (ret < 0)
+            goto fail;
+    } while (ret == AVERROR(EAGAIN));
 
     pthread_mutex_lock(&c->mutex);
     h->is_streamed = !c->seekable;
