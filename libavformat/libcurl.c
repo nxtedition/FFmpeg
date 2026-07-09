@@ -123,14 +123,15 @@ struct CurlContext {
     int64_t         short_seek_size;
     int             max_retries;
 
-    int64_t         logical_pos; /* next byte url_read() will return, caller side */
+    /* URL thread bookkeeping, not touched by loop thread */
+    int64_t         logical_pos;    /* next byte url_read() will return, caller side */
+    int             retry_count;    /* consecutive recoverable failures */
 
     /* Producer bookkeeping, touched only by the loop thread. */
     int             active;          /* currently added to the multi */
     int64_t         request_start;   /* absolute offset the current request began at */
     int64_t         request_received;/* bytes delivered in the current request */
     int64_t         request_end;     /* expected end of request, or -1 if unknown */
-    int             retry_count;     /* consecutive recoverable failures */
     int             is_initial;      /* using reduced request size */
     int             seek_queued;     /* soft seeking; drain remaining bytes until done */
 
@@ -491,7 +492,6 @@ static void on_done(CurlContext *c, CURLcode code)
     }
 
     if (code == CURLE_OK && c->stream_ok) {
-        c->retry_count = 0;
         int64_t file_end = c->content_size > 0 ? c->content_size - 1 : -1;
         if (c->end_off > 0)
             file_end = FFMIN(file_end, c->end_off - 1);
@@ -513,12 +513,12 @@ static void on_done(CurlContext *c, CURLcode code)
     }
 
     /* Resume seekable transfers after a recoverable error. */
-    if (c->seekable && is_recoverable(code) &&
-        c->retry_count < c->max_retries) {
-        c->retry_count++;
-        av_log(c->h, AV_LOG_WARNING, "Retrying (#%d) from %"PRId64"\n",
-               c->retry_count, c->request_start);
-        start_request(c);
+    if (c->seekable && is_recoverable(code)) {
+        pthread_mutex_lock(&c->mutex);
+        if (!c->status)
+            c->status = AVERROR(EAGAIN);
+        pthread_cond_broadcast(&c->cond);
+        pthread_mutex_unlock(&c->mutex);
         return;
     }
 
@@ -572,7 +572,6 @@ static void execute_command(CurlLoop *loop, CurlCmd *cmd)
         pthread_mutex_unlock(&c->mutex);
         c->request_start    = cmd->pos;
         c->request_received = 0;
-        c->retry_count      = 0;
         if (!c->seek_queued)
             start_request(c);
         break;
@@ -986,6 +985,32 @@ static int wait_for_probe(CurlContext *c)
     return ret;
 }
 
+static int retry_request(URLContext *h)
+{
+    CurlContext *c = h->priv_data;
+
+    if (c->retry_count >= c->max_retries) {
+        av_log(h, AV_LOG_ERROR, "Maximum number of retries (%d) reached\n",
+               c->max_retries);
+        return AVERROR(EIO);
+    }
+
+    c->retry_count++;
+    av_log(h, AV_LOG_WARNING, "Retrying (#%d) from %"PRId64"\n",
+           c->retry_count, c->logical_pos);
+
+    /**
+     * Use a synchronous request to ensure that the seek is registered, and
+     * the reset of c->state is observable, before the next libcurl_read()
+     * call, otherwise this might hit the exact same retry path a second time.
+     */
+    int ret = curl_dispatch(c->loop, CMD_SEEK, c, c->logical_pos, 1);
+    if (ret < 0)
+        return ret;
+
+    return AVERROR(EAGAIN); /* allow caller to handle interrupts and retry */
+}
+
 static int libcurl_open(URLContext *h, const char *url, int flags,
                         AVDictionary **options)
 {
@@ -1049,6 +1074,8 @@ static int libcurl_open(URLContext *h, const char *url, int flags,
         goto fail;
 
     ret = wait_for_probe(c);
+    if (ret == AVERROR(EAGAIN))
+        ret = 0; /* this will be handled by the next libcurl_read() call */
     if (ret < 0)
         goto fail;
 
@@ -1081,13 +1108,17 @@ static int libcurl_read(URLContext *h, unsigned char *buf, int size)
             av_fifo_read(c->fifo, buf, n);
             /* Resume a paused transfer once the FIFO is at least half empty. */
             unpause = c->paused && av_fifo_can_write(c->fifo) * 2 >= c->buffer_size;
+            c->retry_count = 0;
             c->logical_pos += n;
             pthread_mutex_unlock(&c->mutex);
             if (unpause)
                 curl_dispatch(c->loop, CMD_UNPAUSE, c, 0, 0);
             return n;
         }
-        if (c->status) {
+        if (c->status == AVERROR(EAGAIN)) {
+            pthread_mutex_unlock(&c->mutex);
+            return retry_request(h);
+        } else if (c->status) {
             ret = c->status;
             break;
         }
@@ -1149,6 +1180,7 @@ static int64_t libcurl_seek(URLContext *h, int64_t pos, int whence)
      * surfaces on the following url_read(). */
     curl_dispatch(c->loop, CMD_SEEK, c, newpos, 1);
     c->logical_pos = newpos;
+    c->retry_count = 0;
 
     return newpos;
 }
