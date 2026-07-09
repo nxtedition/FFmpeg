@@ -1184,6 +1184,11 @@ include specific status codes (e.g. '503') or the strings '4xx' / '5xx'.
 
 @item reconnect_streamed
 If set then even streamed/non seekable streams will be reconnected on errors.
+
+@item respect_retry_after
+If enabled, and a Retry-After header is encountered, its requested reconnection
+delay will be honored, rather than using exponential backoff. Useful for 429 and
+503 errors. Default enabled.
 @end table
 
 For more information see: @url{https://curl.se/libcurl/}.
