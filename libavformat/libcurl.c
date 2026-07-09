@@ -87,7 +87,7 @@ typedef struct CurlLoop {
     int            num_connections;
     int            num_redirects;
     int            num_requests;
-    int            num_retries;
+    int            num_errors;
 } CurlLoop;
 
 struct CurlContext {
@@ -310,6 +310,7 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
             av_log(c->h, AV_LOG_ERROR, "Server sent back unexpected reply "
                    "with offset %"PRId64" (expected %"PRId64")\n",
                    content_start, c->request_start);
+            c->loop->num_errors++;
             c->stream_ok = 0;
             if (!c->status)
                 c->status = AVERROR(EIO);
@@ -354,6 +355,7 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
                 c->request_end = c->content_size > 0 ? c->content_size - 1 : -1;
         }
     } else {
+        c->loop->num_errors++;
         c->stream_ok = 0;
         if (!c->status)
             c->status = ff_http_averror(status, AVERROR(EIO));
@@ -472,6 +474,7 @@ static void on_done(CurlContext *c, CURLcode code)
         c->stream_ok = 0;
         if (!c->status)
             c->status = curlcode_to_averror(code);
+        c->loop->num_errors++;
         pthread_cond_broadcast(&c->cond);
         pthread_mutex_unlock(&c->mutex);
         return;
@@ -504,14 +507,15 @@ static void on_done(CurlContext *c, CURLcode code)
         return;
     }
 
-    if (c->stream_ok)
+    if (c->stream_ok) {
         av_log(c->h, AV_LOG_WARNING, "%s\n", curl_easy_strerror(code));
+        c->loop->num_errors++;
+    }
 
     /* Resume seekable transfers after a recoverable error. */
     if (c->seekable && is_recoverable(code) &&
         c->retry_count < c->max_retries) {
         c->retry_count++;
-        c->loop->num_retries++;
         av_log(c->h, AV_LOG_WARNING, "Retrying (#%d) from %"PRId64"\n",
                c->retry_count, c->request_start);
         start_request(c);
@@ -722,8 +726,8 @@ static void print_statistics(CurlLoop *loop)
            loop->total_bytes, time * 1e3, avg / 1e3);
 
     av_log(avfc, AV_LOG_VERBOSE,
-           "libcurl: %d connections, %d redirects, %d requests, %d retries\n",
-           loop->num_connections, loop->num_redirects, loop->num_requests, loop->num_retries);
+           "libcurl: %d connections, %d redirects, %d requests, %d errors\n",
+           loop->num_connections, loop->num_redirects, loop->num_requests, loop->num_errors);
 }
 
 static void curl_loop_destroy(CurlLoop *loop)
