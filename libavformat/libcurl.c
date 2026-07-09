@@ -123,6 +123,7 @@ struct CurlContext {
     int64_t         short_seek_size;
     int             max_retries;
     char           *reconnect_on_http_error;
+    int             reconnect_streamed;
 
     /* URL thread bookkeeping, not touched by loop thread */
     int64_t         logical_pos;    /* next byte url_read() will return, caller side */
@@ -184,7 +185,7 @@ static int http_error_is_recoverable(CurlContext *c, long http_status)
 {
     if (!c->reconnect_on_http_error || !http_status)
         return 0;
-    if (!c->seekable && c->request_start > 0)
+    if (!c->seekable && c->request_start > 0 && !c->reconnect_streamed)
         return 0;
 
     const char *status_group = NULL;
@@ -202,7 +203,7 @@ static int http_error_is_recoverable(CurlContext *c, long http_status)
 
 static int curl_error_is_recoverable(CurlContext *c, CURLcode code)
 {
-    if (!c->seekable && c->request_start > 0)
+    if (!c->seekable && c->request_start > 0 && !c->reconnect_streamed)
         return 0;
 
     switch (code) {
@@ -1293,6 +1294,7 @@ static const AVOption options[] = {
         { "3only",             "HTTP/3 only",                           0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_3ONLY },               0, 0, D, .unit = "http_version" },
     { "short_seek_size", "threshold to favor readahead over seek", OFFSET(short_seek_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
+    { "reconnect_streamed", "auto reconnect streamed / non seekable streams", OFFSET(reconnect_streamed), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { NULL }
 };
 
