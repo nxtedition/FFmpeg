@@ -122,6 +122,7 @@ struct CurlContext {
     int64_t         initial_request_size;
     int64_t         short_seek_size;
     int             max_retries;
+    char           *reconnect_on_http_error;
 
     /* URL thread bookkeeping, not touched by loop thread */
     int64_t         logical_pos;    /* next byte url_read() will return, caller side */
@@ -179,7 +180,27 @@ static int curlcode_to_averror(CURLcode code)
     }
 }
 
-static int is_recoverable(CurlContext *c, CURLcode code)
+static int http_error_is_recoverable(CurlContext *c, long http_status)
+{
+    if (!c->reconnect_on_http_error || !http_status)
+        return 0;
+    if (!c->seekable && c->request_start > 0)
+        return 0;
+
+    const char *status_group = NULL;
+    if (http_status >= 400 && http_status < 500)
+        status_group = "4xx";
+    else if (http_status >= 500 && http_status < 600)
+        status_group = "5xx";
+    if (status_group && av_match_list(status_group, c->reconnect_on_http_error, ',') > 0)
+        return 1;
+
+    char http_code[4];
+    snprintf(http_code, sizeof(http_code), "%ld", http_status);
+    return av_match_list(http_code, c->reconnect_on_http_error, ',') > 0;
+}
+
+static int curl_error_is_recoverable(CurlContext *c, CURLcode code)
 {
     if (!c->seekable && c->request_start > 0)
         return 0;
@@ -362,8 +383,12 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
     } else {
         c->loop->num_errors++;
         c->stream_ok = 0;
-        if (!c->status)
-            c->status = ff_http_averror(status, AVERROR(EIO));
+        if (!c->status) {
+            if (http_error_is_recoverable(c, status))
+                c->status = AVERROR(EAGAIN);
+            else
+                c->status = ff_http_averror(status, AVERROR(EIO));
+        }
     }
     c->probed = 1;
     pthread_cond_broadcast(&c->cond);
@@ -478,7 +503,7 @@ static void on_done(CurlContext *c, CURLcode code)
         c->probed    = 1;
         c->stream_ok = 0;
         if (!c->status) {
-            if (is_recoverable(c, code))
+            if (curl_error_is_recoverable(c, code))
                 c->status = AVERROR(EAGAIN);
             else
                 c->status = curlcode_to_averror(code);
@@ -521,7 +546,7 @@ static void on_done(CurlContext *c, CURLcode code)
     }
 
     /* Resume seekable transfers after a recoverable error. */
-    if (is_recoverable(c, code)) {
+    if (curl_error_is_recoverable(c, code)) {
         pthread_mutex_lock(&c->mutex);
         if (!c->status)
             c->status = AVERROR(EAGAIN);
@@ -1267,6 +1292,7 @@ static const AVOption options[] = {
         { "3",                 "HTTP/3, fall back to earlier versions", 0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_3 },                   0, 0, D, .unit = "http_version" },
         { "3only",             "HTTP/3 only",                           0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_3ONLY },               0, 0, D, .unit = "http_version" },
     { "short_seek_size", "threshold to favor readahead over seek", OFFSET(short_seek_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
+    { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
     { NULL }
 };
 
