@@ -41,6 +41,7 @@
 #include "avformat.h"
 #include "http.h"
 #include "internal.h"
+#include "network.h"
 #include "url.h"
 #include "version.h"
 
@@ -50,6 +51,12 @@
 /* Blocking waits wake up this often so url_read()/open can poll the interrupt
  * callback. */
 #define CURL_WAIT_US 100000
+
+/* How many microseconds to wait before retrying a failed request; grows
+ * exponentially (2^) with each consecutive failure up to MAX_US. Note that the
+ * first retry is always immediate. */
+#define CURL_RETRY_BASE_US 1000000
+#define CURL_RETRY_MAX_US  60000000
 
 typedef struct CurlContext CurlContext;
 
@@ -128,6 +135,7 @@ struct CurlContext {
     /* URL thread bookkeeping, not touched by loop thread */
     int64_t         logical_pos;    /* next byte url_read() will return, caller side */
     int             retry_count;    /* consecutive recoverable failures */
+    int64_t         retry_time;     /* timestamp of next retry */
 
     /* Producer bookkeeping, touched only by the loop thread. */
     int             active;          /* currently added to the multi */
@@ -1040,7 +1048,18 @@ static int wait_for_probe(CurlContext *c)
     return ret;
 }
 
-static int retry_request(URLContext *h)
+/* Scales by the recurrence relationship x := 2x + 1, i.e. 2^n - 1 */
+static int64_t retry_delay(CurlContext *c)
+{
+    if (c->retry_count >= 64)
+        return CURL_RETRY_MAX_US;
+    int64_t factor = (1LL << c->retry_count) - 1;
+    if (factor >= CURL_RETRY_MAX_US / CURL_RETRY_BASE_US)
+        return CURL_RETRY_MAX_US;
+    return factor * CURL_RETRY_BASE_US;
+}
+
+static int retry_request(URLContext *h, int nonblock)
 {
     CurlContext *c = h->priv_data;
 
@@ -1050,16 +1069,35 @@ static int retry_request(URLContext *h)
         return AVERROR(EIO);
     }
 
+    const int64_t now = av_gettime_relative();
+    if (!c->retry_time)
+        c->retry_time = now + retry_delay(c);
+
+    const int64_t sleep_us = c->retry_time - now;
+    if (sleep_us > 0 && nonblock)
+        return AVERROR(EAGAIN);
+    else if (h->rw_timeout && sleep_us >= h->rw_timeout)
+        return AVERROR(EIO);
+
     c->retry_count++;
-    av_log(h, AV_LOG_WARNING, "Retrying (#%d) from %"PRId64"\n",
-           c->retry_count, c->logical_pos);
+    c->retry_time = 0;
+    av_log(h, AV_LOG_WARNING, "Retrying (#%d) from %"PRId64" in %.3fs\n",
+           c->retry_count, c->logical_pos, sleep_us * 1e-6);
+
+    int ret = ff_network_sleep_interruptible(sleep_us, &h->interrupt_callback);
+    if (ret != AVERROR(ETIMEDOUT)) {
+        pthread_mutex_lock(&c->mutex);
+        c->aborted = 1;
+        pthread_mutex_unlock(&c->mutex);
+        return ret;
+    }
 
     /**
      * Use a synchronous request to ensure that the seek is registered, and
      * the reset of c->state is observable, before the next libcurl_read()
      * call, otherwise this might hit the exact same retry path a second time.
      */
-    int ret = curl_dispatch(c->loop, CMD_SEEK, c, c->logical_pos, 1);
+    ret = curl_dispatch(c->loop, CMD_SEEK, c, c->logical_pos, 1);
     if (ret < 0)
         return ret;
 
@@ -1132,7 +1170,7 @@ static int libcurl_open(URLContext *h, const char *url, int flags,
         ret = wait_for_probe(c);
         if (ret == AVERROR(EAGAIN)) {
             c->probed = 0;
-            ret = retry_request(h);
+            ret = retry_request(h, 0);
         } else if (ret < 0)
             goto fail;
     } while (ret == AVERROR(EAGAIN));
@@ -1173,7 +1211,7 @@ static int libcurl_read(URLContext *h, unsigned char *buf, int size)
         }
         if (c->status == AVERROR(EAGAIN)) {
             pthread_mutex_unlock(&c->mutex);
-            return retry_request(h);
+            return retry_request(h, nonblock);
         } else if (c->status) {
             ret = c->status;
             break;
