@@ -245,12 +245,12 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *userdat
 
     pthread_mutex_lock(&c->mutex);
 
-    if (c->aborted || !c->stream_ok) {
+    if (c->aborted) {
         pthread_mutex_unlock(&c->mutex);
         return CURL_WRITEFUNC_ERROR;
     }
 
-    if (c->seek_queued) {
+    if (c->seek_queued || !c->stream_ok) {
         pthread_mutex_unlock(&c->mutex);
         return bytes; /* discard */
     }
