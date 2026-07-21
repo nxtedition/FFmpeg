@@ -124,7 +124,7 @@ typedef struct FFFormatContext {
      * context free. This allows to share libcurl state across URLContexts,
      * scoped to this context.
      */
-    void *curl_loop;
+    struct CurlLoop *curl_loop;
 } FFFormatContext;
 
 static av_always_inline FFFormatContext *ffformatcontext(AVFormatContext *s)
@@ -616,7 +616,7 @@ int ff_format_io_close(AVFormatContext *s, AVIOContext **pb);
  * Release a libcurl event loop and set *loop to NULL.
  * No-op when @p loop or *loop is NULL.
  */
-void ff_curl_loop_free(void **loop);
+void ff_curl_loop_free(struct CurlLoop **loop);
 
 /**
  * Utility function to check if the file uses http or https protocol

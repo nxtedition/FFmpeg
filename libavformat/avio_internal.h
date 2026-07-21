@@ -23,6 +23,8 @@
 
 #include "libavutil/log.h"
 
+typedef struct AVFormatContext AVFormatContext;
+
 extern const AVClass ff_avio_class;
 
 typedef struct FFIOContext {
@@ -256,14 +258,14 @@ int ffio_open_whitelist(AVIOContext **s, const char *url, int flags,
                          const char *whitelist, const char *blacklist);
 
 /**
- * Like ffio_open_whitelist(), but additionally records @p fmt_ctx on the
+ * Like ffio_open_whitelist(), but additionally records @p avfc on the
  * underlying URLContext before it is connected, so protocols can use shared
  * per-format resource. Pass NULL for standalone use.
  */
 int ffio_open_whitelist2(AVIOContext **s, const char *url, int flags,
                          const AVIOInterruptCB *int_cb, AVDictionary **options,
                          const char *whitelist, const char *blacklist,
-                         void *fmt_ctx);
+                         AVFormatContext *avfc);
 
 /**
  * Close a null buffer.
