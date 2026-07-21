@@ -1181,6 +1181,7 @@ is used for reading large video packets with small audio packets in between.
 @item reconnect_on_http_error
 A comma separated list of HTTP status codes to reconnect on. The list can
 include specific status codes (e.g. '503') or the strings '4xx' / '5xx'.
+Defaults to @code{429,503}.
 
 @item reconnect_streamed
 If set then even streamed/non seekable streams will be reconnected on errors.

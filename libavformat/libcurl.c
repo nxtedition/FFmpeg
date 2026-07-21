@@ -1362,7 +1362,7 @@ static const AVOption options[] = {
         { "3",                 "HTTP/3, fall back to earlier versions", 0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_3 },                   0, 0, D, .unit = "http_version" },
         { "3only",             "HTTP/3 only",                           0, AV_OPT_TYPE_CONST, { .i64 = CURL_HTTP_VERSION_3ONLY },               0, 0, D, .unit = "http_version" },
     { "short_seek_size", "threshold to favor readahead over seek", OFFSET(short_seek_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
-    { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, D },
+    { "reconnect_on_http_error", "list of http status codes to reconnect on", OFFSET(reconnect_on_http_error), AV_OPT_TYPE_STRING, { .str = "429,503" }, 0, 0, D },
     { "reconnect_streamed", "auto reconnect streamed / non seekable streams", OFFSET(reconnect_streamed), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, D },
     { "respect_retry_after", "respect the Retry-After header when retrying connections", OFFSET(respect_retry_after), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, D },
     { NULL }
