@@ -1183,6 +1183,19 @@ Default is @code{5}.
 Set the threshold, in bytes, for when a readahead should be preferred over a seek and
 new HTTP request. This is useful, for example, to make sure the same connection
 is used for reading large video packets with small audio packets in between.
+
+@item reconnect_on_http_error
+A comma separated list of HTTP status codes to reconnect on. The list can
+include specific status codes (e.g. '503') or the strings '4xx' / '5xx'.
+Defaults to @code{429,503}.
+
+@item reconnect_streamed
+If set then even streamed/non seekable streams will be reconnected on errors.
+
+@item respect_retry_after
+If enabled, and a Retry-After header is encountered, its requested reconnection
+delay will be honored, rather than using exponential backoff. Useful for 429 and
+503 errors. Default enabled.
 @end table
 
 For more information see: @url{https://curl.se/libcurl/}.

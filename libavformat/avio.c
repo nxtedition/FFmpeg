@@ -400,7 +400,7 @@ static int prefer_libcurl(const char *filename, AVDictionary **options,
 static int url_open_whitelist(URLContext **puc, const char *filename, int flags,
                               const AVIOInterruptCB *int_cb, AVDictionary **options,
                               const char *whitelist, const char* blacklist,
-                              URLContext *parent, void *fmt_ctx)
+                              URLContext *parent, AVFormatContext *avfc)
 {
     AVDictionary *tmp_opts = NULL;
     AVDictionaryEntry *e;
@@ -417,7 +417,7 @@ static int url_open_whitelist(URLContext **puc, const char *filename, int flags,
         ret = ffurl_alloc(puc, filename, flags, int_cb);
     if (ret < 0)
         return ret;
-    (*puc)->fmt_ctx = fmt_ctx;
+    (*puc)->avfc = avfc;
     if (parent) {
         ret = av_opt_copy(*puc, parent);
         if (ret < 0)
@@ -529,7 +529,7 @@ int ffio_fdopen(AVIOContext **sp, URLContext *h)
 int ffio_open_whitelist2(AVIOContext **s, const char *filename, int flags,
                          const AVIOInterruptCB *int_cb, AVDictionary **options,
                          const char *whitelist, const char *blacklist,
-                         void *fmt_ctx)
+                         AVFormatContext *avfc)
 {
     URLContext *h;
     int err;
@@ -537,7 +537,7 @@ int ffio_open_whitelist2(AVIOContext **s, const char *filename, int flags,
     *s = NULL;
 
     err = url_open_whitelist(&h, filename, flags, int_cb, options, whitelist,
-                             blacklist, NULL, fmt_ctx);
+                             blacklist, NULL, avfc);
     if (err < 0)
         return err;
     err = ffio_fdopen(s, h);
