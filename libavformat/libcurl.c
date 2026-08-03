@@ -81,7 +81,7 @@ typedef struct CurlLoop {
 
     pthread_t       thread;
     CURLM          *multi;
-    CURLSH         *share;   /* shared cookies/DNS/TLS sessions/HSTS */
+    CURLSH         *share;   /* shared cookies/HSTS */
 
     pthread_mutex_t mutex;   /* guards the command queue, exit and cmd->done */
     pthread_cond_t  cond;    /* signaled when a sync command completes */
@@ -343,7 +343,11 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
     pthread_mutex_lock(&c->mutex);
     if (status >= 200 && status < 300) {
         int64_t content_start = status == 206 ? c->hdr_content_start : 0;
-        if (c->probed && c->seekable && content_start != c->request_start) {
+        /* The reply must start at the offset we requested: for follow-up
+         * requests always, for the initial one when an explicit nonzero
+         * offset was requested. */
+        if ((c->probed ? c->seekable : c->off > 0) &&
+            content_start != c->request_start) {
             av_log(c->h, AV_LOG_ERROR, "Server sent back unexpected reply "
                    "with offset %"PRId64" (expected %"PRId64")\n",
                    content_start, c->request_start);
@@ -372,11 +376,11 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
         }
         /* A compressed body is addressed in encoded form, so byte offsets are
          * meaningless: not seekable. Note that we prefer compression over
-         * seekability, servers doesn't offer media in compressed form, so it
+         * seekability, servers don't offer media in compressed form, so it
          * gives us free compression for other payloads like text playlist. */
         c->seekable = !c->hdr_compressed &&
                       (status == 206 || c->hdr_accept_ranges);
-        if (c->seekable) {
+        if (!c->hdr_compressed) {
             int64_t total = c->hdr_content_total;
             if (total < 0 && status != 206) {
                 curl_off_t cl = -1;
@@ -384,13 +388,20 @@ static size_t header_callback(char *ptr, size_t size, size_t nitems, void *userd
                                       &cl) == CURLE_OK && cl >= 0)
                     total = cl;
             }
-            c->content_size = total;
-
+            /* Don't unlearn a known size when a reply omits it. */
+            if (total >= 0)
+                c->content_size = total;
+        }
+        if (c->seekable) {
             if (c->hdr_content_end >= 0)
                 c->request_end = c->hdr_content_end;
             else
                 c->request_end = c->content_size > 0 ? c->content_size - 1 : -1;
         }
+        /* Apply the user override on every reply so re-evaluation of a
+         * follow-up reply doesn't clobber it. */
+        if (c->seekable_opt >= 0)
+            c->seekable = c->seekable_opt;
     } else {
         c->loop->num_errors++;
         c->stream_ok = 0;
@@ -601,6 +612,9 @@ static void execute_command(CurlLoop *loop, CurlCmd *cmd)
         }
         break;
     case CMD_UNPAUSE:
+        pthread_mutex_lock(&c->mutex);
+        c->paused = 0;
+        pthread_mutex_unlock(&c->mutex);
         curl_easy_pause(c->easy, CURLPAUSE_CONT);
         break;
     case CMD_SEEK:
@@ -916,11 +930,14 @@ static int setup_protocols(CurlContext *c)
         av_bprintf(&bp, "%s", proto);
     }
 
-    if (!av_bprint_is_complete(&bp))
+    if (!av_bprint_is_complete(&bp)) {
+        av_bprint_finalize(&bp, NULL);
         return AVERROR(ENOMEM);
+    }
 
     if (!bp.len) {
         av_log(c->h, AV_LOG_ERROR, "Set of allowed protocols is empty.\n");
+        av_bprint_finalize(&bp, NULL);
         return AVERROR(EINVAL);
     }
 
@@ -964,7 +981,8 @@ static void setup_curl(CurlContext *c)
     curl_easy_setopt(e, CURLOPT_TCP_KEEPALIVE, c->multiple_requests ? 1L : 0L);
     curl_easy_setopt(e, CURLOPT_FORBID_REUSE,  c->multiple_requests ? 0L : 1L);
     curl_easy_setopt(e, CURLOPT_HSTS_CTRL, (long)CURLHSTS_ENABLE);
-    curl_easy_setopt(e, CURLOPT_ACCEPT_ENCODING, "");
+    curl_easy_setopt(e, CURLOPT_ACCEPT_ENCODING,
+                     c->off > 0 || c->end_off > 0 ? "identity" : "");
     if (c->connect_timeout > 0)
         curl_easy_setopt(e, CURLOPT_CONNECTTIMEOUT_MS,
                          (long)c->connect_timeout * 1000);
@@ -1172,11 +1190,9 @@ static int libcurl_open(URLContext *h, const char *url, int flags,
             goto fail;
     } while (ret == AVERROR(EAGAIN));
 
-    if (c->seekable_opt == 0)
-        c->seekable = 0;
-    else if (c->seekable_opt == 1)
-        c->seekable = 1;
+    pthread_mutex_lock(&c->mutex);
     h->is_streamed = !c->seekable;
+    pthread_mutex_unlock(&c->mutex);
 
     return 0;
 
@@ -1333,7 +1349,7 @@ static const AVOption options[] = {
     { "max_redirects", "maximum number of redirects to follow", OFFSET(max_redirects), AV_OPT_TYPE_INT, { .i64 = 16 }, 0, INT_MAX, D },
     { "multiple_requests", "reuse the connection across requests (HTTP keep-alive)", OFFSET(multiple_requests), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, D | E },
     { "max_retries", "maximum number of retries after a recoverable error", OFFSET(max_retries), AV_OPT_TYPE_INT, { .i64 = 5 }, 0, INT_MAX, D },
-    { "buffer_size", "receive buffer size in bytes", OFFSET(buffer_size), AV_OPT_TYPE_INT64, { .i64 = CURL_DEFAULT_BUFFER_SIZE }, CURL_MAX_WRITE_SIZE, INT64_MAX, D },
+    { "buffer_size", "receive buffer size in bytes", OFFSET(buffer_size), AV_OPT_TYPE_INT64, { .i64 = CURL_DEFAULT_BUFFER_SIZE }, CURL_MAX_WRITE_SIZE, INT_MAX, D },
     { "request_size", "split a transfer into ranged requests of at most this many bytes (0 = unlimited)", OFFSET(request_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "initial_request_size", "size (in bytes) of initial requests made during probing / header parsing", OFFSET(initial_request_size), AV_OPT_TYPE_INT64, { .i64 = 0 }, 0, INT64_MAX, D },
     { "http_version", "HTTP version to use", OFFSET(http_version), AV_OPT_TYPE_INT, { .i64 = CURL_HTTP_VERSION_NONE }, 0, INT_MAX, D, .unit = "http_version" },
