@@ -191,7 +191,7 @@ typedef struct VulkanFramesPriv {
     FFVkExecPool download_exec;
 
     /* Temporary buffer pools */
-    AVBufferPool *tmp;
+    AVRefStructPool *tmp;
 
     /* Modifier info list to free at uninit */
     VkImageDrmFormatModifierListCreateInfoEXT *modifier_info;
@@ -2955,7 +2955,7 @@ static void vulkan_frames_uninit(AVHWFramesContext *hwfc)
     ff_vk_exec_pool_free(&p->vkctx, &fp->upload_exec);
     ff_vk_exec_pool_free(&p->vkctx, &fp->download_exec);
 
-    av_buffer_pool_uninit(&fp->tmp);
+    av_refstruct_pool_uninit(&fp->tmp);
 }
 
 static int vulkan_frames_init(AVHWFramesContext *hwfc)
@@ -3103,17 +3103,17 @@ static int vulkan_frames_init(AVHWFramesContext *hwfc)
         hwctx->unlock_frame = unlock_frame;
 
     err = ff_vk_exec_pool_init(&p->vkctx, p->compute_qf, &fp->compute_exec,
-                               p->compute_qf->num, 0, 0, 0, NULL);
+                               2, 0, 0, 0, NULL);
     if (err)
         return err;
 
     err = ff_vk_exec_pool_init(&p->vkctx, p->transfer_qf, &fp->upload_exec,
-                               p->transfer_qf->num*2, 0, 0, 0, NULL);
+                               FF_VK_DEFAULT_EXEC_CONTEXTS, 0, 0, 0, NULL);
     if (err)
         return err;
 
     err = ff_vk_exec_pool_init(&p->vkctx, p->transfer_qf, &fp->download_exec,
-                               p->transfer_qf->num, 0, 0, 0, NULL);
+                               2, 0, 0, 0, NULL);
     if (err)
         return err;
 
@@ -3638,11 +3638,9 @@ static int vulkan_map_from_drm_frame_sync(AVHWFramesContext *hwfc, AVFrame *dst,
         ff_vk_exec_start(&p->vkctx, exec);
 
         /* Ownership of semaphores is passed */
-        err = ff_vk_exec_add_dep_bool_sem(&p->vkctx, exec,
-                                          drm_sync_sem, desc->nb_objects,
-                                          VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 1);
-        if (err < 0)
-            return err;
+        ff_vk_exec_add_dep_bool_sem(&p->vkctx, exec,
+                                    drm_sync_sem, desc->nb_objects,
+                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, 1);
 
         err = ff_vk_exec_add_dep_frame(&p->vkctx, exec, dst,
                                        VK_PIPELINE_STAGE_2_NONE,
@@ -4436,13 +4434,12 @@ static int vulkan_map_from(AVHWFramesContext *hwfc, AVFrame *dst,
     return AVERROR(ENOSYS);
 }
 
-static int copy_buffer_data(AVHWFramesContext *hwfc, AVBufferRef *buf,
+static int copy_buffer_data(AVHWFramesContext *hwfc, FFVkBuffer *vkbuf,
                             AVFrame *swf, VkBufferImageCopy *region,
                             int planes, int upload)
 {
     int err;
     VulkanDevicePriv *p = hwfc->device_ctx->hwctx;
-    FFVkBuffer *vkbuf = (FFVkBuffer *)buf->data;
 
     if (upload) {
         for (int i = 0; i < planes; i++)
@@ -4479,7 +4476,7 @@ static int copy_buffer_data(AVHWFramesContext *hwfc, AVBufferRef *buf,
     return 0;
 }
 
-static int get_plane_buf(AVHWFramesContext *hwfc, AVBufferRef **dst,
+static int get_plane_buf(AVHWFramesContext *hwfc, FFVkBuffer **dst,
                          AVFrame *swf, VkBufferImageCopy *region, int upload)
 {
     int err;
@@ -4518,7 +4515,7 @@ static int get_plane_buf(AVHWFramesContext *hwfc, AVBufferRef **dst,
     return 0;
 }
 
-static int host_map_frame(AVHWFramesContext *hwfc, AVBufferRef **dst, int *nb_bufs,
+static int host_map_frame(AVHWFramesContext *hwfc, FFVkBuffer **dst, int *nb_bufs,
                           AVFrame *swf, VkBufferImageCopy *region, int upload)
 {
     int err;
@@ -4549,7 +4546,7 @@ static int host_map_frame(AVHWFramesContext *hwfc, AVBufferRef **dst, int *nb_bu
         (*nb_bufs)++;
 
         for (int i = 0; i < planes; i++)
-            region[i].bufferOffset = ((FFVkBuffer *)dst[0]->data)->virtual_offset +
+            region[i].bufferOffset = dst[0]->virtual_offset +
                                      swf->data[i] - swf->data[0];
     } else if (nb_src_bufs == planes) { /* One buffer per plane */
         for (int i = 0; i < planes; i++) {
@@ -4560,7 +4557,7 @@ static int host_map_frame(AVHWFramesContext *hwfc, AVBufferRef **dst, int *nb_bu
                 goto fail;
             (*nb_bufs)++;
 
-            region[i].bufferOffset = ((FFVkBuffer *)dst[i]->data)->virtual_offset;
+            region[i].bufferOffset = dst[i]->virtual_offset;
         }
     } else {
         /* Weird layout (3 planes, 2 buffers), patch welcome, fallback to copy */
@@ -4571,7 +4568,7 @@ static int host_map_frame(AVHWFramesContext *hwfc, AVBufferRef **dst, int *nb_bu
 
 fail:
     for (int i = 0; i < (*nb_bufs); i++)
-        av_buffer_unref(&dst[i]);
+        av_refstruct_unref(&dst[i]);
     return err;
 }
 
@@ -4718,7 +4715,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
     VkImageMemoryBarrier2 img_bar[AV_NUM_DATA_POINTERS];
     int nb_img_bar = 0;
 
-    AVBufferRef *bufs[AV_NUM_DATA_POINTERS];
+    FFVkBuffer *bufs[AV_NUM_DATA_POINTERS];
     int nb_bufs = 0;
 
     VkCommandBuffer cmd_buf;
@@ -4815,11 +4812,8 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
         }
 
         /* Add the buffers as a dependency */
-        err = ff_vk_exec_add_dep_buf(&p->vkctx, exec, bufs, nb_bufs, 1);
-        if (err < 0) {
-            ff_vk_exec_discard_deps(&p->vkctx, exec);
-            goto end;
-        }
+        for (int i = 0; i < nb_bufs; i++)
+            ff_vk_exec_add_dep_refstruct(&p->vkctx, exec, bufs[i]);
     }
 
     ff_vk_frame_barrier(&p->vkctx, exec, hwf, img_bar, &nb_img_bar,
@@ -4840,7 +4834,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
     for (int i = 0; i < planes; i++) {
         int buf_idx = FFMIN(i, (nb_bufs - 1));
         int img_idx = FFMIN(i, (nb_images - 1));
-        FFVkBuffer *vkbuf = (FFVkBuffer *)bufs[buf_idx]->data;
+        FFVkBuffer *vkbuf = bufs[buf_idx];
 
         uint32_t orig_stride = region[i].bufferRowLength;
         region[i].bufferRowLength /= desc->comp[i].step;
@@ -4871,7 +4865,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
 
 end:
     for (int i = 0; i < nb_bufs; i++)
-        av_buffer_unref(&bufs[i]);
+        av_refstruct_unref(&bufs[i]);
 
     return err;
 }
