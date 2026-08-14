@@ -158,6 +158,7 @@ typedef struct SharedContext {
     int block_shift; ///< requested shift; updated on init if it disagrees
     int read_only;
     int64_t timeout;
+    int ignore_errors;
     int retry_errors;
     int retry_corrupt;
     int verify;
@@ -267,8 +268,10 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     av_strstart(arg, "shared:", &arg);
     ret = ffurl_open_whitelist(&s->inner, arg, flags, &h->interrupt_callback,
                                options, h->protocol_whitelist, h->protocol_blacklist, h);
-
-    if (ret < 0)
+    if (ret < 0 && s->ignore_errors) {
+        av_log(h, AV_LOG_WARNING, "Underlying URL failed to open: %s. "
+               "Continuing with cache file only.\n", av_err2str(ret));
+    } else if (ret < 0)
         goto fail;
 
     uint8_t hash[HASH_SIZE];
@@ -289,10 +292,11 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     }
 
     av_log(h, AV_LOG_VERBOSE, "Opening cache file '%s' for URI: '%s'\n",
-           s->cache_path, s->inner->filename);
+           s->cache_path, s->inner ? s->inner->filename : arg);
 
-    s->fd    = avpriv_open(s->cache_path, O_RDWR | O_CREAT, 0660);
-    s->mapfd = s->fd >= 0 ? avpriv_open(s->map_path,   O_RDWR | O_CREAT, 0660) : -1;
+    const int mode = O_RDWR | (s->inner ? O_CREAT : 0);
+    s->fd    = avpriv_open(s->cache_path, mode, 0660);
+    s->mapfd = s->fd >= 0 ? avpriv_open(s->map_path, mode, 0660) : -1;
     if (s->fd < 0 || s->mapfd < 0) {
         ret = AVERROR(errno);
         av_log(h, AV_LOG_ERROR, "Failed to open '%s': %s\n",
@@ -313,7 +317,7 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
         goto fail;
     } else if (!filesize) {
         /* Filesize is not yet known, try to get it from the underlying URL */
-        filesize = ffurl_size(s->inner);
+        filesize = s->inner ? ffurl_size(s->inner) : 0;
         if (filesize < 0 && filesize != AVERROR(ENOSYS)) {
             ret = (int) filesize;
             goto fail;
@@ -753,6 +757,13 @@ read_block:
     /* Cache miss, fetch this block from underlying protocol */
     s->nb_miss++;
 
+    if (!s->inner) {
+        av_log(h, AV_LOG_ERROR, "Cache miss for block 0x%"PRIx64" at offset "
+               "0x%"PRIx64", but underlying protocol is not available!\n",
+               block_id, block_pos);
+        return AVERROR(EIO);
+    }
+
     const int read_only = s->read_only || s->write_err || verify_read;
     int64_t inner_pos = read_only ? s->pos : block_pos;
     if (s->inner_pos != inner_pos) {
@@ -885,10 +896,15 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
     case AVSEEK_SIZE:
         if (filesize)
             return filesize;
-        res = ffurl_seek(s->inner, pos, whence);
+        res = s->inner ? ffurl_seek(s->inner, pos, whence) : AVERROR(ENOSYS);
         if (res > 0) {
             if (set_filesize(h, res) < 0)
                 return AVERROR(EINVAL);
+        } else if (res < 0 && res != AVERROR(ENOSYS) && s->ignore_errors) {
+            av_log(h, AV_LOG_WARNING, "Underlying URL failed to get size: %s. "
+                   "Continuing with cache file only.\n", av_err2str(res));
+            ffurl_closep(&s->inner);
+            res = AVERROR(ENOSYS);
         }
         return res;
     case SEEK_SET:
@@ -901,10 +917,17 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
             pos += filesize;
             break;
         }
+
         /* Defer to underlying protocol if filesize is unknown */
-        res = ffurl_seek(s->inner, pos, whence);
-        if (res < 0)
+        res = s->inner ? ffurl_seek(s->inner, pos, whence) : AVERROR(ENOSYS);
+        if (res < 0 && res != AVERROR(ENOSYS) && s->ignore_errors) {
+            av_log(h, AV_LOG_WARNING, "Underlying URL failed to get seek: %s. "
+                   "Continuing with cache file only.\n", av_err2str(res));
+            ffurl_closep(&s->inner);
+            return AVERROR(ENOSYS);
+        } else if (res < 0)
             return res;
+
         /* Opportunistically update known filesize */
         if (set_filesize(h, res - pos) < 0)
             return AVERROR(EINVAL);
@@ -924,13 +947,13 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
 static int shared_get_file_handle(URLContext *h)
 {
     SharedContext *s = h->priv_data;
-    return ffurl_get_file_handle(s->inner);
+    return s->inner ? ffurl_get_file_handle(s->inner) : -1;
 }
 
 static int shared_get_short_seek(URLContext *h)
 {
     SharedContext *s = h->priv_data;
-    int ret = ffurl_get_short_seek(s->inner);
+    int ret = s->inner ? ffurl_get_short_seek(s->inner) : 0;
     return ret > 0 ? FFMAX(ret, s->block_size) : s->block_size;
 }
 
@@ -943,6 +966,7 @@ static const AVOption options[] = {
     { "read_only",      "Don't write data to the cache, only read from it", OFFSET(read_only),      AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = D },
     { "cache_verify",   "Verify correctness of the cache against the source",   OFFSET(verify),     AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = D },
     { "cache_timeout",  "Time in us to wait before re-fetching pending blocks", OFFSET(timeout),    AV_OPT_TYPE_INT64, {.i64 = 10000}, 0, INT64_MAX, .flags = D },
+    { "ignore_errors",  "Continue even if the inner URL failed",            OFFSET(ignore_errors),  AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, .flags = D },
     { "retry_errors",   "Re-request blocks even if they previously failed", OFFSET(retry_errors),   AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, .flags = D },
     { "retry_corrupt",  "Re-request blocks that fail the CRC check",        OFFSET(retry_corrupt),  AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, .flags = D },
     {0},
