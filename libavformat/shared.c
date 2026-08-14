@@ -168,6 +168,7 @@ typedef struct SharedContext {
     int block_size;
     int write_err; ///< write error occurred
     int num_corrupt;
+    int64_t filesize; ///< once known
 
     /* cache file */
     uint8_t *cache_data; ///< optional mmap of the cache file
@@ -215,7 +216,15 @@ static int spacemap_grow(URLContext *h, int64_t block);
 static int64_t get_filesize(URLContext *h)
 {
     SharedContext *s = h->priv_data;
-    return atomic_load_explicit(&s->spacemap->filesize, memory_order_relaxed);
+    if (!s->filesize) {
+        uint64_t size = atomic_load_explicit(&s->spacemap->filesize, memory_order_relaxed);
+        if (size > INT64_MAX)
+            return AVERROR(EINVAL);
+        else if (size)
+            s->filesize = size;
+    }
+
+    return s->filesize;
 }
 
 static int set_filesize(URLContext *h, int64_t new_size)
@@ -299,7 +308,10 @@ static int shared_open(URLContext *h, const char *arg, int flags, AVDictionary *
     s->block_size = 1 << s->block_shift;
 
     int64_t filesize = get_filesize(h);
-    if (!filesize) {
+    if (filesize < 0) {
+        ret = (int) filesize;
+        goto fail;
+    } else if (!filesize) {
         /* Filesize is not yet known, try to get it from the underlying URL */
         filesize = ffurl_size(s->inner);
         if (filesize < 0 && filesize != AVERROR(ENOSYS)) {
@@ -459,7 +471,10 @@ static int spacemap_grow(URLContext *h, int64_t block)
 
     /* When streaming files without known size, round up the number of blocks
      * to the nearest multiple of the block size to reduce the rate of resizes */
-    if (!get_filesize(h)) {
+    int64_t filesize = get_filesize(h);
+    if (filesize < 0)
+        return (int) filesize;
+    else if (filesize) {
         av_assert0(s->block_size > 0);
         map_bytes = FFALIGN(map_bytes, (int64_t) s->block_size);
     }
@@ -863,6 +878,9 @@ static int64_t shared_seek(URLContext *h, int64_t pos, int whence)
         return AVERROR(EIO);
 
     const int64_t filesize = get_filesize(h);
+    if (filesize < 0)
+        return filesize;
+
     switch (whence) {
     case AVSEEK_SIZE:
         if (filesize)
