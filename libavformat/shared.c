@@ -34,6 +34,7 @@
 
 #include "url.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -127,6 +128,8 @@ typedef struct Spacemap {
 
     Block blocks[];
 } Spacemap;
+
+static_assert(offsetof(Spacemap, blocks) == 128, "Spacemap header layout mismatch");
 
 /* Set to value iff the current value is unset (zero) */
 #define DEF_SET_ONCE(ctype, atype)                                              \
