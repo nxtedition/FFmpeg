@@ -1744,6 +1744,14 @@ If true (the default), blocks whose contents fail the CRC integrity check are
 re-fetched from the underlying input stream, overwriting the corrupt cached
 data. If false, cache corruption is treated as a fatal read error.
 
+@item cache_size_max
+Maximum amount of data to cache, in bytes. Accepts the usual size suffixes,
+e.g. @code{10G} for 10*10^9 bytes, or @code{10Gi} for 10*2^30 bytes. Defaults
+to 0, meaning no limit.
+
+Once this limit is reached, the protocol switches to read-only mode (see
+@option{read_only}). Already cached data is never evicted, so once this limit
+is reached, no new data will ever be cached until the cache file is deleted.
 @end table
 
 URL Syntax is
