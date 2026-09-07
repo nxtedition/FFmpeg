@@ -1173,7 +1173,8 @@ the implementation will continue using requests as usual. Disabled (set to 0)
 by default.
 
 Note that if enabling this option, it's strongly recommended to also set
-@option{short_seek_size} to the same value or higher.
+@option{short_seek_size} to the same value or higher, otherwise the HTTP
+connection may be closed and recreated for each subsequent initial request.
 
 @item max_retries
 Maximum number of retries after a recoverable error on a seekable transfer.

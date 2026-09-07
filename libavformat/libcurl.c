@@ -596,6 +596,19 @@ static void on_done(CurlContext *c, CURLcode code)
 /* event loop thread + command queue                                         */
 /* ------------------------------------------------------------------------- */
 
+static int test_short_seek(CurlContext *c)
+{
+    if (c->seek_queued)
+        return 1; /* short seek already queued */
+
+    if (c->short_seek_size <= 0 || /* short seek disabled */
+        c->request_end < 0)        /* content size not known */
+        return 0;
+
+    const int64_t last = c->request_end - c->request_start;
+    return last - c->request_received < c->short_seek_size;
+}
+
 static void execute_command(CurlLoop *loop, CurlCmd *cmd)
 {
     CurlContext *c = cmd->ctx;
@@ -618,20 +631,15 @@ static void execute_command(CurlLoop *loop, CurlCmd *cmd)
         curl_easy_pause(c->easy, CURLPAUSE_CONT);
         break;
     case CMD_SEEK:
-        if (c->active && c->request_end >= 0 && c->short_seek_size > 0 &&
-            c->request_end - c->request_start + 1 - c->request_received <= c->short_seek_size)
-        {
+        if (c->active && test_short_seek(c)) {
             c->seek_queued = 1;
-            if (c->paused) {
-                curl_easy_pause(c->easy, CURLPAUSE_CONT);
-                c->paused = 0;
-            }
-        } else if (c->active && !c->seek_queued) {
+        } else if (c->active) {
             curl_multi_remove_handle(loop->multi, c->easy);
             c->active = 0;
         }
         pthread_mutex_lock(&c->mutex);
         av_fifo_reset2(c->fifo);
+        const int was_paused = c->paused;
         c->paused = 0;
         c->status = 0;
         pthread_mutex_unlock(&c->mutex);
@@ -639,6 +647,8 @@ static void execute_command(CurlLoop *loop, CurlCmd *cmd)
         c->request_received = 0;
         if (!c->seek_queued)
             start_request(c);
+        else if (was_paused)
+            curl_easy_pause(c->easy, CURLPAUSE_CONT);
         break;
     }
 }
@@ -1324,7 +1334,7 @@ static int libcurl_get_short_seek(URLContext *h)
 {
     CurlContext *c = h->priv_data;
     if (c->short_seek_size >= 1)
-        return c->short_seek_size;
+        return FFMIN(c->short_seek_size, INT_MAX);
     return AVERROR(ENOSYS);
 }
 
