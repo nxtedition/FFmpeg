@@ -845,6 +845,10 @@ FATE_METADATA_FILTER-$(call ALLYES, $(SILENCEDETECT_DEPS)) += fate-filter-metada
 fate-filter-metadata-silencedetect: SRC = $(TARGET_SAMPLES)/lossless-audio/inside.tta
 fate-filter-metadata-silencedetect: CMD = run $(FILTER_METADATA_COMMAND) "amovie='$(SRC)',silencedetect=n=-33.5dB:d=0.2"
 
+FATE_METADATA_FILTER-$(call ALLYES, $(SILENCEDETECT_DEPS)) += fate-filter-metadata-silencedetect-loudness
+fate-filter-metadata-silencedetect-loudness: SRC = $(TARGET_SAMPLES)/lossless-audio/inside.tta
+fate-filter-metadata-silencedetect-loudness: CMD = run $(FILTER_METADATA_COMMAND) "amovie='$(SRC)',silencedetect=mode=loudness:n=-30dB:d=0.3"
+
 EBUR128_METADATA_DEPS = LAVFI_INDEV AMOVIE_FILTER FLAC_DEMUXER FLAC_DECODER ARESAMPLE_FILTER EBUR128_FILTER
 FATE_METADATA_FILTER-$(call ALLYES, $(EBUR128_METADATA_DEPS)) += fate-filter-metadata-ebur128
 fate-filter-metadata-ebur128: SRC = $(TARGET_SAMPLES)/filter/seq-3341-7_seq-3342-5-24bit.flac

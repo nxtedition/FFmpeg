@@ -1,0 +1,12 @@
+pts=0|tag:lavfi.silence_start=0.1
+pts=46080|tag:lavfi.silence_end=1.5|tag:lavfi.silence_duration=1.4
+pts=92160
+pts=138240
+pts=184320
+pts=230400
+pts=276480
+pts=322560
+pts=368640
+pts=414720
+pts=460800
+pts=506880
