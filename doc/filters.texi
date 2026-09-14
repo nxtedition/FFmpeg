@@ -6518,6 +6518,13 @@ default mode.
 Compare the momentary loudness, as defined by ITU-R BS.1770, to the noise
 tolerance in LUFS.
 @end table
+
+@item relative
+Set relative noise tolerance. When using @code{mode=loudness}, this option
+allows treating a signal as silent if the momentary loudness drops below
+the short-term loudness by more than this factor. Can be specified in dB (in
+case "dB" is appended to the specified value) or amplitude ratio. Defaults to
+0, which disables this logic.
 @end table
 
 @subsection Examples
