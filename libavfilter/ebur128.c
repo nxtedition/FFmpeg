@@ -303,6 +303,8 @@ exit:
 
 void ff_ebur128_destroy(FFEBUR128State ** st)
 {
+    if (!(*st))
+        return;
     av_free((*st)->d->block_energy_histogram);
     av_free((*st)->d->short_term_block_energy_histogram);
     av_free((*st)->d->audio_data);
