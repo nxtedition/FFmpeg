@@ -24,18 +24,29 @@
  */
 
 #include <float.h> /* DBL_MAX */
+#include <math.h>
 
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/timestamp.h"
 #include "audio.h"
 #include "avfilter.h"
+#include "ebur128.h"
 #include "filters.h"
+
+enum SilenceDetectMode {
+    MODE_PEAK,
+    MODE_LOUDNESS,
+    MODE_NB,
+};
 
 typedef struct SilenceDetectContext {
     const AVClass *class;
+    FFEBUR128State **r128;
+
     double noise;               ///< noise amplitude ratio
     int64_t duration;           ///< minimum duration of silence until notification
+    int mode;                   ///< enum SilenceDetectMode
     int mono;                   ///< mono mode : check each channel separately (default = check when ALL channels are silent)
     int channels;               ///< number of channels
     int independent_channels;   ///< number of entries in following arrays (always 1 in mono mode)
@@ -44,6 +55,8 @@ typedef struct SilenceDetectContext {
     int64_t frame_end;          ///< pts of the end of the current frame (used to compute duration of silence at EOS)
     int last_sample_rate;       ///< last sample rate to check for sample rate changes
     AVRational time_base;       ///< time_base
+    int nb_pending_samples;     ///< number of samples until loudness is measured
+    int *is_loud;               ///< (array) result of previous loudness measurement
 
     void (*silencedetect)(AVFilterContext *ctx, AVFrame *insamples,
                           int nb_samples, int64_t nb_samples_notify,
@@ -51,9 +64,14 @@ typedef struct SilenceDetectContext {
 } SilenceDetectContext;
 
 #define MAX_DURATION (24*3600*1000000LL)
+#define LOUDNESS_STEP(sample_rate)   (((sample_rate) + 5) / 10)       /* 100 ms */
+#define LOUDNESS_WINDOW(sample_rate) (4 * LOUDNESS_STEP(sample_rate)) /* 400 ms */
 #define OFFSET(x) offsetof(SilenceDetectContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_AUDIO_PARAM
 static const AVOption silencedetect_options[] = {
+    { "mode",      "set how to detect silence",        OFFSET(mode),      AV_OPT_TYPE_INT,    {.i64=MODE_PEAK},      0, MODE_NB-1,FLAGS, .unit = "mode" },
+    {   "peak",     "detect each sample peak",         0,                 AV_OPT_TYPE_CONST,  {.i64=MODE_PEAK},      0, 0,        FLAGS, .unit = "mode" },
+    {   "loudness", "detect momentary loudness",       0,                 AV_OPT_TYPE_CONST,  {.i64=MODE_LOUDNESS},  0, 0,        FLAGS, .unit = "mode" },
     { "n",         "set noise tolerance",              OFFSET(noise),     AV_OPT_TYPE_DOUBLE, {.dbl=0.001},          0, DBL_MAX,  FLAGS },
     { "noise",     "set noise tolerance",              OFFSET(noise),     AV_OPT_TYPE_DOUBLE, {.dbl=0.001},          0, DBL_MAX,  FLAGS },
     { "d",         "set minimum duration in seconds",  OFFSET(duration),  AV_OPT_TYPE_DURATION, {.i64=2000000},      0, MAX_DURATION,FLAGS },
@@ -100,6 +118,14 @@ static av_always_inline void update(AVFilterContext *ctx, AVFrame *insamples,
             int64_t end_pts = insamples ? insamples->pts + av_rescale_q(current_sample / s->channels,
                     (AVRational){ 1, s->last_sample_rate }, time_base)
                     : s->frame_end;
+
+            /* momentary loudness lags the actual signal by up to the window
+             * size when it rises, so report the end of silence earlier to
+             * compensate, except at the end of the stream */
+            if (insamples && s->mode == MODE_LOUDNESS)
+                end_pts -= av_rescale_q(LOUDNESS_WINDOW(s->last_sample_rate),
+                                        (AVRational){ 1, s->last_sample_rate }, time_base);
+
             int64_t duration_ts = end_pts - s->start[channel];
             if (insamples) {
                 set_meta(insamples, s->mono ? channel + 1 : 0, "silence_end",
@@ -163,6 +189,70 @@ SILENCE_DETECT_PLANAR(fltp, float)
 SILENCE_DETECT_PLANAR(s32p, int32_t)
 SILENCE_DETECT_PLANAR(s16p, int16_t)
 
+static void update_loudness(SilenceDetectContext *s)
+{
+    /* measure the loudness every 100ms, per ITU-R BS.1770 */
+    if (--s->nb_pending_samples)
+        return;
+
+    s->nb_pending_samples = LOUDNESS_STEP(s->last_sample_rate);
+    for (int ch = 0; ch < s->channels; ch++) {
+        double loudness;
+        ff_ebur128_loudness_momentary(s->r128[ch], &loudness);
+        s->is_loud[ch] = loudness >= s->noise;
+    }
+}
+
+#define SILENCE_DETECT_LOUDNESS(name, type)                                      \
+static void silencedetect_##name(AVFilterContext *ctx, AVFrame *insamples,       \
+                                 int nb_samples, int64_t nb_samples_notify,      \
+                                 AVRational time_base)                           \
+{                                                                                \
+    SilenceDetectContext *s = ctx->priv;                                         \
+    const int channels = insamples->ch_layout.nb_channels;                       \
+    const type *p = (const type *) insamples->data[0];                           \
+                                                                                 \
+    nb_samples /= channels;                                                      \
+    for (int i = 0; i < nb_samples; i++) {                                       \
+        for (int ch = 0; ch < channels; ch++, p++) {                             \
+            update(ctx, insamples, !s->is_loud[ch], channels * i + ch,           \
+                   nb_samples_notify, time_base);                                \
+            ff_ebur128_add_frames_##type(s->r128[ch], p, 1);                     \
+        }                                                                        \
+        update_loudness(s);                                                      \
+    }                                                                            \
+}
+
+#define SILENCE_DETECT_LOUDNESS_PLANAR(name, type)                               \
+static void silencedetect_##name(AVFilterContext *ctx, AVFrame *insamples,       \
+                                 int nb_samples, int64_t nb_samples_notify,      \
+                                 AVRational time_base)                           \
+{                                                                                \
+    SilenceDetectContext *s = ctx->priv;                                         \
+    const int channels = insamples->ch_layout.nb_channels;                       \
+                                                                                 \
+    nb_samples /= channels;                                                      \
+    for (int i = 0; i < nb_samples; i++) {                                       \
+        for (int ch = 0; ch < channels; ch++) {                                  \
+            const type *p = (const type *) insamples->extended_data[ch];         \
+            update(ctx, insamples, !s->is_loud[ch], channels * i + ch,           \
+                   nb_samples_notify, time_base);                                \
+            ff_ebur128_add_frames_##type(s->r128[ch], &p[i], 1);                 \
+        }                                                                        \
+        update_loudness(s);                                                      \
+    }                                                                            \
+}
+
+SILENCE_DETECT_LOUDNESS(dbl_loudness, double)
+SILENCE_DETECT_LOUDNESS(flt_loudness, float)
+SILENCE_DETECT_LOUDNESS(s32_loudness, int)
+SILENCE_DETECT_LOUDNESS(s16_loudness, short)
+
+SILENCE_DETECT_LOUDNESS_PLANAR(dblp_loudness, double)
+SILENCE_DETECT_LOUDNESS_PLANAR(fltp_loudness, float)
+SILENCE_DETECT_LOUDNESS_PLANAR(s32p_loudness, int)
+SILENCE_DETECT_LOUDNESS_PLANAR(s16p_loudness, short)
+
 static int config_input(AVFilterLink *inlink)
 {
     AVFilterContext *ctx = inlink->dst;
@@ -182,29 +272,61 @@ static int config_input(AVFilterLink *inlink)
     for (c = 0; c < s->independent_channels; c++)
         s->start[c] = INT64_MIN;
 
-    switch (inlink->format) {
-    case AV_SAMPLE_FMT_DBL: s->silencedetect = silencedetect_dbl; break;
-    case AV_SAMPLE_FMT_FLT: s->silencedetect = silencedetect_flt; break;
-    case AV_SAMPLE_FMT_S32:
-        s->noise *= INT32_MAX;
-        s->silencedetect = silencedetect_s32;
+    switch (s->mode) {
+    case MODE_PEAK:
+        switch (inlink->format) {
+        case AV_SAMPLE_FMT_DBL: s->silencedetect = silencedetect_dbl; break;
+        case AV_SAMPLE_FMT_FLT: s->silencedetect = silencedetect_flt; break;
+        case AV_SAMPLE_FMT_S32:
+            s->noise *= INT32_MAX;
+            s->silencedetect = silencedetect_s32;
+            break;
+        case AV_SAMPLE_FMT_S16:
+            s->noise *= INT16_MAX;
+            s->silencedetect = silencedetect_s16;
+            break;
+        case AV_SAMPLE_FMT_DBLP: s->silencedetect = silencedetect_dblp; break;
+        case AV_SAMPLE_FMT_FLTP: s->silencedetect = silencedetect_fltp; break;
+        case AV_SAMPLE_FMT_S32P:
+            s->noise *= INT32_MAX;
+            s->silencedetect = silencedetect_s32p;
+            break;
+        case AV_SAMPLE_FMT_S16P:
+            s->noise *= INT16_MAX;
+            s->silencedetect = silencedetect_s16p;
+            break;
+        default:
+            return AVERROR_BUG;
+        }
         break;
-    case AV_SAMPLE_FMT_S16:
-        s->noise *= INT16_MAX;
-        s->silencedetect = silencedetect_s16;
+
+    case MODE_LOUDNESS:
+        s->r128    = av_calloc(s->channels, sizeof(*s->r128));
+        s->is_loud = av_calloc(s->channels, sizeof(*s->is_loud));
+        if (!s->r128 || !s->is_loud)
+            return AVERROR(ENOMEM);
+        for (c = 0; c < s->channels; c++) {
+            s->r128[c] = ff_ebur128_init(1, inlink->sample_rate, 0, FF_EBUR128_MODE_M);
+            if (!s->r128[c])
+                return AVERROR(ENOMEM);
+        }
+        s->nb_pending_samples = LOUDNESS_STEP(inlink->sample_rate);
+        s->noise = 20 * log10(s->noise); /* convert to LUFS */
+        /* silence must outlast the window its end is moved back by, see update() */
+        s->duration += LOUDNESS_WINDOW(inlink->sample_rate);
+
+        switch (inlink->format) {
+        case AV_SAMPLE_FMT_DBL:  s->silencedetect = silencedetect_dbl_loudness;  break;
+        case AV_SAMPLE_FMT_FLT:  s->silencedetect = silencedetect_flt_loudness;  break;
+        case AV_SAMPLE_FMT_S32:  s->silencedetect = silencedetect_s32_loudness;  break;
+        case AV_SAMPLE_FMT_S16:  s->silencedetect = silencedetect_s16_loudness;  break;
+        case AV_SAMPLE_FMT_DBLP: s->silencedetect = silencedetect_dblp_loudness; break;
+        case AV_SAMPLE_FMT_FLTP: s->silencedetect = silencedetect_fltp_loudness; break;
+        case AV_SAMPLE_FMT_S32P: s->silencedetect = silencedetect_s32p_loudness; break;
+        case AV_SAMPLE_FMT_S16P: s->silencedetect = silencedetect_s16p_loudness; break;
+        default: return AVERROR_BUG;
+        }
         break;
-    case AV_SAMPLE_FMT_DBLP: s->silencedetect = silencedetect_dblp; break;
-    case AV_SAMPLE_FMT_FLTP: s->silencedetect = silencedetect_fltp; break;
-    case AV_SAMPLE_FMT_S32P:
-        s->noise *= INT32_MAX;
-        s->silencedetect = silencedetect_s32p;
-        break;
-    case AV_SAMPLE_FMT_S16P:
-        s->noise *= INT16_MAX;
-        s->silencedetect = silencedetect_s16p;
-        break;
-    default:
-        return AVERROR_BUG;
     }
 
     return 0;
@@ -221,10 +343,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
     int c;
 
     // scale number of null samples to the new sample rate
-    if (s->last_sample_rate && s->last_sample_rate != srate)
-        for (c = 0; c < s->independent_channels; c++) {
+    if (s->last_sample_rate && s->last_sample_rate != srate) {
+        for (c = 0; c < s->independent_channels; c++)
             s->nb_null_samples[c] = srate * s->nb_null_samples[c] / s->last_sample_rate;
-        }
+        s->nb_pending_samples = srate * s->nb_pending_samples / s->last_sample_rate;
+    }
     s->last_sample_rate = srate;
     s->time_base = inlink->time_base;
     s->frame_end = insamples->pts + av_rescale_q(insamples->nb_samples,
@@ -244,6 +367,10 @@ static av_cold void uninit(AVFilterContext *ctx)
     for (c = 0; c < s->independent_channels; c++)
         if (s->start[c] > INT64_MIN)
             update(ctx, NULL, 0, c, 0, s->time_base);
+    for (c = 0; s->r128 && c < s->channels; c++)
+        ff_ebur128_destroy(&s->r128[c]);
+    av_freep(&s->r128);
+    av_freep(&s->is_loud);
     av_freep(&s->nb_null_samples);
     av_freep(&s->start);
 }
