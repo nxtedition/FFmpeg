@@ -6506,6 +6506,25 @@ for the accepted syntax.
 
 @item mono, m
 Process each channel separately, instead of combined. By default is disabled.
+
+@item mode
+Affects how silence is classified. Accepts the following values:
+@table @samp
+@item peak
+Compare the absolute value of each sample to the noise tolerance. This is the
+default mode.
+
+@item loudness
+Compare the momentary loudness, as defined by ITU-R BS.1770, to the noise
+tolerance in LUFS.
+@end table
+
+@item relative
+Set relative noise tolerance. When using @code{mode=loudness}, this option
+allows treating a signal as silent if the momentary loudness drops below
+the short-term loudness by more than this factor. Can be specified in dB (in
+case "dB" is appended to the specified value) or amplitude ratio. Defaults to
+0, which disables this logic.
 @end table
 
 @subsection Examples
@@ -6515,6 +6534,12 @@ Process each channel separately, instead of combined. By default is disabled.
 Detect 5 seconds of silence with -50dB noise tolerance:
 @example
 silencedetect=n=-50dB:d=5
+@end example
+
+@item
+Detect 2 seconds of silence, with a -35 LUFS noise tolerance:
+@example
+silencedetect=mode=loudness:n=-35dB:d=2
 @end example
 
 @item
