@@ -7858,6 +7858,183 @@ ffmpeg -loglevel warning -f pulse -i default \
 
 @end itemize
 
+@section waterdetect
+
+Recover the inaudible spread-spectrum time stamp mixed in by the
+@ref{waterstamp} filter and report the recovered source time, the offset
+against a reference clock and the sample-rate drift.
+
+The filter forces its input to mono float at 8184 Hz (four samples per
+chip); FFmpeg inserts the conversion, and the default downmix sums the
+identical per-channel watermarks coherently. Decisions are made on
+correlation peaks, never on amplitude, so gain changes, normalisation,
+equalisation and slow compression do not affect the measurement.
+
+Audio passes through unchanged. Detection state is reported as frame
+metadata and as a single @code{key:value} log line on lock acquisition, on
+lock loss and once per 6 s frame thereafter:
+
+@example
+waterdetect lock:1 id:3 t:1789012345.482 offset:0.083 drift:12.4 snr:18.2
+@end example
+
+The filter accepts the following options:
+
+@table @option
+@item clock
+Reference clock the offset is measured against. @code{wall} (default)
+uses the detector's wall clock, which measures the delay a chain adds and
+needs the emitter and detector clocks to agree (NTP). @code{pts} uses the
+media timestamps, which makes an offline file self-contained.
+
+@item epoch
+Hint for the absolute time in seconds. The payload carries seconds modulo
+32768 (9.1 h); the hint resolves that ambiguity. The default of @code{-1}
+resolves it against the reference clock, which for @code{clock=pts} means
+the payload is reported as is.
+
+@item rate
+Centre of the sample-rate error search in ppm. While acquiring, the
+detector evaluates hypotheses at this value plus 0, ±500, ±1000,
+±1500 and ±2000 ppm in parallel, then tracks the error itself;
+a 25 to 23.976 speed change is therefore caught without a hint. Set it
+when a feed is known to run further off than 2000 ppm. Default 0.
+
+@item threshold
+Layer A lock threshold as peak-to-sidelobe ratio in dB. Default 4.
+
+@item limit
+Clip spectral lines this many dB above the mean magnitude of the analysis
+window before correlating. A stationary in-band tone otherwise projects
+onto the code as a constant-magnitude term at every lag and defeats the
+symbol decision; the spread watermark is barely affected. 0 disables.
+Default 20.
+
+@item sources
+Maximum number of stamps tracked and reported at once, 1 to 8. Default 4.
+
+@item id
+Only search for this source id, which is cheaper than searching all 64.
+Default -1, search all.
+@end table
+
+The following metadata entries are set on every output frame. With
+several stamps present, the entries without an index describe the first
+locked source and @code{lavfi.waterdetect.N.*} (N from 0) describe each
+locked source in turn; @code{lavfi.waterdetect.sources} is their count.
+
+@table @option
+@item lavfi.waterdetect.lock
+1 while a frame-confirmed lock is held, else 0.
+@item lavfi.waterdetect.id
+Source id carried in the stamp, 0-63.
+@item lavfi.waterdetect.t
+Recovered source time of the first sample of the frame, in microseconds.
+@item lavfi.waterdetect.offset
+Reference clock minus recovered source time, in milliseconds.
+@item lavfi.waterdetect.drift
+Rate at which the recovered timeline runs against the reference clock,
+in parts per million. Positive means the audio runs fast.
+@item lavfi.waterdetect.snr
+Post-correlation peak-to-mean ratio of the timing layer, in dB.
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Measure the offset of the first audio stream of a recording against its
+own timestamps. Always map the stream explicitly, or ffmpeg's default
+stream selection may analyse a different one:
+@example
+ffmpeg -i recording.mxf -map 0:a:0 -af waterdetect=clock=pts -f null -
+@end example
+
+@item
+Print the per-frame metadata:
+@example
+ffmpeg -i stamped.wav -af waterdetect=clock=pts,ametadata=print -f null -
+@end example
+
+@item
+Report every stamp in a feed mixed from stamped sources:
+@example
+ffmpeg -i mix.wav -map 0:a:0 -af waterdetect=clock=pts -f null -
+@end example
+@end itemize
+
+@anchor{waterstamp}
+@section waterstamp
+
+Mix an inaudible spread-spectrum absolute-time stamp into audio.
+
+Two spread-spectrum layers in the 977-3023 Hz band are summed and added
+identically to every channel at a level relative to the programme's own
+level in that band: an unmodulated 500 ms timing layer, and a data layer
+carrying 3 bits per 500 ms slot by cyclic shift keying. Both layers use
+Gold codes of length 1023 selected by the source id (the GPS C/A code
+family), so stamps from different sources do not interfere. Twelve slots form
+a 6 s frame of sync word, 6-bit source id, 15-bit seconds payload and
+CRC-8. The waveform is a pure function of absolute source time, so a
+restart resumes phase-continuous and two emitters fed the same clock
+produce bit-identical output.
+
+Absolute time is anchored once, then advanced by the output sample count
+rather than by timestamps, so the stamp measures the audio's own timeline
+and any downstream sample-rate error appears at the detector as drift.
+Put the filter last in the chain, after any @code{aresample=async=1},
+so that inserted or dropped samples do not punch holes in the sequence.
+
+The filter accepts the following options:
+
+@table @option
+@item level
+Watermark level in dB relative to the programme band RMS. Default -23.
+Raise it to around -14 on a dedicated test feed where audibility is not a
+constraint; the detector then locks within a few seconds.
+
+@item floor
+Absolute minimum level in dBFS. Default -65.
+
+@item ceil
+Absolute maximum level in dBFS. Default -35.
+
+@item id
+Source id, 0-63. It is carried in the frame and selects the source's
+Gold code pair, so a signal can carry several stamps, from a mix of
+stamped sources or from re-stamping an already stamped feed, and the
+detector reports all of them. Each added stamp raises the total watermark
+level by 10 log10(N) dB. Default 0.
+
+@item t0
+Absolute time of the first output sample in microseconds. The default of
+0 takes the wall clock at the first frame.
+
+@item attack
+Level detector attack time in seconds. Default 0.005.
+
+@item release
+Level detector release time in seconds. Keep it at or above one 500 ms
+slot, or the amplitude modulates faster than the symbol. Default 0.2.
+
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Stamp a file with source id 3, starting at a known absolute time:
+@example
+ffmpeg -i speech.wav -af waterstamp=id=3:t0=1789012344000000 -c:a pcm_s24le stamped.wav
+@end example
+
+@item
+Stamp a live ingest against the wall clock, after the resampler:
+@example
+ffmpeg -i live.sdp -af aresample=async=1,waterstamp=level=-23:id=7 ...
+@end example
+@end itemize
+
 @c man end AUDIO FILTERS
 
 @chapter Audio Sources
