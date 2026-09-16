@@ -7921,6 +7921,11 @@ Default -1, search all.
 Secret key the stamps were made with, see the same option of
 @ref{waterstamp}. Without a key only unkeyed stamps are found; with one,
 only stamps made under that key. Run two instances to check two keys.
+
+@item wide
+Search speed changes up to ±5 % in 0.1 % steps instead of ±0.2 %, for
+feeds stamped in test mode. Costs about ten times the acquisition work
+and memory. Default off.
 @end table
 
 The following metadata entries are set on every output frame. With
@@ -8032,6 +8037,18 @@ a stamp made with the same id under another key, or without one, is
 rejected. This proves a stamp is yours; it is not a strong signature,
 since a frame carries only 8 check bits. Without a key everything is
 public and interoperable. Default unset.
+
+@item mode
+@code{normal} (default): inaudible, the level follows the programme as
+described above. @code{test}: a fixed level of @option{test_level} dBFS
+regardless of the programme, clearly audible, for dedicated test and QC
+feeds where the only goal is to measure through whatever the chain does.
+Measured at the default -20 dBFS: AAC at 24 kbit/s and a mono 8 kHz
+telephone band still give 0.12 ms timing. Never use it on programme
+output.
+
+@item test_level
+Fixed amplitude in dBFS for @code{mode=test}. Default -20.
 @end table
 
 @subsection Examples
@@ -26481,6 +26498,12 @@ Only search for this source id. Default -1, search all 64.
 
 @item key
 Secret key the stamps were made with, see @ref{waterstamp}.
+
+@item wide
+Search speed changes up to ±5 % in 0.5 % steps, for feeds stamped in
+test mode; acquisition then takes about five seconds longer, since
+hypotheses only separate once their predictions differ by a chip.
+Default off, which tracks up to about ±0.2 %.
 @end table
 
 Metadata: @code{lavfi.vwaterdetect.lock}, @code{.sources}, @code{.id},
@@ -26527,8 +26550,10 @@ only the luma plane is modified.
 What survives, measured on a 720p25 synthetic clip with camera-like noise
 at the default level: lossless and broadcast-quality H.264 (crf 18),
 scaling up, letterboxing and pillarboxing of the whole frame, brightness
-and contrast changes, frame delays, 25 to 30 fps conversion and a 1000
-ppm speed change, all with the offset within 0.2 ms of the truth. Heavy
+and contrast changes, frame delays and 25 to 30 fps conversion, all with
+the offset within 0.3 ms of the truth; a 1000 ppm speed change reads its
+growing offset within 1.2 ms and its drift within 6 %, with the drift
+figure valid about 20 s after lock. Heavy
 compression (H.264 crf 28, 1 Mbit/s at 720p, 360p) and cropping of the
 stamped frame are not recovered in this version: the first needs more
 amplitude than the default allows, the second a geometry search.
@@ -26556,6 +26581,16 @@ wall clock at the first frame.
 
 @item key
 Secret key, see @ref{waterstamp}.
+
+@item mode
+@code{normal} (default): invisible, the amplitude follows the local
+texture. @code{test}: a fixed amplitude of @option{test_level} LSB on
+every cell, visible as grain, for dedicated test and QC feeds. Measured
+at the default 8 LSB: H.264 at crf 38, 500 kbit/s at 720p and 320x180
+still lock within 1 ms. Never use it on programme output.
+
+@item test_level
+Fixed amplitude in LSB for @code{mode=test}. Default 8.
 @end table
 
 @subsection Examples

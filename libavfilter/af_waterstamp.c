@@ -57,6 +57,9 @@ typedef struct WaterStampContext {
     double release;     /* level detector release, s           */
     char  *key;         /* secret: keys codes and check field   */
     size_t keylen;
+    int    mode;        /* MODE_NORMAL or MODE_TEST              */
+    double test_level;  /* dBFS, fixed amplitude in test mode    */
+    float  lin_test;
 
     /* derived */
     float lin_level, lin_floor, lin_ceil;
@@ -80,6 +83,8 @@ typedef struct WaterStampContext {
     int     tmp_size;
 } WaterStampContext;
 
+enum { MODE_NORMAL, MODE_TEST, NB_MODES };
+
 #define OFFSET(x) offsetof(WaterStampContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_AUDIO_PARAM
 
@@ -92,6 +97,10 @@ static const AVOption waterstamp_options[] = {
     { "attack",  "level detector attack in seconds",                     OFFSET(attack),   AV_OPT_TYPE_DOUBLE, {.dbl = 0.005}, 0.0001, 5, FLAGS },
     { "release", "level detector release in seconds, keep >= one 0.5 s slot", OFFSET(release), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0.01, 30, FLAGS },
     { "key",     "secret key: derives the code pair and the frame check field, so only a detector with the same key reads the stamp", OFFSET(key), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
+    { "mode",    "normal: inaudible, level follows the programme; test: fixed audible level for QC feeds", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_NORMAL}, 0, NB_MODES - 1, FLAGS, .unit = "mode" },
+    { "normal",  "inaudible, level relative to the programme band",     0,                AV_OPT_TYPE_CONST,  {.i64 = MODE_NORMAL}, 0, 0, FLAGS, .unit = "mode" },
+    { "test",    "fixed level, audible, survives hard compression",     0,                AV_OPT_TYPE_CONST,  {.i64 = MODE_TEST},   0, 0, FLAGS, .unit = "mode" },
+    { "test_level", "fixed amplitude in dBFS used by mode=test",        OFFSET(test_level), AV_OPT_TYPE_DOUBLE, {.dbl = -20}, -60, 0, FLAGS },
     { NULL }
 };
 
@@ -112,6 +121,7 @@ static av_cold int init(AVFilterContext *ctx)
         return AVERROR(EINVAL);
     }
     s->lin_level = powf(10.f, s->level    / 20.f);
+    s->lin_test  = powf(10.f, s->test_level / 20.f);
     s->lin_floor = powf(10.f, s->floor_db / 20.f);
     s->lin_ceil  = powf(10.f, s->ceil_db  / 20.f);
     s->cur_frame = INT64_MIN;
@@ -168,9 +178,10 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         s->n        = 0;
         s->anchored = 1;
         av_log(ctx, AV_LOG_INFO,
-               "waterstamp anchored t0:%"PRId64".%06d id:%d keyed:%d level:%g floor:%g ceil:%g\n",
+               "waterstamp anchored t0:%"PRId64".%06d id:%d keyed:%d mode:%s level:%g floor:%g ceil:%g\n",
                s->t0_us / 1000000, (int)(s->t0_us % 1000000), s->id, s->keylen > 0,
-               s->level, s->floor_db, s->ceil_db);
+               s->mode == MODE_TEST ? "test" : "normal",
+               s->mode == MODE_TEST ? s->test_level : s->level, s->floor_db, s->ceil_db);
     }
 
     if (av_frame_is_writable(in)) {
@@ -218,7 +229,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         s->z2 = s->b2 * x - s->a2 * bp;
         e = bp * bp;
         s->env += (e > s->env ? s->a_att : s->a_rel) * (e - s->env);
-        w[i] = av_clipf(sqrtf(s->env) * s->lin_level, s->lin_floor, s->lin_ceil);
+        w[i] = s->mode == MODE_TEST ? s->lin_test
+             : av_clipf(sqrtf(s->env) * s->lin_level, s->lin_floor, s->lin_ceil);
     }
 
     /* 2. waveform, a pure function of absolute time. Absolute time of the

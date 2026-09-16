@@ -55,6 +55,8 @@ typedef struct VWaterStampContext {
     int64_t opt_t0;
     char   *key;
     size_t  keylen;
+    int     mode;
+    double  test_level;     /* LSB, fixed amplitude in test mode      */
 
     float   lin_level;
     int8_t  seqA[WS_SEQ_LEN];
@@ -77,6 +79,8 @@ typedef struct VWaterStampContext {
     float  *dither;             /* 256 x 256 tile                         */
 } VWaterStampContext;
 
+enum { MODE_NORMAL, MODE_TEST, NB_MODES };
+
 #define OFFSET(x) offsetof(VWaterStampContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 
@@ -87,6 +91,10 @@ static const AVOption vwaterstamp_options[] = {
     { "id",    "source id (0-63), carried in the frame and selecting the code pair", OFFSET(id),   AV_OPT_TYPE_INT,    {.i64 = 0},      0, WS_MAX_IDS - 1, FLAGS },
     { "t0",    "absolute time of the first frame in microseconds, 0 = wall clock", OFFSET(opt_t0), AV_OPT_TYPE_INT64,  {.i64 = 0},      0, INT64_MAX, FLAGS },
     { "key",   "secret key: derives the code pair and the frame check field",   OFFSET(key),       AV_OPT_TYPE_STRING, {.str = NULL},   0,  0, FLAGS },
+    { "mode",  "normal: invisible, amplitude follows texture; test: fixed visible amplitude for QC feeds", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_NORMAL}, 0, NB_MODES - 1, FLAGS, .unit = "mode" },
+    { "normal", "invisible, amplitude relative to local texture",             0,                 AV_OPT_TYPE_CONST,  {.i64 = MODE_NORMAL}, 0, 0, FLAGS, .unit = "mode" },
+    { "test",  "fixed amplitude, visible, survives hard compression",         0,                 AV_OPT_TYPE_CONST,  {.i64 = MODE_TEST},   0, 0, FLAGS, .unit = "mode" },
+    { "test_level", "fixed amplitude in LSB used by mode=test",               OFFSET(test_level), AV_OPT_TYPE_DOUBLE, {.dbl = 8},     0.5, 64, FLAGS },
     { NULL }
 };
 
@@ -184,9 +192,10 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         s->t0_us     = s->opt_t0 ? s->opt_t0 : av_gettime();
         s->anchored  = 1;
         av_log(ctx, AV_LOG_INFO,
-               "vwaterstamp anchored t0:%"PRId64".%06d id:%d keyed:%d level:%g floor:%g ceil:%g\n",
+               "vwaterstamp anchored t0:%"PRId64".%06d id:%d keyed:%d mode:%s level:%g floor:%g ceil:%g\n",
                s->t0_us / 1000000, (int)(s->t0_us % 1000000), s->id, s->keylen > 0,
-               s->level, s->floor_lsb, s->ceil_lsb);
+               s->mode == MODE_TEST ? "test" : "normal",
+               s->mode == MODE_TEST ? s->test_level : s->level, s->floor_lsb, s->ceil_lsb);
     }
     t_us = s->t0_us + av_rescale_q(frame->pts - s->first_pts, inlink->time_base, AV_TIME_BASE_Q);
     if (t_us < 0)
@@ -240,7 +249,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         double m  = s->cnt[c] ? s->sum[c] / s->cnt[c] : 0;
         double v  = s->cnt[c] ? s->sumsq[c] / s->cnt[c] - m * m : 0;
         int chip  = s->seqA[(c + shiftA) % WS_SEQ_LEN] + s->seqB[(c + s->shiftB + shiftA) % WS_SEQ_LEN];
-        s->amp[c] = 0.5f * chip * av_clipf(sqrt(FFMAX(v, 0)) * s->lin_level, s->floor_lsb, s->ceil_lsb);
+        s->amp[c] = 0.5f * chip * (s->mode == MODE_TEST ? (float)s->test_level
+                    : av_clipf(sqrt(FFMAX(v, 0)) * s->lin_level, s->floor_lsb, s->ceil_lsb));
     }
 
     /* 2. add chip * carrier * amplitude, dithered below one LSB */

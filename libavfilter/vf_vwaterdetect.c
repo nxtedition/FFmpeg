@@ -58,6 +58,8 @@
 
 #define MAX_TRACKERS 8
 #define MIN_FRAMES   4
+#define WIDE_PCT     5                  /* wide search: +-5 % in 0.5 % steps    */
+#define WIDE_STEPS   (2 * WIDE_PCT * 2 + 1)
 #define PH_SUB       4                  /* phase hypotheses per chip           */
 #define NPH          (WSV_CHIPS * PH_SUB) /* 128 slot phase hypotheses, 3.9 ms  */
 #define PH_US        ((double)WSV_CHIP_US / PH_SUB)
@@ -68,6 +70,7 @@ enum AreaMode  { AREA_AUTO, AREA_FULL, NB_AREA };
 typedef struct VTracker {
     int      used;
     int      code;
+    double   rscale;                    /* pts scale hypothesis: tau = pts * rscale */
     float    acc[NPH];
     double   phase_us;                  /* slot boundary: pts = phase (mod 500 ms) */
     float    score;
@@ -76,6 +79,7 @@ typedef struct VTracker {
     float    zB[WS_CSK_M];
     int      sym[WS_SLOTS];
     int64_t  sym_slot[WS_SLOTS];
+    double   sym_tau[WS_SLOTS];         /* slot boundary in tau when it was decoded */
     int      nsym;
 
     int      lock;
@@ -83,13 +87,16 @@ typedef struct VTracker {
     int64_t  ref_t_us;                  /* source time at ref_pts_us            */
     int64_t  ref_pts_us;
     double   rate;                      /* pts seconds per source second - 1    */
-    int64_t  anchor_pts_us;             /* where the phase slope is measured from */
-    double   anchor_phase_us;
+    int      rate_valid;                /* measured over a long enough baseline  */
     int      frames;
     int      have_valid;
     unsigned last_payload;
     int64_t  last_valid_slot;
     int64_t  last_valid_pts;
+    int64_t  base_slot;                 /* first confirmed frame: rate baseline  */
+    int64_t  base_tau;
+    int      have_base;
+    int64_t  settle_slot;               /* boundaries before this are transient  */
     int      slots_since_valid;
 } VTracker;
 
@@ -104,12 +111,15 @@ typedef struct VWaterDetectContext {
     int     only_id;
     char   *key;
     size_t  keylen;
+    int     wide;
+    int     nvh;                        /* speed hypotheses                     */
+    double  vh_scale[WIDE_STEPS];
 
     int8_t  codeA[WS_MAX_IDS][WS_SEQ_LEN];
     int8_t  codeB[WS_MAX_IDS][WS_SEQ_LEN];
     int     tracked[WS_MAX_IDS];
     int     hits[WS_MAX_IDS];           /* consecutive frames above threshold  */
-    float  *cand;                       /* [WS_MAX_IDS][NPH]                    */
+    float  *cand;                       /* [WS_MAX_IDS][nvh][NPH]               */
     int     cand_frames;
     VTracker trk[MAX_TRACKERS];
 
@@ -143,6 +153,7 @@ static const AVOption vwaterdetect_options[] = {
     { "sources",   "maximum number of stamps tracked at once",   OFFSET(max_sources), AV_OPT_TYPE_INT,  {.i64 = 4}, 1, MAX_TRACKERS, FLAGS },
     { "id",        "only search for this source id, -1 = all",   OFFSET(only_id),    AV_OPT_TYPE_INT,   {.i64 = -1}, -1, WS_MAX_IDS - 1, FLAGS },
     { "key",       "secret key the stamps were made with",       OFFSET(key),        AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
+    { "wide",      "search speed changes up to +-5 % (for test-mode feeds)", OFFSET(wide), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS },
     { NULL }
 };
 
@@ -165,7 +176,10 @@ static av_cold int init(AVFilterContext *ctx)
             av_log(ctx, AV_LOG_ERROR, "could not build the spreading codes\n");
             return AVERROR_BUG;
         }
-    s->cand   = av_calloc((size_t)WS_MAX_IDS * NPH, sizeof(*s->cand));
+    s->nvh = s->wide ? WIDE_STEPS : 1;
+    for (int h = 0; h < s->nvh; h++)
+        s->vh_scale[h] = s->wide ? 1.0 + (h - WIDE_PCT * 2) * 0.005 : 1.0;
+    s->cand   = av_calloc((size_t)WS_MAX_IDS * s->nvh * NPH, sizeof(*s->cand));
     s->subsum = av_calloc((size_t)WSV_SUBCOLS * WSV_SUBROWS, sizeof(*s->subsum));
     s->subcnt = av_calloc((size_t)WSV_SUBCOLS * WSV_SUBROWS, sizeof(*s->subcnt));
     if (!s->cand || !s->subsum || !s->subcnt)
@@ -320,14 +334,17 @@ static int64_t measured_us(const VWaterDetectContext *s, int64_t pts_us)
     return s->clock_mode == CLOCK_PTS ? pts_us : s->now_us;
 }
 
+/* Tracker time runs on tau = pts * rscale; ref_pts_us and phase are in tau. */
 static int64_t recovered_us(const VTracker *t, int64_t pts_us)
 {
-    return t->ref_t_us + llrint((pts_us - t->ref_pts_us) / (1.0 + t->rate));
+    double r = t->rate_valid ? t->rate : 0.0;
+    return t->ref_t_us + llrint((pts_us * t->rscale - t->ref_pts_us) / (1.0 + r));
 }
 
 static double drift_ppm(const VTracker *t)
 {
-    return (1.0 / (1.0 + t->rate) - 1.0) * 1e6;
+    double r = t->rate_valid ? t->rate : 0.0;
+    return (t->rscale / (1.0 + r) - 1.0) * 1e6;
 }
 
 static void log_state(AVFilterContext *ctx, const VTracker *t, int64_t pts_us)
@@ -383,7 +400,7 @@ static void try_frame(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
         int64_t nfrm  = dslot / WS_SLOTS;
         unsigned want = (t->last_payload + WS_FRAME_S * nfrm) & (WS_PAYLOAD_MOD - 1);
         if (nfrm >= 1 && dslot % WS_SLOTS == 0 && want == payload) {
-            int64_t ref_s, pts0 = llrint(t->phase_us + (double)slot0 * WS_SLOT_US);
+            int64_t ref_s, pts0 = llrint(t->sym_tau[(t->nsym - WS_SLOTS) % WS_SLOTS]);
             if (s->epoch >= 0)
                 ref_s = s->epoch;
             else if (s->clock_mode == CLOCK_WALL)
@@ -393,23 +410,43 @@ static void try_frame(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
             k = ref_s - (int64_t)payload + WS_PAYLOAD_MOD / 2;
             k = k >= 0 ? k / WS_PAYLOAD_MOD : -((-k + WS_PAYLOAD_MOD - 1) / WS_PAYLOAD_MOD);
 
+            /* after a fold the phase accumulator needs a few seconds to
+             * settle; boundaries recorded meanwhile are off by many ms */
+            if (slot0 < t->settle_slot) {
+                t->slots_since_valid = 0;
+                if (!t->lock)
+                    set_lock(ctx, t, 1, pts_us);
+                goto done;
+            }
+            if (!t->have_base) {
+                t->base_slot = slot0;
+                t->base_tau  = pts0;
+                t->have_base = 1;
+            } else if (slot0 - t->base_slot >= 2 * WS_SLOTS) {
+                /* boundaries are known to a millisecond; over >= 12 s that
+                 * is better than 100 ppm and improves as the lock lasts */
+                double elapsed_src = (double)(slot0 - t->base_slot) * WS_SLOT_US;
+                t->rate       = av_clipd((pts0 - t->base_tau) / elapsed_src - 1.0, -0.01, 0.01);
+                t->rate_valid = 1;
+            }
             t->id         = id;
             t->ref_t_us   = ((int64_t)payload + k * WS_PAYLOAD_MOD) * 1000000;
             t->ref_pts_us = pts0;
-            av_log(ctx, AV_LOG_DEBUG, "confirm id:%u payload:%u slot0:%"PRId64" phase:%.1fms pts0:%.3fs rate:%.0fppm\n",
-                   id, payload, slot0, t->phase_us / 1000.0, pts0 / 1e6, t->rate * 1e6);
+            av_log(ctx, AV_LOG_DEBUG, "confirm id:%u payload:%u slot0:%"PRId64" phase:%.1fms pts0:%.3fs base:%.3fs/%"PRId64" rate:%.0fppm scale:%.5f\n",
+                   id, payload, slot0, t->phase_us / 1000.0, pts0 / 1e6, t->base_tau / 1e6, t->base_slot, t->rate * 1e6, t->rscale);
             t->slots_since_valid = 0;
             if (!t->lock)
                 set_lock(ctx, t, 1, pts_us);
             else
                 log_state(ctx, t, pts_us);
             t->last_valid_pts = pts0;
+done:;
         } else {
             av_log(ctx, AV_LOG_VERBOSE, "frame id:%u payload:%u not consistent (want %u)\n", id, payload, want);
         }
     } else {
         av_log(ctx, AV_LOG_VERBOSE, "first valid frame id:%u payload:%u\n", id, payload);
-        t->last_valid_pts = llrint(t->phase_us + (double)slot0 * WS_SLOT_US);
+        t->last_valid_pts = llrint(t->sym_tau[(t->nsym - WS_SLOTS) % WS_SLOTS]);
     }
     t->have_valid      = 1;
     t->last_payload    = payload;
@@ -423,7 +460,7 @@ static void release_tracker(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
     VWaterDetectContext *s = ctx->priv;
     set_lock(ctx, t, 0, pts_us);
     s->tracked[t->code] = 0;
-    memset(s->cand + (size_t)t->code * NPH, 0, NPH * sizeof(float));
+    memset(s->cand + (size_t)t->code * s->nvh * NPH, 0, (size_t)s->nvh * NPH * sizeof(float));
     memset(t, 0, sizeof(*t));
 }
 
@@ -441,7 +478,7 @@ static void accumulate_phase(float *acc, const float *zA, int64_t pts_us, float 
 static float peak_phase(const float *acc, double *phase_chips)
 {
     int pk = 0, n = 0;
-    float y0, y1, y2, mean = 0.f, var = 0.f;
+    float y1, mean = 0.f, var = 0.f;
     double d;
     for (int ph = 1; ph < NPH; ph++)
         if (acc[ph] > acc[pk])
@@ -458,11 +495,20 @@ static float peak_phase(const float *acc, double *phase_chips)
         if (dd > PH_SUB) var += (acc[ph] - mean) * (acc[ph] - mean);
     }
     var = sqrtf(var / FFMAX(n, 1)) + 1e-3f;
-    y0 = acc[(pk + NPH - 1) % NPH];
+    /* One chip covers PH_SUB bins, so the peak is a plateau and a parabola
+     * through its top says nothing. The plateau's edges are shaped by the
+     * frames that fall near chip boundaries and move continuously with the
+     * true phase, so its centroid resolves well below a bin. */
+    {
+        double num = 0, den = 0;
+        for (int dd = -(PH_SUB + 1); dd <= PH_SUB + 1; dd++) {
+            float w = acc[(pk + dd + NPH) % NPH] - mean;
+            if (w > 0) { num += dd * w; den += w; }
+        }
+        d = den > 0 ? num / den : 0;
+    }
     y1 = acc[pk];
-    y2 = acc[(pk + 1) % NPH];
-    d  = (y0 - 2 * y1 + y2) != 0 ? 0.5 * (y0 - y2) / (y0 - 2 * y1 + y2) : 0;
-    *phase_chips = pk + av_clipd(d, -0.5, 0.5);
+    *phase_chips = pk + d;
     return (y1 - mean) / var;
 }
 
@@ -471,10 +517,11 @@ static void track_frame(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
     VWaterDetectContext *s = ctx->priv;
     float zA[WSV_CHIPS], zB[WS_CSK_M];
     double ph_chips, ph_us, d;
+    int64_t tau = llrint(pts_us * t->rscale);         /* speed-corrected time */
     int64_t slot;
 
     correlate_shifts(s, s->codeA[t->code], WSV_CHIPS, WSV_A_STEP, 0, zA);
-    accumulate_phase(t->acc, zA, pts_us, 1.f / 64);
+    accumulate_phase(t->acc, zA, tau, 1.f / 64);
     t->score = peak_phase(t->acc, &ph_chips);
     if (t->score < s->thresh * 0.6f) {
         av_log(ctx, AV_LOG_VERBOSE, "code %d: lost, score %.2f\n", t->code, t->score);
@@ -491,14 +538,32 @@ static void track_frame(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
     /* The slot boundary drifts through the timestamps at the sample-rate
      * error: measure its slope from an anchor set once the accumulator has
      * settled. Positive slope = the source runs slow against the clock. */
-    if (++t->frames == 64) {
-        t->anchor_pts_us   = pts_us;
-        t->anchor_phase_us = t->phase_us;
-    } else if (t->frames > 64 && pts_us - t->anchor_pts_us > 4000000) {
-        t->rate = av_clipd((t->phase_us - t->anchor_phase_us) / (double)(pts_us - t->anchor_pts_us), -0.01, 0.01);
+    t->frames++;
+    if (t->frames % 25 == 0)
+        av_log(ctx, AV_LOG_DEBUG, "track code %d frame %d pts %.3f phase %.2f ms score %.1f\n",
+               t->code, t->frames, pts_us / 1e6, t->phase_us / 1000.0, t->score);
+    /* Fold a confirmed residual above 300 ppm into the time scale, so that
+     * the chip prediction stops lagging; the rate is then re-measured from
+     * a fresh baseline. */
+    if (t->rate_valid && fabs(t->rate) > 300e-6) {
+        double f = 1.0 / (1.0 + t->rate);
+        /* keep the current slot's index: boundaries are counted from
+         * tau = 0, so the phase absorbs the scale change at cur_slot */
+        t->phase_us        = t->phase_us * f + (double)t->cur_slot * WS_SLOT_US * (f - 1.0);
+        t->rscale         *= f;
+        t->ref_pts_us      = llrint(t->ref_pts_us * f);
+        t->last_valid_pts  = llrint(t->last_valid_pts * f);
+        for (int i = 0; i < WS_SLOTS; i++)
+            t->sym_tau[i] *= f;
+        tau                = llrint(pts_us * t->rscale);
+        t->rate            = 0;
+        t->rate_valid      = 0;
+        t->have_base       = 0;
+        t->settle_slot     = t->cur_slot + 2 * WS_SLOTS;
+        av_log(ctx, AV_LOG_VERBOSE, "code %d: speed now %+.2f %%\n", t->code, (t->rscale - 1.0) * 100.0);
     }
 
-    slot = (int64_t)floor((pts_us - t->phase_us) / WS_SLOT_US);
+    slot = (int64_t)floor((tau - t->phase_us) / WS_SLOT_US);
     if (!t->have_slot || slot != t->cur_slot) {
         if (t->have_slot) {
             int best = 0;
@@ -507,6 +572,7 @@ static void track_frame(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
                     best = m;
             t->sym[t->nsym % WS_SLOTS]      = best;
             t->sym_slot[t->nsym % WS_SLOTS] = t->cur_slot;
+            t->sym_tau[t->nsym % WS_SLOTS]  = t->phase_us + (double)t->cur_slot * WS_SLOT_US;
             t->nsym++;
             if (++t->slots_since_valid > 3 * WS_SLOTS) {
                 if (t->lock) {
@@ -527,9 +593,18 @@ static void track_frame(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
         t->cur_slot  = slot;
         t->have_slot = 1;
     }
-    /* layer B carries the symbol shift plus this chip's advance */
-    correlate_shifts(s, s->codeB[t->code], WS_CSK_M, WS_CSK_STEP,
-                     chip_for(pts_us, t->phase_us) * WSV_A_STEP, zB);
+    /* layer B carries the symbol shift plus this chip's advance. The frame's
+     * own layer A result names the chip directly when it is unambiguous,
+     * which does not lag behind a speed residual the way the phase does. */
+    {
+        int k = 0, kp = chip_for(tau, t->phase_us);
+        for (int i = 1; i < WSV_CHIPS; i++)
+            if (zA[i] > zA[k])
+                k = i;
+        if (zA[k] < 3.f)
+            k = kp;
+        correlate_shifts(s, s->codeB[t->code], WS_CSK_M, WS_CSK_STEP, k * WSV_A_STEP, zB);
+    }
     for (int m = 0; m < WS_CSK_M; m++)
         t->zB[m] += zB[m];
 }
@@ -538,33 +613,54 @@ static void acquire_frame(AVFilterContext *ctx, int64_t pts_us)
 {
     VWaterDetectContext *s = ctx->priv;
     float zA[WSV_CHIPS];
-    int best_c = -1, best_ph = 0, ntr = 0, any = 0;
+    int best_c = -1, best_h = 0, best_ph = 0, ntr = 0, any = 0;
     float best = 0.f;
     VTracker *t = NULL;
 
     for (int i = 0; i < MAX_TRACKERS; i++)
         ntr += s->trk[i].used;
     for (int c = 0; c < WS_MAX_IDS; c++) {
-        float *acc = s->cand + (size_t)c * NPH;
+        float cbest = 0.f;
+        int ch = 0, cph = 0;
         if (s->tracked[c] || (s->only_id >= 0 && s->only_id != c))
             continue;
         any = 1;
         correlate_shifts(s, s->codeA[c], WSV_CHIPS, WSV_A_STEP, 0, zA);
-        accumulate_phase(acc, zA, pts_us, 1.f / 32);
-        {
+        for (int h = 0; h < s->nvh; h++) {
+            float *acc = s->cand + ((size_t)c * s->nvh + h) * NPH;
             double ph;
-            float psr = peak_phase(acc, &ph);
-            s->hits[c] = psr >= s->thresh ? s->hits[c] + 1 : 0;
-            if (s->hits[c] >= 3 && psr > best) {
-                best = psr; best_c = c; best_ph = (int)floor(ph + 0.5) % NPH;
+            float psr;
+            /* a wide search needs a long window: hypotheses 0.5 % apart
+             * only separate once their predictions differ by a chip, five
+             * seconds in */
+            accumulate_phase(acc, zA, llrint(pts_us * s->vh_scale[h]), s->nvh > 1 ? 1.f / 128 : 1.f / 32);
+            psr = peak_phase(acc, &ph);
+            if (psr > cbest) {
+                cbest = psr; ch = h; cph = (int)floor(ph + 0.5) % NPH;
             }
+        }
+        if (s->cand_frames == 127 && s->nvh > 1 && cbest >= s->thresh) {
+            char buf[512]; int n = 0;
+            for (int h = 0; h < s->nvh && n < (int)sizeof(buf) - 8; h++) {
+                double ph;
+                n += snprintf(buf + n, sizeof(buf) - n, " %.0f", peak_phase(s->cand + ((size_t)c * s->nvh + h) * NPH, &ph));
+            }
+            av_log(ctx, AV_LOG_DEBUG, "code %d psr per speed hypothesis (-5%%..+5%%):%s\n", c, buf);
+        }
+        s->hits[c] = cbest >= s->thresh ? s->hits[c] + 1 : 0;
+        /* Speed hypotheses only separate once a wrong one has had time to
+         * smear: two seconds at 1.5 % apart. Residuals below that are the
+         * tracker's job. */
+        if (s->hits[c] >= 3 && cbest >= s->thresh && cbest > best &&
+            (s->nvh == 1 || s->cand_frames >= 128)) {
+            best = cbest; best_c = c; best_h = ch; best_ph = cph;
         }
     }
     if (!any)
         return;
     if (++s->cand_frames % 25 == 0)
-        av_log(ctx, AV_LOG_DEBUG, "acquire: frame %d best code %d phase %d score %.2f\n",
-               s->cand_frames, best_c, best_ph, best);
+        av_log(ctx, AV_LOG_DEBUG, "acquire: frame %d best code %d hyp %d phase %d score %.2f\n",
+               s->cand_frames, best_c, best_h, best_ph, best);
     if (s->cand_frames < MIN_FRAMES || best_c < 0 || best < s->thresh || ntr >= s->max_sources)
         return;
     for (int i = 0; i < MAX_TRACKERS; i++)
@@ -576,15 +672,16 @@ static void acquire_frame(AVFilterContext *ctx, int64_t pts_us)
     if (!t)
         return;
     memset(t, 0, sizeof(*t));
-    t->used  = 1;
-    t->code  = best_c;
-    memcpy(t->acc, s->cand + (size_t)best_c * NPH, NPH * sizeof(float));
+    t->used   = 1;
+    t->code   = best_c;
+    t->rscale = s->vh_scale[best_h];
+    memcpy(t->acc, s->cand + ((size_t)best_c * s->nvh + best_h) * NPH, NPH * sizeof(float));
     t->score = best;
     t->phase_us = best_ph * PH_US;
-    memset(s->cand + (size_t)best_c * NPH, 0, NPH * sizeof(float));
+    memset(s->cand + (size_t)best_c * s->nvh * NPH, 0, (size_t)s->nvh * NPH * sizeof(float));
     s->hits[best_c] = 0;
-    av_log(ctx, AV_LOG_VERBOSE, "code %d: layer A lock score %.2f phase %.1f ms\n",
-           best_c, best, t->phase_us / 1000.0);
+    av_log(ctx, AV_LOG_VERBOSE, "code %d: layer A lock score %.2f phase %.1f ms speed %+.1f %%\n",
+           best_c, best, t->phase_us / 1000.0, (t->rscale - 1.0) * 100.0);
 }
 
 /* ---- output ---------------------------------------------------------- */

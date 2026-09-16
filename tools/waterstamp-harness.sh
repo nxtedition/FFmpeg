@@ -70,5 +70,13 @@ for D in "key=nxt-secret" "" "key=other-secret"; do
 done
 out=$($FF -hide_banner -nostats -i b.wav -map 0:a:0 -af "waterdetect=clock=pts:key=nxt-secret" -f null - 2>&1 | grep 'waterdetect lock:1' | sed 's/.*waterdetect //' | awk '{print $2}' | sort -u | tr '\n' ' ')
 printf '%-34s ids locked: %s\n' "unkeyed stamp, detect with key" "${out:-none}"
+echo "== test mode (fixed -20 dBFS, audible) with wide speed search =="
+$FF -y -hide_banner -loglevel error -i prog_pink.wav -af "waterstamp=mode=test:id=3:t0=1" -c:a pcm_s16le tm.wav
+$FF -y -hide_banner -loglevel error -i tm.wav -c:a aac -b:a 24k c.m4a
+out=$($FF -hide_banner -nostats -i c.m4a -map 0:a:0 -af "waterdetect=clock=pts" -f null - 2>&1 | grep 'waterdetect lock:1' | tail -1 | sed 's/.*waterdetect //')
+printf '%-34s %s\n' "test mode, aac 24k" "${out:-no lock}"
+$FF -y -hide_banner -loglevel error -i tm.wav -af "asetrate=49440,aresample=48000" c.wav
+out=$($FF -hide_banner -nostats -i c.wav -map 0:a:0 -af "waterdetect=clock=pts:wide=1" -f null - 2>&1 | grep 'waterdetect lock:1' | tail -1 | sed 's/.*waterdetect //')
+printf '%-34s %s\n' "test mode, speed +3 %, wide" "${out:-no lock}"
 echo "== null test, pink: (stamped - programme) level =="
 $FF -hide_banner -nostats -i stamped_pink.wav -i prog_pink.wav -filter_complex "[0][1]amerge,pan=stereo|c0=c0-c2|c1=c1-c3,volumedetect" -f null - 2>&1 | grep -E 'mean_volume|max_volume'

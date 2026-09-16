@@ -68,11 +68,11 @@
 #define WIN_A       (2 * WS_BB_PERIOD)     /* 4092: two periods, layer A    */
 #define FIR_TAPS    47
 #define FIR_HALF    ((FIR_TAPS - 1) / 2)
-#define FIR_CUTOFF  1150.0                  /* Hz; band edge is 1023 Hz      */
+#define FIR_CUTOFF  1250.0                  /* Hz; band edge is 1023 Hz, +5 % speed and shift fit */
 #define BB_RING     16384                   /* baseband samples kept, 4 s    */
 #define LO_PERIOD   WS_SEQ_LEN             /* 2000/8184 = 250/1023          */
 #define MIN_PERIODS 4                       /* before layer A may lock       */
-#define MAX_RATE    5000e-6                 /* clamp on the rate estimate    */
+#define MAX_RATE    60000e-6                /* clamp on the rate estimate    */
 #define FRAME_BB    (WS_SLOTS * WS_BB_PERIOD)
 #define MAX_TRACKERS 8
 
@@ -82,7 +82,9 @@
  * the wrong rate before the loop could see it; the hypothesis nearest the
  * truth stays sharp and wins. */
 static const double rate_hyp[] = { 0, 500, -500, 1000, -1000, 1500, -1500, 2000, -2000 };
-#define NHYP FF_ARRAY_ELEMS(rate_hyp)
+#define WIDE_PPM    50000                   /* wide search: +-5 % in 1000 ppm steps */
+#define WIDE_STEP   1000
+#define MAX_HYP     (2 * WIDE_PPM / WIDE_STEP + 1)
 
 enum ClockMode { CLOCK_WALL, CLOCK_PTS, NB_CLOCK };
 
@@ -135,6 +137,7 @@ typedef struct WaterDetectContext {
     int     only_id;
     char   *key;
     size_t  keylen;
+    int     wide;
 
     /* demodulator + decimator */
     AVComplexFloat lo[LO_PERIOD];
@@ -156,9 +159,10 @@ typedef struct WaterDetectContext {
     /* acquisition: candidates[code][hyp], blocks shared per hypothesis */
     Candidate *cand;
     float     *cand_mem;
-    double     hyp_blk[NHYP];
-    double     hyp_rate[NHYP];
-    int        hyp_periods[NHYP];
+    int        nhyp;
+    double     hyp_blk[MAX_HYP];
+    double     hyp_rate[MAX_HYP];
+    int        hyp_periods[MAX_HYP];
     int        tracked[WS_MAX_IDS];    /* code -> tracker index + 1, or 0    */
 
     Tracker    trk[MAX_TRACKERS];
@@ -184,6 +188,7 @@ static const AVOption waterdetect_options[] = {
     { "sources",   "maximum number of stamps tracked at once",        OFFSET(max_sources), AV_OPT_TYPE_INT, {.i64 = 4}, 1, MAX_TRACKERS, FLAGS },
     { "id",        "only search for this source id, -1 = all",        OFFSET(only_id), AV_OPT_TYPE_INT,  {.i64 = -1}, -1, WS_MAX_IDS - 1, FLAGS },
     { "key",       "secret key the stamps were made with; without it only unkeyed stamps are found", OFFSET(key), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
+    { "wide",      "search speed changes up to +-5 % instead of +-0.2 % (for test-mode feeds)", OFFSET(wide), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS },
     { NULL }
 };
 
@@ -219,12 +224,13 @@ static void build_reference(WaterDetectContext *s, AVComplexFloat *Ref, const in
 
 static void reset_acquisition(WaterDetectContext *s, double pos)
 {
-    for (int h = 0; h < NHYP; h++) {
+    for (int h = 0; h < s->nhyp; h++) {
+        double ppm = s->wide ? -WIDE_PPM + h * WIDE_STEP : rate_hyp[h];
         s->hyp_blk[h]     = pos;
-        s->hyp_rate[h]    = av_clipd((s->rate_ppm + rate_hyp[h]) * 1e-6, -MAX_RATE, MAX_RATE);
+        s->hyp_rate[h]    = av_clipd((s->rate_ppm + ppm) * 1e-6, -MAX_RATE, MAX_RATE);
         s->hyp_periods[h] = 0;
     }
-    memset(s->cand_mem, 0, (size_t)WS_MAX_IDS * NHYP * WS_BB_PERIOD * sizeof(*s->cand_mem));
+    memset(s->cand_mem, 0, (size_t)WS_MAX_IDS * s->nhyp * WS_BB_PERIOD * sizeof(*s->cand_mem));
 }
 
 static av_cold int init(AVFilterContext *ctx)
@@ -234,6 +240,8 @@ static av_cold int init(AVFilterContext *ctx)
     int8_t seqA[WS_SEQ_LEN], seqB[WS_SEQ_LEN];
     int ret;
 
+    s->nhyp = s->wide ? MAX_HYP : FF_ARRAY_ELEMS(rate_hyp);
+
     s->bb   = av_calloc(BB_RING, sizeof(*s->bb));
     s->RefA = av_calloc((size_t)WS_MAX_IDS * FFT_N, sizeof(*s->RefA));
     s->RefB = av_calloc((size_t)WS_MAX_IDS * FFT_N, sizeof(*s->RefB));
@@ -241,13 +249,13 @@ static av_cold int init(AVFilterContext *ctx)
     s->spec = av_calloc(FFT_N, sizeof(*s->spec));
     s->prod = av_calloc(FFT_N, sizeof(*s->prod));
     s->corr = av_calloc(FFT_N, sizeof(*s->corr));
-    s->cand     = av_calloc((size_t)WS_MAX_IDS * NHYP, sizeof(*s->cand));
-    s->cand_mem = av_calloc((size_t)WS_MAX_IDS * NHYP * WS_BB_PERIOD, sizeof(*s->cand_mem));
+    s->cand     = av_calloc((size_t)WS_MAX_IDS * s->nhyp, sizeof(*s->cand));
+    s->cand_mem = av_calloc((size_t)WS_MAX_IDS * s->nhyp * WS_BB_PERIOD, sizeof(*s->cand_mem));
     s->trk_mem  = av_calloc((size_t)MAX_TRACKERS * WS_BB_PERIOD, sizeof(*s->trk_mem));
     if (!s->bb || !s->RefA || !s->RefB || !s->win || !s->spec || !s->prod || !s->corr ||
         !s->cand || !s->cand_mem || !s->trk_mem)
         return AVERROR(ENOMEM);
-    for (int i = 0; i < WS_MAX_IDS * NHYP; i++)
+    for (int i = 0; i < WS_MAX_IDS * s->nhyp; i++)
         s->cand[i].acc = s->cand_mem + (size_t)i * WS_BB_PERIOD;
     for (int i = 0; i < MAX_TRACKERS; i++)
         s->trk[i].acc = s->trk_mem + (size_t)i * WS_BB_PERIOD;
@@ -338,11 +346,12 @@ static void read_window(const WaterDetectContext *s, double x0, int n, AVComplex
     const double step = 1.0 + rate;
     /* A speed change of (1+rate) also moves the carrier: the emitter period
      * is (1+rate) detector periods, so the carrier sits at CARRIER/(1+rate),
-     * i.e. -CARRIER*rate Hz off the local oscillator, a full cycle per
-     * period at 1000 ppm. Derotate by that much. A pure time-stretch leaves
+     * i.e. -CARRIER*rate/(1+rate) Hz off the local oscillator, a full cycle
+     * per period at 1000 ppm. Derotate by exactly that: the first-order
+     * form is 2 Hz off at 3 %, which is itself a cycle per period. A pure time-stretch leaves
      * the carrier alone, but it also splices the chip sequence and is not
      * recoverable anyway. */
-    const double dth = 2.0 * M_PI * WS_CARRIER * rate * step / WS_BB_RATE;
+    const double dth = 2.0 * M_PI * WS_CARRIER * (rate / (1.0 + rate)) * step / WS_BB_RATE;
     const float cr = cos(dth), ci = sin(dth);
     float rr = 1.f, ri = 0.f;
     for (int i = 0; i < n; i++) {
@@ -551,8 +560,8 @@ static void release_tracker(AVFilterContext *ctx, Tracker *t, double at_pos)
     WaterDetectContext *s = ctx->priv;
     set_lock(ctx, t, 0, at_pos);
     s->tracked[t->code] = 0;
-    for (int h = 0; h < NHYP; h++)
-        memset(s->cand[t->code * NHYP + h].acc, 0, WS_BB_PERIOD * sizeof(float));
+    for (int h = 0; h < s->nhyp; h++)
+        memset(s->cand[t->code * s->nhyp + h].acc, 0, WS_BB_PERIOD * sizeof(float));
     memset(t, 0, offsetof(Tracker, acc));
     t->used = 0;
     memset(t->acc, 0, WS_BB_PERIOD * sizeof(float));
@@ -672,11 +681,11 @@ static void acquire_block(AVFilterContext *ctx)
     for (int c = 0; c < WS_MAX_IDS; c++)
         any |= code_wanted(s, c);
 
-    for (int h = 0; h < NHYP; h++) {
+    for (int h = 0; h < s->nhyp; h++) {
         if (any) {
             fwd_window(s, s->hyp_blk[h], s->hyp_rate[h]);
             for (int c = 0; c < WS_MAX_IDS; c++) {
-                Candidate *cd = &s->cand[c * NHYP + h];
+                Candidate *cd = &s->cand[c * s->nhyp + h];
                 if (!code_wanted(s, c))
                     continue;
                 corr_from_spec(s, s->RefA + (size_t)c * FFT_N);
@@ -693,9 +702,9 @@ static void acquire_block(AVFilterContext *ctx)
     for (int c = 0; c < WS_MAX_IDS; c++) {
         if (!code_wanted(s, c))
             continue;
-        for (int h = 0; h < NHYP; h++) {
-            const Candidate *cd = &s->cand[c * NHYP + h];
-            if (cd->st.psr >= thr && (best_c < 0 || cd->st.psr > s->cand[best_c * NHYP + best_h].st.psr)) {
+        for (int h = 0; h < s->nhyp; h++) {
+            const Candidate *cd = &s->cand[c * s->nhyp + h];
+            if (cd->st.psr >= thr && (best_c < 0 || cd->st.psr > s->cand[best_c * s->nhyp + best_h].st.psr)) {
                 best_c = c;
                 best_h = h;
             }
@@ -714,7 +723,7 @@ static void acquire_block(AVFilterContext *ctx)
         return;
 
     {
-        Candidate *cd = &s->cand[best_c * NHYP + best_h];
+        Candidate *cd = &s->cand[best_c * s->nhyp + best_h];
         memcpy(t->acc, cd->acc, WS_BB_PERIOD * sizeof(float));
         t->used    = 1;
         t->code    = best_c;
@@ -726,14 +735,14 @@ static void acquire_block(AVFilterContext *ctx)
         av_log(ctx, AV_LOG_VERBOSE, "code %d: layer A lock psr:%.1f dB snr:%.1f dB rate:%.0f ppm\n",
                best_c, 10 * log10(cd->st.psr), cd->st.snr_db, t->rate * 1e6);
         schedule_slot(t, t->phase);
-        for (int h = 0; h < NHYP; h++)
-            memset(s->cand[best_c * NHYP + h].acc, 0, WS_BB_PERIOD * sizeof(float));
+        for (int h = 0; h < s->nhyp; h++)
+            memset(s->cand[best_c * s->nhyp + h].acc, 0, WS_BB_PERIOD * sizeof(float));
     }
 }
 
 static int acquire_ready(const WaterDetectContext *s)
 {
-    for (int h = 0; h < NHYP; h++)
+    for (int h = 0; h < s->nhyp; h++)
         if (s->hyp_blk[h] + WIN_A * (1.0 + s->hyp_rate[h]) + 2 > s->bb_count)
             return 0;
     return 1;

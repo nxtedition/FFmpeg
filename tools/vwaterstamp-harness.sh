@@ -27,7 +27,7 @@ det() { # label file
   printf '%-24s locked-frames:%-2s first[%s]  last[%s]\n' "$1" "$n" "$first" "$last"
 }
 chain() { # label filter [codec args]
-  $FF -y -hide_banner -loglevel error -i stamped.mkv -vf "$2" -fps_mode passthrough ${3:--c:v libx264 -preset ultrafast -qp 0} -pix_fmt yuv420p c.mkv && det "$1" c.mkv
+  $FF -y -hide_banner -loglevel error -i stamped.mkv -vf "$2" -fps_mode passthrough ${3:--c:v libx264 -preset ultrafast -qp 0} -pix_fmt yuv420p c.mp4 && det "$1" c.mp4
 }
 echo "== video, level $LEVEL dB, 1280x720p25 (expected offset 0.000 ms, id 3) =="
 det   "clean lossless"        stamped.mkv
@@ -41,7 +41,17 @@ chain "pillarbox 4:3"         "scale=960:720,pad=1280:720:160:0"
 chain "brightness/contrast"   "eq=brightness=0.05:contrast=1.2:gamma=1.1"
 chain "delay 3 frames (120ms)" "tpad=start=3"
 chain "fps 25 -> 30"          "fps=30"
-chain "fps 25 -> 23.976 speed" "setpts=PTS*1.001"
+# a speed change needs a timebase finer than the frame period all the way
+# through (settb before setpts, passthrough, encoder time base), or the scaled
+# timestamps round straight back to the nominal ones
+chain "fps 25 -> 23.976 speed" "settb=1/90000,setpts=PTS*1.001" "-fps_mode:v passthrough -enc_time_base 1/90000 -c:v libx264 -preset ultrafast -qp 0 -video_track_timescale 90000"
 chain "crop 5% (loss expected)" "crop=1216:684,scale=1280:720"
+echo "== test mode (fixed 8 LSB, visible) with wide speed search =="
+$FF -y -hide_banner -loglevel error -t 40 -i prog.mp4 -vf "vwaterstamp=mode=test:id=3:t0=1" -c:v libx264 -preset ultrafast -qp 0 tm.mkv
+$FF -y -hide_banner -loglevel error -i tm.mkv -vf scale=640:360 -c:v libx264 -preset veryfast -crf 33 c.mp4 && det "test mode, 360p crf 33" c.mp4
+$FF -y -hide_banner -loglevel error -i tm.mkv -vf "scale=640:360,settb=1/90000,setpts=PTS*1.03" -fps_mode:v passthrough -enc_time_base 1/90000 -c:v libx264 -preset veryfast -crf 23 -video_track_timescale 90000 c.mp4
+out=$($FF -hide_banner -nostats -i c.mp4 -map 0:v:0 -vf "vwaterdetect=clock=pts:wide=1" -f null - 2>&1 | grep 'vwaterdetect lock:1' | tail -1 | sed 's/.*vwaterdetect //')
+printf '%-24s %s\n' "test mode, 360p, speed +3 %, wide" "${out:-no lock}"
+rm -f tm.mkv
 echo "== unstamped material: must not lock =="
 det   "unstamped (no lock)"    prog.mp4
