@@ -45,6 +45,7 @@ typedef struct SilenceDetectContext {
     FFEBUR128State **r128;
 
     double noise;               ///< noise amplitude ratio
+    double relative;            ///< relative amplitude ratio
     int64_t duration;           ///< minimum duration of silence until notification
     int mode;                   ///< enum SilenceDetectMode
     int mono;                   ///< mono mode : check each channel separately (default = check when ALL channels are silent)
@@ -66,6 +67,7 @@ typedef struct SilenceDetectContext {
 #define MAX_DURATION (24*3600*1000000LL)
 #define LOUDNESS_STEP(sample_rate)   (((sample_rate) + 5) / 10)       /* 100 ms */
 #define LOUDNESS_WINDOW(sample_rate) (4 * LOUDNESS_STEP(sample_rate)) /* 400 ms */
+#define LOUDNESS_TOLERANCE 0.5 /* relative loudness tolerance (LU) */
 #define OFFSET(x) offsetof(SilenceDetectContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_AUDIO_PARAM
 static const AVOption silencedetect_options[] = {
@@ -74,6 +76,7 @@ static const AVOption silencedetect_options[] = {
     {   "loudness", "detect momentary loudness",       0,                 AV_OPT_TYPE_CONST,  {.i64=MODE_LOUDNESS},  0, 0,        FLAGS, .unit = "mode" },
     { "n",         "set noise tolerance",              OFFSET(noise),     AV_OPT_TYPE_DOUBLE, {.dbl=0.001},          0, DBL_MAX,  FLAGS },
     { "noise",     "set noise tolerance",              OFFSET(noise),     AV_OPT_TYPE_DOUBLE, {.dbl=0.001},          0, DBL_MAX,  FLAGS },
+    { "relative",  "set relative noise threshold",     OFFSET(relative),  AV_OPT_TYPE_DOUBLE, {.dbl=0},              0, 1,        FLAGS },
     { "d",         "set minimum duration in seconds",  OFFSET(duration),  AV_OPT_TYPE_DURATION, {.i64=2000000},      0, MAX_DURATION,FLAGS },
     { "duration",  "set minimum duration in seconds",  OFFSET(duration),  AV_OPT_TYPE_DURATION, {.i64=2000000},      0, MAX_DURATION,FLAGS },
     { "mono",      "check each channel separately",    OFFSET(mono),      AV_OPT_TYPE_BOOL,   {.i64=0},              0, 1,        FLAGS },
@@ -197,9 +200,21 @@ static void update_loudness(SilenceDetectContext *s)
 
     s->nb_pending_samples = LOUDNESS_STEP(s->last_sample_rate);
     for (int ch = 0; ch < s->channels; ch++) {
-        double loudness;
+        double loudness, shortterm;
+        int below, above;
+
         ff_ebur128_loudness_momentary(s->r128[ch], &loudness);
-        s->is_loud[ch] = loudness >= s->noise;
+        below = loudness <  s->noise;
+        above = loudness >= s->noise;
+        if (isfinite(s->relative)) {
+            /* we use an asymmetric tolerance; silence starts when the
+             * content dips by the configured threshold, and stops again when
+             * it reaches the short-term average minus a small constant */
+            ff_ebur128_loudness_shortterm(s->r128[ch], &shortterm);
+            below |= loudness < shortterm + s->relative;
+            above &= loudness >= shortterm - LOUDNESS_TOLERANCE;
+        }
+        s->is_loud[ch] = s->is_loud[ch] ? !below : above;
     }
 }
 
@@ -306,12 +321,14 @@ static int config_input(AVFilterLink *inlink)
         if (!s->r128 || !s->is_loud)
             return AVERROR(ENOMEM);
         for (c = 0; c < s->channels; c++) {
-            s->r128[c] = ff_ebur128_init(1, inlink->sample_rate, 0, FF_EBUR128_MODE_M);
+            s->r128[c] = ff_ebur128_init(1, inlink->sample_rate, 0,
+                                         s->relative ? FF_EBUR128_MODE_S : FF_EBUR128_MODE_M);
             if (!s->r128[c])
                 return AVERROR(ENOMEM);
         }
         s->nb_pending_samples = LOUDNESS_STEP(inlink->sample_rate);
         s->noise = 20 * log10(s->noise); /* convert to LUFS */
+        s->relative = 20 * log10(s->relative); /* or -infinity if disabled */
         /* silence must outlast the window its end is moved back by, see update() */
         s->duration += LOUDNESS_WINDOW(inlink->sample_rate);
 
