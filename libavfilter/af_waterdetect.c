@@ -133,6 +133,8 @@ typedef struct WaterDetectContext {
     double  limit_db;
     int     max_sources;
     int     only_id;
+    char   *key;
+    size_t  keylen;
 
     /* demodulator + decimator */
     AVComplexFloat lo[LO_PERIOD];
@@ -181,6 +183,7 @@ static const AVOption waterdetect_options[] = {
     { "limit",     "clip spectral lines this many dB above the mean magnitude before correlating, 0 = off", OFFSET(limit_db), AV_OPT_TYPE_DOUBLE, {.dbl = 20}, 0, 60, FLAGS },
     { "sources",   "maximum number of stamps tracked at once",        OFFSET(max_sources), AV_OPT_TYPE_INT, {.i64 = 4}, 1, MAX_TRACKERS, FLAGS },
     { "id",        "only search for this source id, -1 = all",        OFFSET(only_id), AV_OPT_TYPE_INT,  {.i64 = -1}, -1, WS_MAX_IDS - 1, FLAGS },
+    { "key",       "secret key the stamps were made with; without it only unkeyed stamps are found", OFFSET(key), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
     { NULL }
 };
 
@@ -253,9 +256,10 @@ static av_cold int init(AVFilterContext *ctx)
         (ret = av_tx_init(&s->itx, &s->itx_fn, AV_TX_FLOAT_FFT, 1, FFT_N, &scale, 0)) < 0)
         return ret;
 
+    s->keylen = s->key ? strlen(s->key) : 0;
     for (int c = 0; c < WS_MAX_IDS; c++) {
-        if (ws_sequences(c, seqA, seqB) < 0) {
-            av_log(ctx, AV_LOG_ERROR, "LFSR mask is not primitive\n");
+        if (ws_sequences((const uint8_t *)s->key, s->keylen, c, seqA, seqB) < 0) {
+            av_log(ctx, AV_LOG_ERROR, "could not build the spreading codes\n");
             return AVERROR_BUG;
         }
         build_reference(s, s->RefA + (size_t)c * FFT_N, seqA);
@@ -483,7 +487,7 @@ static void try_frame(AVFilterContext *ctx, Tracker *t)
         bits[3 * i + 1] = (sym >> 1) & 1;
         bits[3 * i + 2] =  sym       & 1;
     }
-    if (!ws_frame_parse(bits, &id, &payload))
+    if (!ws_frame_parse(bits, &id, &payload, (const uint8_t *)s->key, s->keylen))
         return;
     if (id != t->code) {
         av_log(ctx, AV_LOG_VERBOSE, "code %d decoded id %u, rejected\n", t->code, id);

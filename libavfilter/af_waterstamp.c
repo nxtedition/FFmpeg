@@ -55,6 +55,8 @@ typedef struct WaterStampContext {
     int64_t opt_t0;     /* absolute time of the first sample, us; 0 = wall clock */
     double attack;      /* level detector attack, s            */
     double release;     /* level detector release, s           */
+    char  *key;         /* secret: keys codes and check field   */
+    size_t keylen;
 
     /* derived */
     float lin_level, lin_floor, lin_ceil;
@@ -89,6 +91,7 @@ static const AVOption waterstamp_options[] = {
     { "t0",      "absolute time of the first sample in microseconds, 0 = wall clock", OFFSET(opt_t0), AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, FLAGS },
     { "attack",  "level detector attack in seconds",                     OFFSET(attack),   AV_OPT_TYPE_DOUBLE, {.dbl = 0.005}, 0.0001, 5, FLAGS },
     { "release", "level detector release in seconds, keep >= one 0.5 s slot", OFFSET(release), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0.01, 30, FLAGS },
+    { "key",     "secret key: derives the code pair and the frame check field, so only a detector with the same key reads the stamp", OFFSET(key), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
     { NULL }
 };
 
@@ -98,8 +101,9 @@ static av_cold int init(AVFilterContext *ctx)
 {
     WaterStampContext *s = ctx->priv;
 
-    if (ws_sequences(s->id, s->seqA, s->seqB) < 0) {
-        av_log(ctx, AV_LOG_ERROR, "LFSR mask is not primitive\n");
+    s->keylen = s->key ? strlen(s->key) : 0;
+    if (ws_sequences((const uint8_t *)s->key, s->keylen, s->id, s->seqA, s->seqB) < 0) {
+        av_log(ctx, AV_LOG_ERROR, "could not build the spreading codes\n");
         return AVERROR_BUG;
     }
     if (s->floor_db > s->ceil_db) {
@@ -164,8 +168,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         s->n        = 0;
         s->anchored = 1;
         av_log(ctx, AV_LOG_INFO,
-               "waterstamp anchored t0:%"PRId64".%06d id:%d level:%g floor:%g ceil:%g\n",
-               s->t0_us / 1000000, (int)(s->t0_us % 1000000), s->id,
+               "waterstamp anchored t0:%"PRId64".%06d id:%d keyed:%d level:%g floor:%g ceil:%g\n",
+               s->t0_us / 1000000, (int)(s->t0_us % 1000000), s->id, s->keylen > 0,
                s->level, s->floor_db, s->ceil_db);
     }
 
@@ -239,7 +243,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         si  = (int)(slot - frm * WS_SLOTS);
 
         if (frm != s->cur_frame) {                      /* once per 6 s */
-            ws_frame_bits(frm * WS_FRAME_S, s->id, s->bits);
+            ws_frame_bits(frm * WS_FRAME_S, s->id, s->bits, (const uint8_t *)s->key, s->keylen);
             s->cur_frame = frm;
         }
         if (slot != s->cur_slot) {                      /* once per 500 ms */

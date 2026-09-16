@@ -62,5 +62,13 @@ printf '%-34s ids locked: %s\n' "re-stamp +2.000 s (ids 3, 7)" "$out"
 $FF -y -hide_banner -loglevel error -i a.wav -af "adelay=137|137,waterstamp=level=$LEVEL:id=7:t0=1" -f wav c.wav
 out=$($FF -hide_banner -nostats -i c.wav -map 0:a:0 -af "waterdetect=clock=pts" -f null - 2>&1 | grep 'waterdetect lock:1' | sed 's/.*waterdetect //' | awk '{print $2}' | sort -u | tr '\n' ' ')
 printf '%-34s ids locked: %s\n' "delay 137 ms + re-stamp (ids 3, 7)" "$out"
+echo "== keyed stamps (expect: same key locks; no key, other key, and unkeyed stamp with key do not) =="
+$FF -y -hide_banner -loglevel error -i prog_music.wav -af "waterstamp=level=$LEVEL:id=3:t0=1:key=nxt-secret" -f wav k.wav
+for D in "key=nxt-secret" "" "key=other-secret"; do
+  out=$($FF -hide_banner -nostats -i k.wav -map 0:a:0 -af "waterdetect=clock=pts${D:+:$D}" -f null - 2>&1 | grep 'waterdetect lock:1' | sed 's/.*waterdetect //' | awk '{print $2}' | sort -u | tr '\n' ' ')
+  printf '%-34s ids locked: %s\n' "keyed stamp, detect ${D:-unkeyed}" "${out:-none}"
+done
+out=$($FF -hide_banner -nostats -i b.wav -map 0:a:0 -af "waterdetect=clock=pts:key=nxt-secret" -f null - 2>&1 | grep 'waterdetect lock:1' | sed 's/.*waterdetect //' | awk '{print $2}' | sort -u | tr '\n' ' ')
+printf '%-34s ids locked: %s\n' "unkeyed stamp, detect with key" "${out:-none}"
 echo "== null test, pink: (stamped - programme) level =="
 $FF -hide_banner -nostats -i stamped_pink.wav -i prog_pink.wav -filter_complex "[0][1]amerge,pan=stereo|c0=c0-c2|c1=c1-c3,volumedetect" -f null - 2>&1 | grep -E 'mean_volume|max_volume'

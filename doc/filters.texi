@@ -7916,6 +7916,11 @@ Maximum number of stamps tracked and reported at once, 1 to 8. Default 4.
 @item id
 Only search for this source id, which is cheaper than searching all 64.
 Default -1, search all.
+
+@item key
+Secret key the stamps were made with, see the same option of
+@ref{waterstamp}. Without a key only unkeyed stamps are found; with one,
+only stamps made under that key. Run two instances to check two keys.
 @end table
 
 The following metadata entries are set on every output frame. With
@@ -8017,6 +8022,16 @@ Level detector attack time in seconds. Default 0.005.
 Level detector release time in seconds. Keep it at or above one 500 ms
 slot, or the amplitude modulates faster than the symbol. Default 0.2.
 
+@item key
+Secret key. When set, the two spreading codes of the source are
+pseudo-random sequences derived from HMAC-SHA256 over the key, the id and
+the layer instead of the public Gold codes, and the 8-bit check field of
+every frame is a truncated HMAC-SHA256 over the frame bits instead of
+CRC-8. A detector without the key neither accepts nor sees the stamp, and
+a stamp made with the same id under another key, or without one, is
+rejected. This proves a stamp is yours; it is not a strong signature,
+since a frame carries only 8 check bits. Without a key everything is
+public and interoperable. Default unset.
 @end table
 
 @subsection Examples
