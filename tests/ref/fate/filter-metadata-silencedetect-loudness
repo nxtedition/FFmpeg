@@ -1,5 +1,5 @@
-pts=0|tag:lavfi.silence_start=0.1
-pts=46080|tag:lavfi.silence_end=1.5|tag:lavfi.silence_duration=1.4
+pts=0|tag:lavfi.silence_start=0
+pts=46080|tag:lavfi.silence_end=1.5|tag:lavfi.silence_duration=1.5
 pts=92160
 pts=138240
 pts=184320

@@ -57,7 +57,7 @@ typedef struct SilenceDetectContext {
     int last_sample_rate;       ///< last sample rate to check for sample rate changes
     AVRational time_base;       ///< time_base
     int nb_pending_samples;     ///< number of samples until loudness is measured
-    int *is_silence;            ///< (array) result of previous loudness measurement
+    int *is_loud;               ///< (array) result of previous loudness measurement
 
     void (*silencedetect)(AVFilterContext *ctx, AVFrame *insamples,
                           int nb_samples, int64_t nb_samples_notify,
@@ -214,7 +214,7 @@ static void update_loudness(SilenceDetectContext *s)
             below |= loudness < shortterm + s->relative;
             above &= loudness >= shortterm - LOUDNESS_TOLERANCE;
         }
-        s->is_silence[ch] = s->is_silence[ch] ? !above : below;
+        s->is_loud[ch] = s->is_loud[ch] ? !below : above;
     }
 }
 
@@ -230,7 +230,7 @@ static void silencedetect_##name(AVFilterContext *ctx, AVFrame *insamples,      
     nb_samples /= channels;                                                      \
     for (int i = 0; i < nb_samples; i++) {                                       \
         for (int ch = 0; ch < channels; ch++, p++) {                             \
-            update(ctx, insamples, s->is_silence[ch], channels * i + ch,         \
+            update(ctx, insamples, !s->is_loud[ch], channels * i + ch,           \
                    nb_samples_notify, time_base);                                \
             ff_ebur128_add_frames_##type(s->r128[ch], p, 1);                     \
         }                                                                        \
@@ -250,7 +250,7 @@ static void silencedetect_##name(AVFilterContext *ctx, AVFrame *insamples,      
     for (int i = 0; i < nb_samples; i++) {                                       \
         for (int ch = 0; ch < channels; ch++) {                                  \
             const type *p = (const type *) insamples->extended_data[ch];         \
-            update(ctx, insamples, s->is_silence[ch], channels * i + ch,         \
+            update(ctx, insamples, !s->is_loud[ch], channels * i + ch,           \
                    nb_samples_notify, time_base);                                \
             ff_ebur128_add_frames_##type(s->r128[ch], &p[i], 1);                 \
         }                                                                        \
@@ -316,9 +316,9 @@ static int config_input(AVFilterLink *inlink)
         break;
 
     case MODE_LOUDNESS:
-        s->r128       = av_calloc(s->channels, sizeof(*s->r128));
-        s->is_silence = av_calloc(s->channels, sizeof(*s->is_silence));
-        if (!s->r128 || !s->is_silence)
+        s->r128    = av_calloc(s->channels, sizeof(*s->r128));
+        s->is_loud = av_calloc(s->channels, sizeof(*s->is_loud));
+        if (!s->r128 || !s->is_loud)
             return AVERROR(ENOMEM);
         for (c = 0; c < s->channels; c++) {
             s->r128[c] = ff_ebur128_init(1, inlink->sample_rate, 0,
@@ -387,7 +387,7 @@ static av_cold void uninit(AVFilterContext *ctx)
     for (c = 0; s->r128 && c < s->channels; c++)
         ff_ebur128_destroy(&s->r128[c]);
     av_freep(&s->r128);
-    av_freep(&s->is_silence);
+    av_freep(&s->is_loud);
     av_freep(&s->nb_null_samples);
     av_freep(&s->start);
 }
