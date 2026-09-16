@@ -277,4 +277,53 @@ static inline int ws_symbol(const uint8_t bits[WS_BITS], int s)
     return (bits[3*s] << 2) | (bits[3*s+1] << 1) | bits[3*s+2];
 }
 
+/* --- video -------------------------------------------------------------
+ *
+ * The same 36-bit frame, ids, codes and key carried in the picture, by the
+ * vwaterstamp / vwaterdetect filters. The 1023-chip code is laid out on a
+ * 33 x 31 grid of cells over the active picture in normalised coordinates,
+ * one chip per cell, so scaling keeps it aligned. Within a cell the chip is
+ * multiplied by a balanced 4 x 4 Walsh carrier: the cell's own content then
+ * cancels exactly when the detector demodulates, and the carrier gives
+ * pixel-scale processing gain. Layer A cycles through WSV_CHIPS cyclic
+ * shifts per 500 ms slot (one per WSV_CHIP_US), layer B holds the slot's
+ * symbol shift plus the same per-chip advance, so that both layers change
+ * every chip and a detector can cancel static picture content by
+ * subtracting a running mean of the demodulated cells. */
+#define WSV_COLS    33
+#define WSV_ROWS    31                  /* 33 x 31 = 1023 cells, one chip each */
+#define WSV_CELLS   (WSV_COLS * WSV_ROWS)
+#define WSV_SUB     4                   /* carrier sub-cells per cell side     */
+#define WSV_SUBCOLS (WSV_COLS * WSV_SUB)
+#define WSV_SUBROWS (WSV_ROWS * WSV_SUB)
+#define WSV_CHIPS   32                  /* layer A chips per slot, 15.625 ms   */
+#define WSV_CHIP_US (WS_SLOT_US / WSV_CHIPS)
+#define WSV_A_STEP  32                  /* cells of cyclic shift per chip      */
+
+static inline uint32_t ws_hash32(uint32_t h)
+{
+    h ^= h >> 16; h *= 0x7feb352du;
+    h ^= h >> 15; h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return h;
+}
+
+/* Balanced +/-1 carrier for sub-cell (sx, sy) of cell c: one of the nine
+ * 4 x 4 Walsh patterns that are non-DC along both axes, chosen per cell.
+ * Zero-mean within every cell, and zero-mean along every row and column
+ * of it, so DC and linear gradients of the picture cancel exactly. */
+static inline int ws_carrier(int c, int sx, int sy)
+{
+    static const int8_t w[4][4] = { { 1, 1, 1, 1 }, { 1, 1, -1, -1 },
+                                    { 1, -1, -1, 1 }, { 1, -1, 1, -1 } };
+    unsigned p = ws_hash32(c * 2654435761u) % 9;
+    return w[1 + p / 3][sy] * w[1 + p % 3][sx];
+}
+
+/* Fixed spatial dither in [0,1) for sub-LSB amplitudes. */
+static inline float ws_dither(int x, int y)
+{
+    return (ws_hash32(x * 73856093u ^ y * 19349663u) & 0xffffff) * (1.0f / 0x1000000);
+}
+
 #endif /* AVFILTER_WATERSTAMP_H */

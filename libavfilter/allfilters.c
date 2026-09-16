@@ -543,6 +543,8 @@ extern const FFFilter ff_vf_vignette;
 extern const FFFilter ff_vf_vmafmotion;
 extern const FFFilter ff_vf_vpp_qsv;
 extern const FFFilter ff_vf_vstack;
+extern const FFFilter ff_vf_vwaterdetect;
+extern const FFFilter ff_vf_vwaterstamp;
 extern const FFFilter ff_vf_w3fdif;
 extern const FFFilter ff_vf_waveform;
 extern const FFFilter ff_vf_weave;

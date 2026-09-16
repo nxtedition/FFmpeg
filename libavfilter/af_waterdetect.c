@@ -198,7 +198,7 @@ static int query_formats(const AVFilterContext *ctx,
     static const AVChannelLayout layouts[] = { AV_CHANNEL_LAYOUT_MONO, { 0 } };
     int ret;
 
-    if ((ret = ff_set_sample_formats_from_list2(ctx, cfg_in, cfg_out, fmts)) < 0 ||
+    if ((ret = ff_set_common_formats_from_list2(ctx, cfg_in, cfg_out, fmts)) < 0 ||
         (ret = ff_set_common_samplerates_from_list2(ctx, cfg_in, cfg_out, rates)) < 0)
         return ret;
     return ff_set_common_channel_layouts_from_list2(ctx, cfg_in, cfg_out, layouts);

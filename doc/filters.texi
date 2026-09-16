@@ -26436,6 +26436,138 @@ If set to 1, force the output to terminate when the shortest input
 terminates. Default value is 0.
 @end table
 
+@section vwaterdetect
+
+Recover the invisible time stamp added by the @ref{vwaterstamp} filter and
+report, per frame, the recovered source time, the offset against a
+reference clock and the drift. This is the video counterpart of
+@ref{waterdetect}: it carries the same 36-bit frame, ids, codes and key,
+and reports the same metadata keys and log line under the name
+@code{vwaterdetect}, so audio and video offsets of one source can be
+compared directly.
+
+The detector skips black letterbox and pillarbox bars, averages the luma
+over a 132x124 grid of the active picture, demodulates the per-cell Walsh
+carrier, subtracts a running mean per cell so that static picture content
+cancels, whitens each cell by its own recent magnitude so that busy edges
+do not outvote quiet areas, and correlates the result with every source's
+code. Frames vote for the slot phase that fits their timestamps, so
+timing is resolved well below one frame period after a few seconds.
+Video passes through unchanged.
+
+The filter accepts the following options:
+
+@table @option
+@item clock
+Reference clock: @code{wall} (default) or @code{pts}, as for
+@ref{waterdetect}.
+
+@item epoch
+Hint for the absolute time in seconds, as for @ref{waterdetect}.
+
+@item threshold
+Lock threshold, the peak-to-sidelobe ratio of the slot-phase accumulator.
+Default 7.
+
+@item area
+@code{auto} (default) skips black letterbox and pillarbox bars, @code{full}
+uses the whole frame.
+
+@item sources
+Maximum number of stamps tracked and reported at once, 1 to 8. Default 4.
+
+@item id
+Only search for this source id. Default -1, search all 64.
+
+@item key
+Secret key the stamps were made with, see @ref{waterstamp}.
+@end table
+
+Metadata: @code{lavfi.vwaterdetect.lock}, @code{.sources}, @code{.id},
+@code{.t} (microseconds), @code{.offset} (milliseconds), @code{.drift}
+(ppm), @code{.snr} (dB) on every frame, and @code{lavfi.vwaterdetect.N.*}
+per locked source, with the same meaning as for @ref{waterdetect}.
+
+@subsection Examples
+
+@itemize
+@item
+Audio-to-video offset of a recording with no usable metadata: run both
+detectors against the media timestamps and subtract the two recovered
+times:
+@example
+ffmpeg -i capture.mp4 -map 0:v:0 -vf vwaterdetect=clock=pts -map 0:a:0 -af waterdetect=clock=pts -f null -
+@end example
+@end itemize
+
+@anchor{vwaterstamp}
+@section vwaterstamp
+
+Add an invisible spread-spectrum absolute-time stamp to the luma of every
+frame. This is the video counterpart of @ref{waterstamp}: the same 36-bit
+frame of sync word, source id, seconds and check field, the same Gold or
+keyed code pair per id, and the same clock, so a capture anywhere
+downstream yields the picture's source time from the pixels alone, after
+scaling, re-encoding, letterboxing or a screen recording, where timecode
+and producer reference time are long gone.
+
+The code is laid on a 33x31 cell grid over the frame in normalised
+coordinates, one chip per cell, multiplied inside each cell by a balanced
+4x4 Walsh carrier that is zero-mean along both axes. The timing layer
+cycles through 32 cyclic shifts per 500 ms slot, one per 15.625 ms; the
+data layer holds the slot's symbol shift plus the same per-chip advance,
+so that both layers change every chip and static content can be cancelled
+at the detector. The amplitude follows the local texture of each cell, clamped in
+LSB, and fractions of an LSB are applied by a fixed spatial dither.
+Absolute time is anchored once and then follows the frame timestamps.
+
+Supported formats: 8-bit YUV 4:2:0, 4:2:2, 4:4:4, NV12/NV21 and gray;
+only the luma plane is modified.
+
+What survives, measured on a 720p25 synthetic clip with camera-like noise
+at the default level: lossless and broadcast-quality H.264 (crf 18),
+scaling up, letterboxing and pillarboxing of the whole frame, brightness
+and contrast changes, frame delays, 25 to 30 fps conversion and a 1000
+ppm speed change, all with the offset within 0.2 ms of the truth. Heavy
+compression (H.264 crf 28, 1 Mbit/s at 720p, 360p) and cropping of the
+stamped frame are not recovered in this version: the first needs more
+amplitude than the default allows, the second a geometry search.
+
+The filter accepts the following options:
+
+@table @option
+@item level
+Amplitude in dB relative to the standard deviation of the luma in each
+cell. Default -26: a cell with 20 LSB of texture gets 1 LSB of stamp.
+
+@item floor
+Minimum amplitude in LSB, applied in flat areas. Default 0.1.
+
+@item ceil
+Maximum amplitude in LSB. Default 1.5.
+
+@item id
+Source id, 0-63, carried in the frame and selecting the code pair. Use
+the same id as the audio stamp of the same source. Default 0.
+
+@item t0
+Absolute time of the first frame in microseconds; 0 (default) takes the
+wall clock at the first frame.
+
+@item key
+Secret key, see @ref{waterstamp}.
+@end table
+
+@subsection Examples
+
+@itemize
+@item
+Stamp picture and sound of one source with the same id and anchor:
+@example
+ffmpeg -i in.mxf -vf vwaterstamp=id=3 -af aresample=async=1,waterstamp=id=3 ...
+@end example
+@end itemize
+
 @section w3fdif
 
 Deinterlace the input video ("w3fdif" stands for "Weston 3 Field
