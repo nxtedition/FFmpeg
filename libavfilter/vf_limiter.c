@@ -26,6 +26,8 @@
 #include "limiter.h"
 #include "video.h"
 
+#define MAX_THREADS 64
+
 typedef struct ThreadData {
     AVFrame *in;
     AVFrame *out;
@@ -40,6 +42,7 @@ typedef struct LimiterContext {
     int linesize[4];
     int width[4];
     int height[4];
+    int rets[MAX_THREADS];
 
     LimiterDSPContext dsp;
 } LimiterContext;
@@ -61,7 +64,7 @@ static av_cold int init(AVFilterContext *ctx)
 {
     LimiterContext *s = ctx->priv;
 
-    if (s->min > s->max)
+    if (s->min >= 0 && s->max >= 0 && s->min > s->max)
         return AVERROR(EINVAL);
     return 0;
 }
@@ -159,7 +162,8 @@ static int filter_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(in->format);
     const int depth = desc->comp[0].depth;
     const int full_range = (1 << depth) - 1;
-    const int is_mpeg = in->color_range == AVCOL_RANGE_MPEG;
+    const int is_mpeg = in->color_range == AVCOL_RANGE_MPEG &&
+                        !(desc->flags & AV_PIX_FMT_FLAG_RGB);
 
     for (p = 0; p < s->nb_planes; p++) {
         const int h = s->height[p];
@@ -184,6 +188,10 @@ static int filter_slice(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
             continue;
         }
 
+        /* check only after resolving no-op planes */
+        if (min > max)
+            return AVERROR(EINVAL);
+
         s->dsp.limiter(in->data[p] + slice_start * in->linesize[p],
                        out->data[p] + slice_start * out->linesize[p],
                        in->linesize[p], out->linesize[p],
@@ -202,6 +210,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     ThreadData td;
     AVFrame *out;
 
+    const int nb_jobs = FFMIN3(ff_filter_get_nb_threads(ctx),
+                               MAX_THREADS, s->height[2]);
+
     if (av_frame_is_writable(in)) {
         out = in;
     } else {
@@ -215,10 +226,17 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     td.out = out;
     td.in = in;
-    ff_filter_execute(ctx, filter_slice, &td, NULL,
-                      FFMIN(s->height[2], ff_filter_get_nb_threads(ctx)));
+    memset(s->rets, 0, sizeof(s->rets));
+    ff_filter_execute(ctx, filter_slice, &td, s->rets, nb_jobs);
     if (out != in)
         av_frame_free(&in);
+
+    for (int i = 0; i < nb_jobs; i++) {
+        if (s->rets[i] < 0) {
+            av_frame_free(&out);
+            return s->rets[i];
+        }
+    }
 
     return ff_filter_frame(outlink, out);
 }
