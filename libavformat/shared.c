@@ -259,7 +259,7 @@ static int set_filesize(URLContext *h, int64_t new_size)
     return ret;
 }
 
-static int is_ignorable_error(int err)
+static int is_ignorable_error(int64_t err)
 {
     switch (err) {
     case AVERROR_EXIT:
@@ -498,7 +498,7 @@ static int spacemap_grow(URLContext *h, int64_t block)
     int64_t filesize = get_filesize(h);
     if (filesize < 0)
         return (int) filesize;
-    else if (filesize) {
+    else if (!filesize) {
         av_assert0(s->block_size > 0);
         map_bytes = FFALIGN(map_bytes, (int64_t) s->block_size);
     }
@@ -658,7 +658,7 @@ static int shared_read(URLContext *h, unsigned char *buf, int size)
     Block *const block = &s->spacemap->blocks[block_id];
     unsigned state = atomic_load_explicit(&block->state, memory_order_acquire);
     int64_t pending_since = 0;
-    int verify_read = 0, acquired = 0;
+    int verify_read = 0, acquired = 0, allocated = 0;
 
 retry:
     switch (state) {
@@ -754,6 +754,7 @@ read_block:
         {
             /* Acquired pending state, proceed to fetch the block */
             acquired = 1;
+            allocated = (state == BLOCK_NONE || state == BLOCK_FAILED);
             state = BLOCK_PENDING;
             break;
         }
@@ -776,7 +777,7 @@ read_block:
             return AVERROR(EAGAIN);
 
         /* Make sure we try a few times before giving up */
-        av_usleep(s->timeout >> 4);
+        av_usleep(FFMIN(s->timeout >> 4, 10000));
         if (ff_check_interrupt(&h->interrupt_callback))
             return AVERROR_EXIT;
 
@@ -828,7 +829,7 @@ read_block:
             av_assert1(!acquired);
             return ret;
         } else {
-            s->pos = s->inner_pos = inner_pos + ret;
+            s->inner_pos = inner_pos + ret;
         }
 
         /* Verify the read data against the cached data if requested */
@@ -836,9 +837,10 @@ read_block:
             av_log(h, AV_LOG_ERROR, "Cache verification failed for %d bytes "
                    "in block 0x%"PRIx64" at offset 0x%"PRIx64" + %"PRId64"!\n",
                    ret, block_id, block_pos, offset);
-            ret = AVERROR(EIO);
+            return AVERROR(EIO);
         }
 
+        s->pos = s->inner_pos;
         return ret;
     }
 
@@ -908,7 +910,7 @@ read_block:
                    "offset 0x%"PRIx64", CRC 0x%08X\n", bytes_read, block_id,
                    block_pos, crc);
             atomic_store_explicit(&block->state, crc, memory_order_release);
-            if (acquired)
+            if (allocated)
                 atomic_fetch_add_explicit(&s->spacemap->blocks_cached, 1, memory_order_release);
         }
     } else {
