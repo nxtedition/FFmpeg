@@ -4688,7 +4688,7 @@ static int copy_buffer_data(AVHWFramesContext *hwfc, FFVkBuffer *vkbuf,
                                 region[i].bufferRowLength,
                                 swf->data[i],
                                 swf->linesize[i],
-                                swf->linesize[i],
+                                FFABS(swf->linesize[i]),
                                 region[i].imageExtent.height);
 
         err = ff_vk_flush_buffer(&p->vkctx, vkbuf, 0, VK_WHOLE_SIZE, 1);
@@ -4710,7 +4710,7 @@ static int copy_buffer_data(AVHWFramesContext *hwfc, FFVkBuffer *vkbuf,
                                 swf->linesize[i],
                                 vkbuf->mapped_mem + region[i].bufferOffset,
                                 region[i].bufferRowLength,
-                                swf->linesize[i],
+                                FFABS(swf->linesize[i]),
                                 region[i].imageExtent.height);
     }
 
@@ -4734,7 +4734,7 @@ static int get_plane_buf(AVHWFramesContext *hwfc, FFVkBuffer **dst,
 
         region[i] = (VkBufferImageCopy) {
             .bufferOffset = buf_offset,
-            .bufferRowLength = FFALIGN(swf->linesize[i],
+            .bufferRowLength = FFALIGN(FFABS(swf->linesize[i]),
                                        p->props.properties.limits.optimalBufferCopyRowPitchAlignment),
             .bufferImageHeight = p_h,
             .imageSubresource.layerCount = 1,
@@ -4766,11 +4766,6 @@ static int host_map_frame(AVHWFramesContext *hwfc, FFVkBuffer **dst, int *nb_buf
     const int planes = av_pix_fmt_count_planes(swf->format);
     VkBufferUsageFlags buf_usage = upload ? VK_BUFFER_USAGE_TRANSFER_SRC_BIT :
                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-
-    /* We can't host map images with negative strides */
-    for (int i = 0; i < planes; i++)
-        if (swf->linesize[i] < 0)
-            return AVERROR(EINVAL);
 
     /* Count the number of buffers in the software frame */
     nb_src_bufs = 0;
@@ -4973,6 +4968,14 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
 
     int host_copy = hwctx->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT &&
                     !(p->dprops.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY);
+    int host_map = p->vkctx.extensions & FF_VK_EXT_EXTERNAL_HOST_MEMORY &&
+                   !p->avoid_host_import;
+
+    /* Host image copies and host mapping address rows upwards from the plane
+     * pointer, so a bottom-up frame goes through the staging buffer */
+    for (int i = 0; i < planes; i++)
+        if (swf->linesize[i] < 0)
+            host_copy = host_map = 0;
 
     /* Host layout transitions may only originate from a host-copyable layout */
     if (!upload && host_copy) {
@@ -5001,7 +5004,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
         /* Buffer region for this plane */
         region[i] = (VkBufferImageCopy) {
             .bufferOffset = 0,
-            .bufferRowLength = swf->linesize[i],
+            .bufferRowLength = FFABS(swf->linesize[i]),
             .bufferImageHeight = p_h,
             .imageSubresource.layerCount = 1,
             .imageExtent = (VkExtent3D){ p_w, p_h, 1 },
@@ -5010,7 +5013,7 @@ static int vulkan_transfer_frame(AVHWFramesContext *hwfc,
     }
 
     /* Setup buffers first */
-    if (p->vkctx.extensions & FF_VK_EXT_EXTERNAL_HOST_MEMORY && !p->avoid_host_import) {
+    if (host_map) {
         err = host_map_frame(hwfc, bufs, &nb_bufs, swf, region, upload);
         if (err >= 0)
             host_mapped = 1;
