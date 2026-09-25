@@ -912,6 +912,13 @@ FATE_FILTER-$(call ALLYES, TESTSRC2_FILTER SPLIT_FILTER AVGBLUR_FILTER        \
 FATE_FILTER-$(call FILTERFRAMECRC, TESTSRC SCALE PREMULTIPLY, LAVFI_INDEV) += fate-filter-scale-premultiply
 fate-filter-scale-premultiply: CMD = framecrc -auto_conversion_filters -lavfi "testsrc,format=rgba,setparams=alpha_mode=premultiplied,format=rgba:alpha_modes=straight" -frames:v 10
 
+# vwaterstamp -> vwaterdetect round trip; lock lines only, as for waterstamp
+VWATERSTAMP_SRC = "testsrc2=size=640x360:rate=25:duration=30,noise=alls=6:allf=t,format=yuv420p"
+FATE_VWATERSTAMP-$(call ALLYES, LAVFI_INDEV TESTSRC2_FILTER NOISE_FILTER FORMAT_FILTER VWATERSTAMP_FILTER VWATERDETECT_FILTER NULL_MUXER) += fate-filter-vwaterstamp
+fate-filter-vwaterstamp: CMD = run ffmpeg$(PROGSUF)$(EXESUF) -nostdin -nostats -hide_banner -f lavfi -i $(VWATERSTAMP_SRC) -vf "vwaterstamp=id=3:t0=1,vwaterdetect=clock=pts" -f null - $(WATERDETECT_LOCKS)
+FATE_FFMPEG += $(FATE_VWATERSTAMP-yes)
+fate-vfilter: $(FATE_VWATERSTAMP-yes)
+
 FATE_SAMPLES_FFPROBE += $(FATE_METADATA_FILTER-yes)
 FATE_SAMPLES_FFMPEG += $(FATE_FILTER_SAMPLES-yes)
 FATE_FFPROBE += $(FATE_FILTER_FFPROBE-yes)

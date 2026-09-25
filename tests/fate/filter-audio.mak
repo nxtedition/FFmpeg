@@ -456,7 +456,20 @@ FATE_AFILTER-yes += fate-filter-formats
 fate-filter-formats: libavfilter/tests/formats$(EXESUF)
 fate-filter-formats: CMD = run libavfilter/tests/formats$(EXESUF)
 
+# waterstamp -> waterdetect round trips. Only the lock lines' id and whole
+# source seconds (rounded) are compared: they come from the decoded payload
+# and hold on every platform, unlike the sub-ms offset.
+WATERSTAMP_SRC = "aevalsrc=exprs=0.15*sin(2*PI*220*t)+0.1*sin(2*PI*659*t)+0.08*sin(2*PI*1760*t):s=48000:d=30,aformat=sample_fmts=flt"
+WATERDETECT_LOCKS = 2>&1 | grep -o "waterdetect lock:[01] id:[0-9]* t:[0-9.]*" | awk -F"t:" "{ printf \"%st:%.0f\\n\", \$$1, \$$2 }"
+FATE_WATERSTAMP-$(call ALLYES, LAVFI_INDEV AEVALSRC_FILTER AFORMAT_FILTER WATERSTAMP_FILTER WATERDETECT_FILTER NULL_MUXER) += \
+    fate-filter-waterstamp fate-filter-waterstamp-keyed fate-filter-waterstamp-keyed-other fate-filter-waterstamp-restamp
+fate-filter-waterstamp: CMD = run ffmpeg$(PROGSUF)$(EXESUF) -nostdin -nostats -hide_banner -f lavfi -i $(WATERSTAMP_SRC) -af "waterstamp=id=3:t0=1,waterdetect=clock=pts" -f null - $(WATERDETECT_LOCKS)
+fate-filter-waterstamp-keyed: CMD = run ffmpeg$(PROGSUF)$(EXESUF) -nostdin -nostats -hide_banner -f lavfi -i $(WATERSTAMP_SRC) -af "waterstamp=id=9:t0=1:key=fate,waterdetect=clock=pts:key=fate" -f null - $(WATERDETECT_LOCKS)
+fate-filter-waterstamp-keyed-other: CMD = run ffmpeg$(PROGSUF)$(EXESUF) -nostdin -nostats -hide_banner -f lavfi -i $(WATERSTAMP_SRC) -af "waterstamp=id=9:t0=1:key=fate,waterdetect=clock=pts:key=other" -f null - $(WATERDETECT_LOCKS)
+fate-filter-waterstamp-restamp: CMD = run ffmpeg$(PROGSUF)$(EXESUF) -nostdin -nostats -hide_banner -f lavfi -i $(WATERSTAMP_SRC) -af "waterstamp=id=3:t0=1,waterstamp=id=7:t0=2000001,waterdetect=clock=pts" -f null - $(WATERDETECT_LOCKS)
+FATE_FFMPEG += $(FATE_WATERSTAMP-yes)
+
 FATE_AFILTER-yes := $(if $(call FRAMECRC), $(FATE_AFILTER-yes))
 FATE_SAMPLES_AVCONV += $(FATE_AFILTER_SAMPLES-yes)
 FATE_FFMPEG += $(FATE_AFILTER-yes)
-fate-afilter: $(FATE_AFILTER-yes) $(FATE_AFILTER_SAMPLES-yes)
+fate-afilter: $(FATE_AFILTER-yes) $(FATE_AFILTER_SAMPLES-yes) $(FATE_WATERSTAMP-yes)
