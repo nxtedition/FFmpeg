@@ -177,7 +177,7 @@ OBJS-$(CONFIG_VIRTUALBASS_FILTER)            += af_virtualbass.o
 OBJS-$(CONFIG_VOLUME_FILTER)                 += af_volume.o
 OBJS-$(CONFIG_VOLUMEDETECT_FILTER)           += af_volumedetect.o
 OBJS-$(CONFIG_WATERDETECT_FILTER)            += af_waterdetect.o
-OBJS-$(CONFIG_WATERSTAMP_FILTER)             += af_waterstamp.o
+OBJS-$(CONFIG_WATERSTAMP_FILTER)             += af_waterstamp.o waterstamp.o
 
 OBJS-$(CONFIG_AEVALSRC_FILTER)               += aeval.o
 OBJS-$(CONFIG_AFDELAYSRC_FILTER)             += asrc_afdelaysrc.o
@@ -580,7 +580,7 @@ OBJS-$(CONFIG_VQE_AMF_FILTER)                += vf_vqe_amf.o vf_amf_common.o
 OBJS-$(CONFIG_VPP_QSV_FILTER)                += vf_vpp_qsv.o
 OBJS-$(CONFIG_VSTACK_FILTER)                 += vf_stack.o framesync.o
 OBJS-$(CONFIG_VWATERDETECT_FILTER)           += vf_vwaterdetect.o
-OBJS-$(CONFIG_VWATERSTAMP_FILTER)            += vf_vwaterstamp.o
+OBJS-$(CONFIG_VWATERSTAMP_FILTER)            += vf_vwaterstamp.o waterstamp.o
 OBJS-$(CONFIG_W3FDIF_FILTER)                 += vf_w3fdif.o
 OBJS-$(CONFIG_WAVEFORM_FILTER)               += vf_waveform.o
 OBJS-$(CONFIG_WEAVE_FILTER)                  += vf_weave.o

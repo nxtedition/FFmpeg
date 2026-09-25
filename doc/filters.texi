@@ -7992,9 +7992,11 @@ CRC-8. The waveform is a pure function of absolute source time, so a
 restart resumes phase-continuous and two emitters fed the same clock
 produce bit-identical output.
 
-Absolute time is anchored once, then advanced by the output sample count
-rather than by timestamps, so the stamp measures the audio's own timeline
-and any downstream sample-rate error appears at the detector as drift.
+Absolute time is anchored once, at the first frame, to that frame's
+timestamp: the stamp of media timestamp @var{p} reads @option{t0} +
+@var{p}. From there it is advanced by the output sample count rather than
+by timestamps, so the stamp measures the audio's own timeline and any
+downstream sample-rate error appears at the detector as drift.
 Put the filter last in the chain, after any @code{aresample=async=1},
 so that inserted or dropped samples do not punch holes in the sequence.
 
@@ -8020,8 +8022,16 @@ detector reports all of them. Each added stamp raises the total watermark
 level by 10 log10(N) dB. Default 0.
 
 @item t0
-Absolute time of the first output sample in microseconds. The default of
-0 takes the wall clock at the first frame.
+Absolute time of media timestamp 0, in microseconds. The default of 0
+anchors to the wall clock at the first frame; all emitters of one
+@option{group} in the process share that anchor, so the audio and video
+stamps of one source agree.
+
+@item group
+Name of the wall-clock anchor group. Emitters with the same group
+(@code{waterstamp} and @code{vwaterstamp} alike) share the anchor set by
+the first of them; give unrelated sources in one process different
+groups. Default @code{default}.
 
 @item attack
 Level detector attack time in seconds. Default 0.005.
@@ -26545,7 +26555,9 @@ data layer holds the slot's symbol shift plus the same per-chip advance,
 so that both layers change every chip and static content can be cancelled
 at the detector. The amplitude follows the local texture of each cell, clamped in
 LSB, and fractions of an LSB are applied by a fixed spatial dither.
-Absolute time is anchored once and then follows the frame timestamps.
+The stamp of media timestamp @var{p} reads @option{t0} + @var{p}, the
+same timeline as @ref{waterstamp}, so the two detectors report comparable
+times for picture and sound.
 
 Supported formats: 8-bit YUV 4:2:0, 4:2:2, 4:4:4, NV12/NV21 and gray;
 only the luma plane is modified.
@@ -26579,8 +26591,12 @@ Source id, 0-63, carried in the frame and selecting the code pair. Use
 the same id as the audio stamp of the same source. Default 0.
 
 @item t0
-Absolute time of the first frame in microseconds; 0 (default) takes the
-wall clock at the first frame.
+Absolute time of media timestamp 0 in microseconds; 0 (default) anchors
+to the wall clock, shared with the other emitters of the same
+@option{group}.
+
+@item group
+Wall-clock anchor group, see @ref{waterstamp}. Default @code{default}.
 
 @item key
 Secret key, see @ref{waterstamp}.
@@ -26600,7 +26616,8 @@ Fixed amplitude in LSB for @code{mode=test}. Default 8.
 
 @itemize
 @item
-Stamp picture and sound of one source with the same id and anchor:
+Stamp picture and sound of one source with the same id; they share the
+wall-clock anchor of the default group:
 @example
 ffmpeg -i in.mxf -vf vwaterstamp=id=3 -af aresample=async=1,waterstamp=id=3 ...
 @end example

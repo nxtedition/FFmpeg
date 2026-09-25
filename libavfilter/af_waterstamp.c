@@ -23,9 +23,11 @@
  * @file
  * Mix an inaudible spread-spectrum absolute-time stamp into audio.
  *
- * Absolute time is anchored once (wall clock or the t0 option) and then
- * advanced by the running output sample count, never by PTS, so the stamp
- * measures the audio's own timeline: any downstream sample-rate error then
+ * Absolute time is anchored once, at the first frame, to that frame's
+ * timestamp (t0 is the time of media timestamp 0, from the option or a
+ * wall-clock anchor shared with the other emitters of the process), and
+ * then advanced by the running output sample count, never by PTS, so the
+ * stamp measures the audio's own timeline: any downstream sample-rate error then
  * shows up at the detector as a slope, which is how fixed delay and drift
  * are told apart.
  *
@@ -52,7 +54,8 @@ typedef struct WaterStampContext {
     double floor_db;    /* dBFS absolute minimum               */
     double ceil_db;     /* dBFS absolute maximum               */
     int    id;          /* source id, carried in the frame     */
-    int64_t opt_t0;     /* absolute time of the first sample, us; 0 = wall clock */
+    int64_t opt_t0;     /* absolute time of media timestamp 0, us; 0 = wall clock */
+    char   *group;      /* emitters sharing one wall-clock anchor */
     double attack;      /* level detector attack, s            */
     double release;     /* level detector release, s           */
     char  *key;         /* secret: keys codes and check field   */
@@ -93,7 +96,8 @@ static const AVOption waterstamp_options[] = {
     { "floor",   "absolute minimum level in dBFS",                       OFFSET(floor_db), AV_OPT_TYPE_DOUBLE, {.dbl = -65},  -120,   0, FLAGS },
     { "ceil",    "absolute maximum level in dBFS",                       OFFSET(ceil_db),  AV_OPT_TYPE_DOUBLE, {.dbl = -35},  -120,   0, FLAGS },
     { "id",      "source id (0-63), carried in the frame and selecting the code pair", OFFSET(id), AV_OPT_TYPE_INT, {.i64 = 0}, 0, WS_MAX_IDS - 1, FLAGS },
-    { "t0",      "absolute time of the first sample in microseconds, 0 = wall clock", OFFSET(opt_t0), AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, FLAGS },
+    { "t0",      "absolute time of media timestamp 0 in microseconds, 0 = wall clock", OFFSET(opt_t0), AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, FLAGS },
+    { "group",   "emitters of one group share their wall-clock anchor", OFFSET(group), AV_OPT_TYPE_STRING, {.str = "default"}, 0, 0, FLAGS },
     { "attack",  "level detector attack in seconds",                     OFFSET(attack),   AV_OPT_TYPE_DOUBLE, {.dbl = 0.005}, 0.0001, 5, FLAGS },
     { "release", "level detector release in seconds, keep >= one 0.5 s slot", OFFSET(release), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0.01, 30, FLAGS },
     { "key",     "secret key: derives the code pair and the frame check field, so only a detector with the same key reads the stamp", OFFSET(key), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
@@ -174,7 +178,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     double tp;
 
     if (!s->anchored) {
-        s->t0_us    = s->opt_t0 ? s->opt_t0 : av_gettime();
+        const int64_t pts_us = in->pts == AV_NOPTS_VALUE ? 0 :
+                               av_rescale_q(in->pts, inlink->time_base, AV_TIME_BASE_Q);
+        s->t0_us    = (s->opt_t0 ? s->opt_t0 : ff_waterstamp_wall_anchor(s->group, pts_us)) + pts_us;
         s->n        = 0;
         s->anchored = 1;
         av_log(ctx, AV_LOG_INFO,
@@ -238,6 +244,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
      * frame we step in double, which is exact enough over one frame and
      * cannot accumulate drift across frames. */
     t_us = s->t0_us + av_rescale(s->n, 1000000, inlink->sample_rate);
+    if (t_us < 0) {                            /* before the time origin */
+        s->n += nb;
+        if (out != in)
+            av_frame_free(&out);
+        return ff_filter_frame(outlink, in);
+    }
     slot = t_us / WS_SLOT_US;                  /* t0 >= 0, so this floors */
     tp   = (t_us - slot * WS_SLOT_US) * 1e-6;  /* time within slot, 0..0.5 */
 

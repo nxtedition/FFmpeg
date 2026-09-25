@@ -277,6 +277,14 @@ static inline int ws_symbol(const uint8_t bits[WS_BITS], int s)
     return (bits[3*s] << 2) | (bits[3*s+1] << 1) | bits[3*s+2];
 }
 
+/**
+ * Wall-clock anchor of an emitter group: the absolute time, in us, of media
+ * timestamp 0. The first emitter of a group to ask sets it from the wall
+ * clock and the frame it holds (at pts_us); every later one gets the same
+ * value, so picture and sound stamped in one process share one timeline.
+ */
+int64_t ff_waterstamp_wall_anchor(const char *group, int64_t pts_us);
+
 /* --- video -------------------------------------------------------------
  *
  * The same 36-bit frame, ids, codes and key carried in the picture, by the

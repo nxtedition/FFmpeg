@@ -30,8 +30,9 @@
  * per 15.625 ms chip, read from the frame's time), layer B holds the
  * slot's symbol shift plus the same per-chip advance. The amplitude follows the local texture of each
  * cell, clamped in LSB, and sub-LSB amplitudes are applied by a fixed
- * spatial dither. Absolute time is anchored once and then follows the
- * frame timestamps.
+ * spatial dither. Absolute time is t0 plus the frame timestamp, where t0
+ * (the time of media timestamp 0) comes from the option or from a
+ * wall-clock anchor shared with the other emitters of the process.
  */
 
 #include <math.h>
@@ -53,6 +54,7 @@ typedef struct VWaterStampContext {
     double  ceil_lsb;       /* maximum amplitude, LSB                */
     int     id;
     int64_t opt_t0;
+    char   *group;
     char   *key;
     size_t  keylen;
     int     mode;
@@ -67,8 +69,7 @@ typedef struct VWaterStampContext {
     int     shiftB;
 
     int     anchored;
-    int64_t t0_us;
-    int64_t first_pts;
+    int64_t t0_us;          /* absolute time of media timestamp 0     */
 
     int     w, h;
     int    *colsub, *rowsub;    /* pixel -> sub-cell column / row         */
@@ -89,7 +90,8 @@ static const AVOption vwaterstamp_options[] = {
     { "floor", "minimum amplitude in LSB",                                       OFFSET(floor_lsb), AV_OPT_TYPE_DOUBLE, {.dbl = 0.1},    0,  8, FLAGS },
     { "ceil",  "maximum amplitude in LSB",                                       OFFSET(ceil_lsb),  AV_OPT_TYPE_DOUBLE, {.dbl = 1.5},    0, 16, FLAGS },
     { "id",    "source id (0-63), carried in the frame and selecting the code pair", OFFSET(id),   AV_OPT_TYPE_INT,    {.i64 = 0},      0, WS_MAX_IDS - 1, FLAGS },
-    { "t0",    "absolute time of the first frame in microseconds, 0 = wall clock", OFFSET(opt_t0), AV_OPT_TYPE_INT64,  {.i64 = 0},      0, INT64_MAX, FLAGS },
+    { "t0",    "absolute time of media timestamp 0 in microseconds, 0 = wall clock", OFFSET(opt_t0), AV_OPT_TYPE_INT64,  {.i64 = 0},      0, INT64_MAX, FLAGS },
+    { "group", "emitters of one group share their wall-clock anchor",           OFFSET(group),     AV_OPT_TYPE_STRING, {.str = "default"}, 0, 0, FLAGS },
     { "key",   "secret key: derives the code pair and the frame check field",   OFFSET(key),       AV_OPT_TYPE_STRING, {.str = NULL},   0,  0, FLAGS },
     { "mode",  "normal: invisible, amplitude follows texture; test: fixed visible amplitude for QC feeds", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_NORMAL}, 0, NB_MODES - 1, FLAGS, .unit = "mode" },
     { "normal", "invisible, amplitude relative to local texture",             0,                 AV_OPT_TYPE_CONST,  {.i64 = MODE_NORMAL}, 0, 0, FLAGS, .unit = "mode" },
@@ -178,7 +180,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
     AVFilterContext *ctx  = inlink->dst;
     VWaterStampContext *s = ctx->priv;
-    int64_t t_us, slot, frm;
+    int64_t t_us, pts_us, slot, frm;
     int si, kA, shiftA, ret;
     uint8_t *y;
     int ls;
@@ -187,9 +189,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         av_log(ctx, AV_LOG_WARNING, "frame without timestamp, passed through unstamped\n");
         return ff_filter_frame(ctx->outputs[0], frame);
     }
+    pts_us = av_rescale_q(frame->pts, inlink->time_base, AV_TIME_BASE_Q);
     if (!s->anchored) {
-        s->first_pts = frame->pts;
-        s->t0_us     = s->opt_t0 ? s->opt_t0 : av_gettime();
+        s->t0_us     = s->opt_t0 ? s->opt_t0 : ff_waterstamp_wall_anchor(s->group, pts_us);
         s->anchored  = 1;
         av_log(ctx, AV_LOG_INFO,
                "vwaterstamp anchored t0:%"PRId64".%06d id:%d keyed:%d mode:%s level:%g floor:%g ceil:%g\n",
@@ -197,7 +199,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
                s->mode == MODE_TEST ? "test" : "normal",
                s->mode == MODE_TEST ? s->test_level : s->level, s->floor_lsb, s->ceil_lsb);
     }
-    t_us = s->t0_us + av_rescale_q(frame->pts - s->first_pts, inlink->time_base, AV_TIME_BASE_Q);
+    t_us = s->t0_us + pts_us;
     if (t_us < 0)
         return ff_filter_frame(ctx->outputs[0], frame);
 
