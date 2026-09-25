@@ -23,9 +23,9 @@
  * @file
  * Recover the waterstamp time stamp(s) from decoded audio and report offsets.
  *
- * Processing chain, all at a forced 8184 Hz mono float input (4 samples per
- * chip; FFmpeg inserts the conversion and the downmix sums the identical
- * per-channel watermarks coherently):
+ * The audio passes through untouched. Internally every channel except LFE
+ * is summed with equal weight (the per-channel watermarks add coherently)
+ * and resampled to 8184 Hz mono float, 4 samples per chip, then:
  *
  *   1. quadrature demodulation at the 2000 Hz carrier, low-pass, decimate
  *      by 2 -> complex baseband at 4092 Hz, two samples per chip;
@@ -58,10 +58,10 @@
 #include "libavutil/opt.h"
 #include "libavutil/time.h"
 #include "libavutil/tx.h"
+#include "libswresample/swresample.h"
 #include "audio.h"
 #include "avfilter.h"
 #include "filters.h"
-#include "formats.h"
 #include "waterstamp.h"
 
 #define FFT_N       4096                    /* >= 2 * WS_BB_PERIOD          */
@@ -139,6 +139,12 @@ typedef struct WaterDetectContext {
     size_t  keylen;
     int     wide;
 
+    /* downmix + resampler to the analysis rate */
+    SwrContext     *swr;
+    float          *ana;                /* analysis samples of one frame    */
+    int             ana_size;
+    int64_t         in_total;           /* input samples seen, input rate   */
+
     /* demodulator + decimator */
     AVComplexFloat lo[LO_PERIOD];
     float          fir[FIR_TAPS];
@@ -196,29 +202,48 @@ static const AVOption waterdetect_options[] = {
 
 AVFILTER_DEFINE_CLASS(waterdetect);
 
-static int query_formats(const AVFilterContext *ctx,
-                         AVFilterFormatsConfig **cfg_in,
-                         AVFilterFormatsConfig **cfg_out)
+static int config_input(AVFilterLink *inlink)
 {
-    static const enum AVSampleFormat fmts[] = { AV_SAMPLE_FMT_FLT, AV_SAMPLE_FMT_NONE };
-    static const int rates[] = { WS_ANALYSIS_RATE, -1 };
-    static const AVChannelLayout layouts[] = { AV_CHANNEL_LAYOUT_MONO, { 0 } };
-    int ret;
+    AVFilterContext *ctx = inlink->dst;
+    WaterDetectContext *s = ctx->priv;
+    const AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO;
+    const int nb_ch = inlink->ch_layout.nb_channels;
+    double *matrix;
+    int n = 0, ret;
 
-    if ((ret = ff_set_common_formats_from_list2(ctx, cfg_in, cfg_out, fmts)) < 0 ||
-        (ret = ff_set_common_samplerates_from_list2(ctx, cfg_in, cfg_out, rates)) < 0)
-        return ret;
-    return ff_set_common_channel_layouts_from_list2(ctx, cfg_in, cfg_out, layouts);
+    matrix = av_calloc(nb_ch, sizeof(*matrix));
+    if (!matrix)
+        return AVERROR(ENOMEM);
+    for (int ch = 0; ch < nb_ch; ch++) {
+        enum AVChannel c = av_channel_layout_channel_from_index(&inlink->ch_layout, ch);
+        if (c != AV_CHAN_LOW_FREQUENCY && c != AV_CHAN_LOW_FREQUENCY_2)
+            matrix[ch] = 1.0, n++;
+    }
+    for (int ch = 0; ch < nb_ch; ch++)
+        matrix[ch] = n ? matrix[ch] / n : 1.0 / nb_ch;
+
+    swr_free(&s->swr);
+    ret = swr_alloc_set_opts2(&s->swr, &mono, AV_SAMPLE_FMT_FLT, WS_ANALYSIS_RATE,
+                              &inlink->ch_layout, inlink->format, inlink->sample_rate,
+                              0, ctx);
+    if (ret >= 0)
+        ret = swr_set_matrix(s->swr, matrix, nb_ch);
+    if (ret >= 0)
+        ret = swr_init(s->swr);
+    av_free(matrix);
+    return ret;
 }
 
-/* Reference at complex baseband: the sequence at two samples per chip.
- * The carrier is gone after demodulation and the half-sine chip pulse
- * samples to a constant at u = 0.25 and 0.75, so only the chips remain. */
+/* Reference at complex baseband, two samples per chip: the chip value at
+ * the chip centre (odd samples), where the half-sine pulse peaks, and zero
+ * on the chip boundary. Symmetric about the pulse, so the correlation peak
+ * is unbiased; a reference held over the whole chip reads a quarter chip
+ * (0.09 ms) late. Lag 0 is still a chip boundary at baseband sample 0. */
 static void build_reference(WaterDetectContext *s, AVComplexFloat *Ref, const int8_t *seq)
 {
     memset(s->win, 0, FFT_N * sizeof(*s->win));
-    for (int m = 0; m < WS_BB_PERIOD; m++)
-        s->win[m].re = seq[m >> 1];
+    for (int c = 0; c < WS_SEQ_LEN; c++)
+        s->win[2 * c + 1].re = seq[c];
     s->tx_fn(s->tx, Ref, s->win, sizeof(AVComplexFloat));
     for (int k = 0; k < FFT_N; k++)
         Ref[k].im = -Ref[k].im;
@@ -314,6 +339,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&s->cand);
     av_freep(&s->cand_mem);
     av_freep(&s->trk_mem);
+    av_freep(&s->ana);
+    swr_free(&s->swr);
 }
 
 /* ---- time bookkeeping ------------------------------------------------ */
@@ -851,27 +878,54 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
     AVFilterContext *ctx = inlink->dst;
     WaterDetectContext *s  = ctx->priv;
-    const float *x = (const float *)frame->data[0];
-    const double frame_bb = s->in_count / 2.0;
+    /* position of this frame's first sample at the analysis rate; the
+     * resampler's own delay is compensated, so output sample k lines up
+     * with input time k / 8184 */
+    const int64_t frame_n = av_rescale(s->in_total, WS_ANALYSIS_RATE, inlink->sample_rate);
+    const double frame_bb = frame_n / 2.0;
+    const float *x;
     int64_t map_us;
+    int nb_out, max_out;
 
     /* the first sample of this frame on the reference clock: its pts, or
      * the wall clock now minus the frame's duration (it has just arrived) */
     if (s->clock_mode == CLOCK_WALL)
-        map_us = av_gettime() - av_rescale(frame->nb_samples, 1000000, WS_ANALYSIS_RATE);
+        map_us = av_gettime() - av_rescale(frame->nb_samples, 1000000, inlink->sample_rate);
     else if (frame->pts != AV_NOPTS_VALUE)
         map_us = av_rescale_q(frame->pts, inlink->time_base, AV_TIME_BASE_Q);
     else
         map_us = s->have_map ? measured_us_at(s, frame_bb) : 0;
-    s->map_n  = s->in_count;
+    s->map_n  = frame_n;
     s->map_us = map_us;
+    s->in_total += frame->nb_samples;
+
+    max_out = swr_get_out_samples(s->swr, frame->nb_samples);
+    if (max_out < 0)
+        return max_out;
+    if (s->ana_size < max_out) {
+        av_freep(&s->ana);
+        s->ana_size = 0;
+        s->ana = av_malloc_array(max_out, sizeof(*s->ana));
+        if (!s->ana) {
+            av_frame_free(&frame);
+            return AVERROR(ENOMEM);
+        }
+        s->ana_size = max_out;
+    }
+    nb_out = swr_convert(s->swr, (uint8_t **)&s->ana, max_out,
+                         (const uint8_t **)frame->extended_data, frame->nb_samples);
+    if (nb_out < 0) {
+        av_frame_free(&frame);
+        return nb_out;
+    }
+    x = s->ana;
     if (!s->have_map) {
         s->epoch_ref_us = map_us;
         s->have_map     = 1;
     }
 
     /* demodulate, low-pass, decimate by two into the baseband ring */
-    for (int i = 0; i < frame->nb_samples; i++) {
+    for (int i = 0; i < nb_out; i++) {
         const AVComplexFloat lo = s->lo[s->in_count % LO_PERIOD];
         int64_t n = s->in_count++;
         s->dline[s->dl_pos].re = x[i] * lo.re;
@@ -900,6 +954,7 @@ static const AVFilterPad waterdetect_inputs[] = {
     {
         .name         = "default",
         .type         = AVMEDIA_TYPE_AUDIO,
+        .config_props = config_input,
         .filter_frame = filter_frame,
     },
 };
@@ -908,10 +963,10 @@ const FFFilter ff_af_waterdetect = {
     .p.name        = "waterdetect",
     .p.description = NULL_IF_CONFIG_SMALL("Recover the waterstamp time stamp and report the offset."),
     .p.priv_class  = &waterdetect_class,
+    .p.flags       = AVFILTER_FLAG_METADATA_ONLY,
     .priv_size     = sizeof(WaterDetectContext),
     .init          = init,
     .uninit        = uninit,
     FILTER_INPUTS(waterdetect_inputs),
     FILTER_OUTPUTS(ff_audio_default_filterpad),
-    FILTER_QUERY_FUNC2(query_formats),
 };

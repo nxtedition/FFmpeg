@@ -7864,13 +7864,14 @@ Recover the inaudible spread-spectrum time stamp mixed in by the
 @ref{waterstamp} filter and report the recovered source time, the offset
 against a reference clock and the sample-rate drift.
 
-The filter forces its input to mono float at 8184 Hz (four samples per
-chip); FFmpeg inserts the conversion, and the default downmix sums the
-identical per-channel watermarks coherently. Decisions are made on
+The audio passes through untouched, so the filter can sit in a live
+chain. Internally it sums every channel except LFE with equal weight,
+which adds the identical per-channel watermarks coherently, and resamples
+the sum to 8184 Hz (four samples per chip). Decisions are made on
 correlation peaks, never on amplitude, so gain changes, normalisation,
 equalisation and slow compression do not affect the measurement.
 
-Audio passes through unchanged. Detection state is reported as frame
+Detection state is reported as frame
 metadata and as a single @code{key:value} log line on lock acquisition, on
 lock loss and once per 6 s frame thereafter:
 
@@ -7888,8 +7889,10 @@ needs the emitter and detector clocks to agree (NTP). @code{pts} uses the
 media timestamps, which makes an offline file self-contained.
 
 @item epoch
-Hint for the absolute time in seconds. The payload carries seconds modulo
-32768 (9.1 h); the hint resolves that ambiguity. The default of @code{-1}
+Hint for the absolute time in seconds at the first input frame; it then
+advances with the reference clock, so a long run stays resolved. The
+payload carries seconds modulo 32768 (9.1 h); the hint resolves that
+ambiguity. The default of @code{-1}
 resolves it against the reference clock, which for @code{clock=pts} means
 the payload is reported as is.
 
