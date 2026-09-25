@@ -161,7 +161,7 @@ static const AVOption vwaterdetect_options[] = {
     { "wall",      "detector wall clock",                        0,                  AV_OPT_TYPE_CONST, {.i64 = CLOCK_WALL}, 0, 0, FLAGS, .unit = "clock" },
     { "pts",       "frame timestamps",                           0,                  AV_OPT_TYPE_CONST, {.i64 = CLOCK_PTS},  0, 0, FLAGS, .unit = "clock" },
     { "epoch",     "hint for the absolute time in seconds, -1 = use the reference clock", OFFSET(epoch), AV_OPT_TYPE_INT64, {.i64 = -1}, -1, INT64_MAX, FLAGS },
-    { "threshold", "acquisition threshold, peak-to-sidelobe ratio of the phase accumulator", OFFSET(thresh), AV_OPT_TYPE_DOUBLE, {.dbl = 5}, 1, 50, FLAGS },
+    { "threshold", "acquisition threshold, peak-to-sidelobe ratio of the phase accumulator, -1 = auto", OFFSET(thresh), AV_OPT_TYPE_DOUBLE, {.dbl = -1}, -1, 50, FLAGS },
     { "area",      "active picture area",                        OFFSET(area_mode),  AV_OPT_TYPE_INT,   {.i64 = AREA_AUTO}, 0, NB_AREA - 1, FLAGS, .unit = "area" },
     { "auto",      "skip black letterbox and pillarbox bars",    0,                  AV_OPT_TYPE_CONST, {.i64 = AREA_AUTO}, 0, 0, FLAGS, .unit = "area" },
     { "full",      "use the full frame",                         0,                  AV_OPT_TYPE_CONST, {.i64 = AREA_FULL}, 0, 0, FLAGS, .unit = "area" },
@@ -201,6 +201,10 @@ static av_cold int init(AVFilterContext *ctx)
             return AVERROR_BUG;
         }
     s->nvh = s->wide ? WIDE_STEPS : 1;
+    /* a wide search tries 21 speeds per code and geometry: a strong stamp's
+     * cross-talk then clears a low threshold somewhere */
+    if (s->thresh < 0)
+        s->thresh = s->wide ? 7 : 5;
     for (int h = 0; h < s->nvh; h++)
         s->vh_scale[h] = s->wide ? 1.0 + (h - WIDE_PCT * 2) * 0.005 : 1.0;
     s->cand   = av_calloc((size_t)NB_GEOM * WS_MAX_IDS * s->nvh * NPH, sizeof(*s->cand));

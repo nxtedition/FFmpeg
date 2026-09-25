@@ -26530,7 +26530,7 @@ Hint for the absolute time in seconds, as for @ref{waterdetect}.
 @item threshold
 Acquisition threshold, the peak-to-sidelobe ratio of the slot-phase
 accumulator. It only starts a tracker: nothing is reported until whole
-frames decode. Default 5.
+frames decode. The default of -1 picks 5, or 7 with @option{wide}.
 
 @item area
 @code{auto} (default) searches both the whole frame and the picture
