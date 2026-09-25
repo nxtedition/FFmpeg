@@ -133,7 +133,7 @@ typedef struct VWaterDetectContext {
     float   r_pow[WSV_CELLS];           /* running |r| per cell: whitening        */
     int     have_avg;
 
-    int64_t first_pts_us;
+    int64_t epoch_ref_us;               /* reference clock at the first frame  */
     int     have_first_pts;
     int64_t now_us;
 } VWaterDetectContext;
@@ -401,8 +401,8 @@ static void try_frame(AVFilterContext *ctx, VTracker *t, int64_t pts_us)
         unsigned want = (t->last_payload + WS_FRAME_S * nfrm) & (WS_PAYLOAD_MOD - 1);
         if (nfrm >= 1 && dslot % WS_SLOTS == 0 && want == payload) {
             int64_t ref_s, pts0 = llrint(t->sym_tau[(t->nsym - WS_SLOTS) % WS_SLOTS]);
-            if (s->epoch >= 0)
-                ref_s = s->epoch;
+            if (s->epoch >= 0)   /* the hint advances with the reference clock */
+                ref_s = s->epoch + (measured_us(s, pts_us) - s->epoch_ref_us) / 1000000;
             else if (s->clock_mode == CLOCK_WALL)
                 ref_s = measured_us(s, pts_us) / 1000000;
             else
@@ -716,7 +716,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     s->now_us = av_gettime();
     pts_us = av_rescale_q(frame->pts, inlink->time_base, AV_TIME_BASE_Q);
     if (!s->have_first_pts) {
-        s->first_pts_us   = pts_us;
+        s->epoch_ref_us   = measured_us(s, pts_us);
         s->have_first_pts = 1;
     }
 

@@ -168,10 +168,12 @@ typedef struct WaterDetectContext {
     Tracker    trk[MAX_TRACKERS];
     float     *trk_mem;
 
-    /* measured clock */
-    int64_t  first_pts_us;
-    int      have_first_pts;
-    int64_t  now_us;                    /* wall clock at the current frame    */
+    /* measured clock: input sample map_n (8184 Hz) was at map_us on the
+     * reference clock; refreshed every frame, so pts gaps are followed */
+    int64_t  map_n;
+    int64_t  map_us;
+    int64_t  epoch_ref_us;              /* reference clock at the first frame */
+    int      have_map;
 } WaterDetectContext;
 
 #define OFFSET(x) offsetof(WaterDetectContext, x)
@@ -319,10 +321,17 @@ static av_cold void uninit(AVFilterContext *ctx)
 /* Measured (reference clock) time of the input sample at baseband position x. */
 static int64_t measured_us_at(const WaterDetectContext *s, double bb_pos)
 {
-    double n = 2.0 * bb_pos;
-    if (s->clock_mode == CLOCK_PTS)
-        return s->first_pts_us + llrint(n * 1e6 / WS_ANALYSIS_RATE);
-    return s->now_us - llrint((s->in_count - n) * 1e6 / WS_ANALYSIS_RATE);
+    return s->map_us + llrint((2.0 * bb_pos - s->map_n) * 1e6 / WS_ANALYSIS_RATE);
+}
+
+/* Reference second used to resolve the 9.1 h payload ambiguity. */
+static int64_t reference_s(const WaterDetectContext *s, double bb_pos, unsigned payload)
+{
+    if (s->epoch >= 0)   /* the hint advances with the reference clock */
+        return s->epoch + (measured_us_at(s, bb_pos) - s->epoch_ref_us) / 1000000;
+    if (s->clock_mode == CLOCK_WALL)
+        return measured_us_at(s, bb_pos) / 1000000;
+    return payload;
 }
 
 /* Recovered source time of the input sample at baseband position x. */
@@ -515,13 +524,7 @@ static void try_frame(AVFilterContext *ctx, Tracker *t)
 
         if (nfrm >= 1 && fabs(resid) < 8.0 && want == payload) {
             /* coarse time: resolve the 9.1 h ambiguity */
-            int64_t ref_s;
-            if (s->epoch >= 0)
-                ref_s = s->epoch;
-            else if (s->clock_mode == CLOCK_WALL)
-                ref_s = measured_us_at(s, frame_pos) / 1000000;
-            else
-                ref_s = payload;
+            int64_t ref_s = reference_s(s, frame_pos, payload);
             k = (ref_s - (int64_t)payload + WS_PAYLOAD_MOD / 2);
             k = k >= 0 ? k / WS_PAYLOAD_MOD : -((-k + WS_PAYLOAD_MOD - 1) / WS_PAYLOAD_MOD);
 
@@ -811,8 +814,9 @@ static void set_tracker_metadata(const Tracker *t, AVFrame *frame, const char *p
     av_dict_set(&frame->metadata, key, buf, 0);
 }
 
-static void set_metadata(WaterDetectContext *s, AVFrame *frame, double bb_pos, int64_t measured_us)
+static void set_metadata(WaterDetectContext *s, AVFrame *frame, double bb_pos)
 {
+    const int64_t measured_us = measured_us_at(s, bb_pos);
     const Tracker *primary = NULL;
     char prefix[48], buf[32];
     int n = 0;
@@ -849,18 +853,22 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     WaterDetectContext *s  = ctx->priv;
     const float *x = (const float *)frame->data[0];
     const double frame_bb = s->in_count / 2.0;
-    int64_t measured_us;
+    int64_t map_us;
 
-    s->now_us = av_gettime();
-    if (!s->have_first_pts) {
-        s->first_pts_us = frame->pts == AV_NOPTS_VALUE ? 0 :
-                          av_rescale_q(frame->pts, inlink->time_base, AV_TIME_BASE_Q);
-        s->have_first_pts = 1;
+    /* the first sample of this frame on the reference clock: its pts, or
+     * the wall clock now minus the frame's duration (it has just arrived) */
+    if (s->clock_mode == CLOCK_WALL)
+        map_us = av_gettime() - av_rescale(frame->nb_samples, 1000000, WS_ANALYSIS_RATE);
+    else if (frame->pts != AV_NOPTS_VALUE)
+        map_us = av_rescale_q(frame->pts, inlink->time_base, AV_TIME_BASE_Q);
+    else
+        map_us = s->have_map ? measured_us_at(s, frame_bb) : 0;
+    s->map_n  = s->in_count;
+    s->map_us = map_us;
+    if (!s->have_map) {
+        s->epoch_ref_us = map_us;
+        s->have_map     = 1;
     }
-    measured_us = s->clock_mode == CLOCK_PTS
-                ? (frame->pts == AV_NOPTS_VALUE ? measured_us_at(s, frame_bb)
-                                                : av_rescale_q(frame->pts, inlink->time_base, AV_TIME_BASE_Q))
-                : s->now_us;
 
     /* demodulate, low-pass, decimate by two into the baseband ring */
     for (int i = 0; i < frame->nb_samples; i++) {
@@ -884,7 +892,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     }
 
     run_detector(ctx);
-    set_metadata(s, frame, frame_bb, measured_us);
+    set_metadata(s, frame, frame_bb);
     return ff_filter_frame(ctx->outputs[0], frame);
 }
 
