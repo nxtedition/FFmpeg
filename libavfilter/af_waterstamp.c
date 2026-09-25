@@ -31,8 +31,11 @@
  * shows up at the detector as a slope, which is how fixed delay and drift
  * are told apart.
  *
- * The same waveform is added to every channel at identical phase; a
- * downstream downmix therefore sums it coherently.
+ * The same waveform is added to every channel at identical phase, so a
+ * downstream downmix sums it coherently. Its level follows the programme
+ * band of the mix, but never exceeds a channel's own band level, so a
+ * quiet channel is stamped relative to itself; a channel below the gate
+ * (digital silence, an unused track) and LFE are left untouched.
  */
 
 #include <math.h>
@@ -58,6 +61,7 @@ typedef struct WaterStampContext {
     char   *group;      /* emitters sharing one wall-clock anchor */
     double attack;      /* level detector attack, s            */
     double release;     /* level detector release, s           */
+    double gate_db;     /* dBFS: quieter channels get no stamp  */
     char  *key;         /* secret: keys codes and check field   */
     size_t keylen;
     int    mode;        /* MODE_NORMAL or MODE_TEST              */
@@ -65,11 +69,16 @@ typedef struct WaterStampContext {
     float  lin_test;
 
     /* derived */
-    float lin_level, lin_floor, lin_ceil;
-    float a_att, a_rel;
+    float lin_level, lin_floor, lin_ceil, gate_pow;
+    float a_att, a_rel, a_gate;
     float b0, b2, a1, a2;   /* RBJ band-pass, DF2T; b1 == 0     */
     float z1, z2;
     float env;
+
+    /* per channel: band-pass state, band and broadband envelopes, gate */
+    int    nb_ch;
+    float *cz1, *cz2, *cenv, *cbb, *cgain;
+    uint8_t *lfe;
 
     int8_t  seqA[WS_SEQ_LEN];
     int8_t  seqB[WS_SEQ_LEN];
@@ -82,7 +91,9 @@ typedef struct WaterStampContext {
     int64_t t0_us;      /* absolute time of output sample 0    */
     int64_t n;          /* output samples emitted so far       */
 
-    float  *tmp;        /* per-sample work buffer              */
+    float  *tmp;        /* per-sample work buffer: unit waveform */
+    float  *mixenv;     /* per-sample band power of the mix      */
+    float  *gains;      /* per-sample, per-channel gate gain     */
     int     tmp_size;
 } WaterStampContext;
 
@@ -100,6 +111,7 @@ static const AVOption waterstamp_options[] = {
     { "group",   "emitters of one group share their wall-clock anchor", OFFSET(group), AV_OPT_TYPE_STRING, {.str = "default"}, 0, 0, FLAGS },
     { "attack",  "level detector attack in seconds",                     OFFSET(attack),   AV_OPT_TYPE_DOUBLE, {.dbl = 0.005}, 0.0001, 5, FLAGS },
     { "release", "level detector release in seconds, keep >= one 0.5 s slot", OFFSET(release), AV_OPT_TYPE_DOUBLE, {.dbl = 0.2}, 0.01, 30, FLAGS },
+    { "gate",    "channels whose level stays below this (dBFS) are not stamped", OFFSET(gate_db), AV_OPT_TYPE_DOUBLE, {.dbl = -80}, -200, 0, FLAGS },
     { "key",     "secret key: derives the code pair and the frame check field, so only a detector with the same key reads the stamp", OFFSET(key), AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS },
     { "mode",    "normal: inaudible, level follows the programme; test: fixed audible level for QC feeds", OFFSET(mode), AV_OPT_TYPE_INT, {.i64 = MODE_NORMAL}, 0, NB_MODES - 1, FLAGS, .unit = "mode" },
     { "normal",  "inaudible, level relative to the programme band",     0,                AV_OPT_TYPE_CONST,  {.i64 = MODE_NORMAL}, 0, 0, FLAGS, .unit = "mode" },
@@ -128,9 +140,20 @@ static av_cold int init(AVFilterContext *ctx)
     s->lin_test  = powf(10.f, s->test_level / 20.f);
     s->lin_floor = powf(10.f, s->floor_db / 20.f);
     s->lin_ceil  = powf(10.f, s->ceil_db  / 20.f);
+    s->gate_pow  = powf(10.f, s->gate_db  / 10.f);
     s->cur_frame = INT64_MIN;
     s->cur_slot  = INT64_MIN;
     return 0;
+}
+
+static void free_channels(WaterStampContext *s)
+{
+    av_freep(&s->cz1);
+    av_freep(&s->cz2);
+    av_freep(&s->cenv);
+    av_freep(&s->cbb);
+    av_freep(&s->cgain);
+    av_freep(&s->lfe);
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -156,8 +179,24 @@ static int config_input(AVFilterLink *inlink)
     s->z1 = s->z2 = 0.f;
     s->env = 0.f;
 
-    s->a_att = 1.f - expf(-1.f / (float)(s->attack  * sr));
-    s->a_rel = 1.f - expf(-1.f / (float)(s->release * sr));
+    s->a_att  = 1.f - expf(-1.f / (float)(s->attack  * sr));
+    s->a_rel  = 1.f - expf(-1.f / (float)(s->release * sr));
+    s->a_gate = 1.f - expf(-1.f / (float)(0.01 * sr));   /* 10 ms gate ramp */
+
+    s->nb_ch = inlink->ch_layout.nb_channels;
+    free_channels(s);
+    s->cz1   = av_calloc(s->nb_ch, sizeof(*s->cz1));
+    s->cz2   = av_calloc(s->nb_ch, sizeof(*s->cz2));
+    s->cenv  = av_calloc(s->nb_ch, sizeof(*s->cenv));
+    s->cbb   = av_calloc(s->nb_ch, sizeof(*s->cbb));
+    s->cgain = av_calloc(s->nb_ch, sizeof(*s->cgain));
+    s->lfe   = av_calloc(s->nb_ch, sizeof(*s->lfe));
+    if (!s->cz1 || !s->cz2 || !s->cenv || !s->cbb || !s->cgain || !s->lfe)
+        return AVERROR(ENOMEM);
+    for (int ch = 0; ch < s->nb_ch; ch++) {
+        enum AVChannel c = av_channel_layout_channel_from_index(&inlink->ch_layout, ch);
+        s->lfe[ch] = c == AV_CHAN_LOW_FREQUENCY || c == AV_CHAN_LOW_FREQUENCY_2;
+    }
     return 0;
 }
 
@@ -209,8 +248,12 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
     if (s->tmp_size < nb) {
         av_freep(&s->tmp);
-        s->tmp = av_malloc_array(nb, sizeof(*s->tmp));
-        if (!s->tmp) {
+        av_freep(&s->mixenv);
+        av_freep(&s->gains);
+        s->tmp    = av_malloc_array(nb, sizeof(*s->tmp));
+        s->mixenv = av_malloc_array(nb, sizeof(*s->mixenv));
+        s->gains  = av_malloc_array((size_t)nb * nb_ch, sizeof(*s->gains));
+        if (!s->tmp || !s->mixenv || !s->gains) {
             if (out != in)
                 av_frame_free(&out);
             av_frame_free(&in);
@@ -221,22 +264,32 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
     w = s->tmp;
 
-    /* 1. programme band level -> per-sample watermark amplitude (RMS, FS) */
+    /* 1. per-channel gate on the broadband level, then the band power of
+     * the mix of the open non-LFE channels (a silent one must not dilute) */
     for (int i = 0; i < nb; i++) {
-        float x = 0.f, bp, e;
+        float x = 0.f, n = 0.f, bp, e;
         for (int ch = 0; ch < nb_ch; ch++) {
             const float *src = planar ? (const float *)in->extended_data[ch]
                                       : (const float *)in->data[0] + ch;
-            x += src[i * stride];
+            const float v = src[i * stride];
+            float *bb = &s->cbb[ch], *g = &s->cgain[ch];
+            if (s->lfe[ch])
+                continue;
+            e    = v * v;
+            *bb += (e > *bb ? s->a_att : s->a_rel) * (e - *bb);
+            *g  += s->a_gate * ((*bb > s->gate_pow ? 1.f : 0.f) - *g);
+            x += *g * v;
+            n += *g;
         }
-        x /= nb_ch;
+        x = n > 1e-3f ? x / n : 0.f;
         bp    = s->b0 * x + s->z1;
         s->z1 = -s->a1 * bp + s->z2;
         s->z2 = s->b2 * x - s->a2 * bp;
         e = bp * bp;
         s->env += (e > s->env ? s->a_att : s->a_rel) * (e - s->env);
-        w[i] = s->mode == MODE_TEST ? s->lin_test
-             : av_clipf(sqrtf(s->env) * s->lin_level, s->lin_floor, s->lin_ceil);
+        s->mixenv[i] = s->env;
+        for (int ch = 0; ch < nb_ch; ch++)
+            s->gains[(size_t)i * nb_ch + ch] = s->cgain[ch];
     }
 
     /* 2. waveform, a pure function of absolute time. Absolute time of the
@@ -284,21 +337,42 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         a = s->seqA[ci];
         b = s->seqB[(ci + s->shift) % WS_SEQ_LEN];
         /* carrier phase is periodic in the slot: 2000 Hz * 0.5 s = 1000 cycles */
-        w[i] *= (a + b) * 0.70710678f
+        w[i]  = (a + b) * 0.70710678f
               * sinf((float)M_PI * u)
               * cosf((float)(2.0 * M_PI * WS_CARRIER * tp))
               * WS_NORM;
     }
     s->n += nb;
 
-    /* 3. identical on every channel */
+    /* 3. identical waveform on every channel; amplitude from the mix band
+     * level, capped by the channel's own, gated on its broadband level */
     for (int ch = 0; ch < nb_ch; ch++) {
         const float *src = planar ? (const float *)in->extended_data[ch]
                                   : (const float *)in->data[0] + ch;
         float *dst = planar ? (float *)out->extended_data[ch]
                             : (float *)out->data[0] + ch;
-        for (int i = 0; i < nb; i++)
-            dst[i * stride] = src[i * stride] + w[i];
+        float z1 = s->cz1[ch], z2 = s->cz2[ch], env = s->cenv[ch];
+        if (s->lfe[ch]) {
+            if (dst != src)
+                for (int i = 0; i < nb; i++)
+                    dst[i * stride] = src[i * stride];
+            continue;
+        }
+        for (int i = 0; i < nb; i++) {
+            const float x = src[i * stride];
+            float bp = s->b0 * x + z1, e, amp;
+            z1  = -s->a1 * bp + z2;
+            z2  = s->b2 * x - s->a2 * bp;
+            e   = bp * bp;
+            env += (e > env ? s->a_att : s->a_rel) * (e - env);
+            if (s->mode == MODE_TEST)
+                amp = s->lin_test;
+            else
+                amp = s->gains[(size_t)i * nb_ch + ch] * av_clipf(sqrtf(FFMIN(s->mixenv[i], env)) * s->lin_level,
+                                   s->lin_floor, s->lin_ceil);
+            dst[i * stride] = x + w[i] * amp;
+        }
+        s->cz1[ch] = z1; s->cz2[ch] = z2; s->cenv[ch] = env;
     }
 
     if (out != in)
@@ -310,6 +384,9 @@ static av_cold void uninit(AVFilterContext *ctx)
 {
     WaterStampContext *s = ctx->priv;
     av_freep(&s->tmp);
+    av_freep(&s->mixenv);
+    av_freep(&s->gains);
+    free_channels(s);
 }
 
 static const AVFilterPad waterstamp_inputs[] = {

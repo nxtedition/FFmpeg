@@ -7983,7 +7983,10 @@ Mix an inaudible spread-spectrum absolute-time stamp into audio.
 
 Two spread-spectrum layers in the 977-3023 Hz band are summed and added
 identically to every channel at a level relative to the programme's own
-level in that band: an unmodulated 500 ms timing layer, and a data layer
+level in that band. The level follows the mix of the channels, capped by
+each channel's own band level, so a quiet channel is stamped relative to
+itself; channels below @option{gate} and LFE channels are not stamped.
+The layers are: an unmodulated 500 ms timing layer, and a data layer
 carrying 3 bits per 500 ms slot by cyclic shift keying. Both layers use
 Gold codes of length 1023 selected by the source id (the GPS C/A code
 family), so stamps from different sources do not interfere. Twelve slots form
@@ -8032,6 +8035,13 @@ Name of the wall-clock anchor group. Emitters with the same group
 (@code{waterstamp} and @code{vwaterstamp} alike) share the anchor set by
 the first of them; give unrelated sources in one process different
 groups. Default @code{default}.
+
+@item gate
+Channels whose broadband level stays below this, in dBFS, carry no stamp
+and do not count towards the level: digital silence, an unused language
+track or an empty surround. The gate opens and closes over 10 ms, and a
+channel falling silent closes it after about 3 s of release. Not applied
+in @code{test} mode. Default -80.
 
 @item attack
 Level detector attack time in seconds. Default 0.005.
