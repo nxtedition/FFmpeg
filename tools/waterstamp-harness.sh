@@ -46,7 +46,7 @@ expect() {
   if [ -z "$last" ]; then row FAIL "$1" "no lock on id $3"; return; fi
   off=$(field "$last" offset); dr=$(field "$last" drift); want=$4
   # a speed change: the offset grows with source time at the drift rate
-  [ -n "$6" ] && want=$(awk -v t="$(field "$last" t)" -v p="$6" -v o="$4" 'BEGIN { printf "%.3f", o - t * p / 1000 }')
+  [ -n "$6" ] && want=$(awk -v t="$(field "$last" t)" -v p="$6" -v o="$4" 'BEGIN { printf "%.3f", o + t * 1000 * (1 / (1 + p / 1e6) - 1) }')
   if ! near "$off" "$want" "$5"; then row FAIL "$1" "offset $off, want $want +-$5 ($last)"; return; fi
   if [ -n "$6" ] && ! near "$dr" "$6" "$7"; then row FAIL "$1" "drift $dr, want $6 +-$7"; return; fi
   row PASS "$1" "frames:$n  first[$(printf '%s\n' "$out" | grep "id:$3 " | head -1)]  last[$last]"
@@ -130,7 +130,7 @@ near "$off" -40000 1 && row PASS "source time jumps +40 s" "$last" || row FAIL "
 echo "== test mode (fixed -20 dBFS, audible) =="
 q -i prog_pink.wav -af "waterstamp=mode=test:id=3:t0=1" -c:a pcm_s16le tm.wav
 q -i tm.wav -c:a aac -b:a 24k c.m4a;                   expect "test mode, aac 24k"          c.m4a 3 0 0.3
-q -i tm.wav -af "asetrate=49440,aresample=48000" c.wav; expect "test mode, +3 %, wide"      c.wav 3 42 5 30000 100 "wide=1"
+q -i tm.wav -af "asetrate=49440,aresample=48000" c.wav; expect "test mode, +3 %, wide"      c.wav 3 0 5 30000 100 "wide=1"
 
 echo "== null test, pink: (stamped - programme) level =="
 $FF -hide_banner -nostats -i stamped_pink.wav -i prog_pink.wav -filter_complex "[0][1]amerge,pan=stereo|c0=c0-c2|c1=c1-c3,volumedetect" -f null - 2>&1 | grep -oE '(mean|max)_volume: .*'
