@@ -72,6 +72,8 @@ typedef struct VWaterStampContext {
     int64_t t0_us;          /* absolute time of media timestamp 0     */
 
     int     w, h;
+    int     depth;              /* luma bit depth; amplitudes are in 8-bit LSB */
+    int     full_range;         /* else stay inside the 16..235 video range   */
     int    *colsub, *rowsub;    /* pixel -> sub-cell column / row         */
     double *sum, *sumsq;        /* per cell                               */
     int    *cnt;
@@ -106,6 +108,9 @@ static const enum AVPixelFormat pix_fmts[] = {
     AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUV422P, AV_PIX_FMT_YUV444P,
     AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ444P,
     AV_PIX_FMT_NV12, AV_PIX_FMT_NV21, AV_PIX_FMT_GRAY8,
+    AV_PIX_FMT_YUV420P10, AV_PIX_FMT_YUV422P10, AV_PIX_FMT_YUV444P10,
+    AV_PIX_FMT_YUV420P12, AV_PIX_FMT_YUV422P12, AV_PIX_FMT_YUV444P12,
+    AV_PIX_FMT_GRAY10, AV_PIX_FMT_GRAY12,
     AV_PIX_FMT_NONE
 };
 
@@ -148,8 +153,15 @@ static int config_input(AVFilterLink *inlink)
 {
     VWaterStampContext *s = inlink->dst->priv;
 
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(inlink->format);
+
     s->w = inlink->w;
     s->h = inlink->h;
+    s->depth      = desc->comp[0].depth;
+    s->full_range = inlink->color_range == AVCOL_RANGE_JPEG ||
+                    inlink->format == AV_PIX_FMT_YUVJ420P ||
+                    inlink->format == AV_PIX_FMT_YUVJ422P ||
+                    inlink->format == AV_PIX_FMT_YUVJ444P;
     av_freep(&s->colsub);
     av_freep(&s->rowsub);
     s->colsub = av_malloc_array(s->w, sizeof(*s->colsub));
@@ -180,6 +192,10 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
     AVFilterContext *ctx  = inlink->dst;
     VWaterStampContext *s = ctx->priv;
+    const int   hbd   = s->depth > 8;
+    const float scale = 1 << (s->depth - 8);           /* native units per 8-bit LSB */
+    const int   lo    = s->full_range ? 0 : 16 << (s->depth - 8);
+    const int   hi    = s->full_range ? (1 << s->depth) - 1 : 235 << (s->depth - 8);
     int64_t t_us, pts_us, slot, frm;
     int si, kA, shiftA, ret;
     uint8_t *y;
@@ -227,13 +243,14 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     memset(s->sumsq, 0, WSV_CELLS * sizeof(*s->sumsq));
     memset(s->cnt,   0, WSV_CELLS * sizeof(*s->cnt));
     for (int j = 0; j < s->h; j++) {
-        const uint8_t *row = y + (ptrdiff_t)j * ls;
+        const uint8_t  *row   = y + (ptrdiff_t)j * ls;
+        const uint16_t *row16 = (const uint16_t *)row;
         int r = s->rowsub[j] / WSV_SUB;
         int64_t sum = 0, sumsq = 0;
         int prev = -1, c = 0;
         for (int i = 0; i < s->w; i++) {
             int cc = r * WSV_COLS + s->colsub[i] / WSV_SUB;
-            int v = row[i];
+            int v = hbd ? row16[i] : row[i];
             if (cc != prev) {
                 if (prev >= 0) { s->sum[prev] += sum; s->sumsq[prev] += sumsq; }
                 sum = sumsq = 0;
@@ -251,13 +268,16 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
         double m  = s->cnt[c] ? s->sum[c] / s->cnt[c] : 0;
         double v  = s->cnt[c] ? s->sumsq[c] / s->cnt[c] - m * m : 0;
         int chip  = s->seqA[(c + shiftA) % WS_SEQ_LEN] + s->seqB[(c + s->shiftB + shiftA) % WS_SEQ_LEN];
-        s->amp[c] = 0.5f * chip * (s->mode == MODE_TEST ? (float)s->test_level
-                    : av_clipf(sqrt(FFMAX(v, 0)) * s->lin_level, s->floor_lsb, s->ceil_lsb));
+        s->amp[c] = 0.5f * chip * scale *
+                    (s->mode == MODE_TEST ? (float)s->test_level
+                     : av_clipf(sqrt(FFMAX(v, 0)) / scale * s->lin_level, s->floor_lsb, s->ceil_lsb));
     }
 
-    /* 2. add chip * carrier * amplitude, dithered below one LSB */
+    /* 2. add chip * carrier * amplitude, dithered below one LSB, never
+     * pushing a sample out of the legal range it was in */
     for (int j = 0; j < s->h; j++) {
-        uint8_t *row = y + (ptrdiff_t)j * ls;
+        uint8_t  *row   = y + (ptrdiff_t)j * ls;
+        uint16_t *row16 = (uint16_t *)row;
         const float *dit = s->dither + (j & 255) * 256;
         int sr = s->rowsub[j], r = sr / WSV_SUB, sy = sr % WSV_SUB;
         for (int i = 0; i < s->w; i++) {
@@ -271,8 +291,14 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
             f = d - n;
             if (dit[i & 255] < (f < 0 ? -f : f))
                 n += d > 0 ? 1 : -1;
-            if (n)
-                row[i] = av_clip_uint8(row[i] + n);
+            if (n) {
+                const int v = hbd ? row16[i] : row[i];
+                const int o = av_clip(v + n, FFMIN(v, lo), FFMAX(v, hi));
+                if (hbd)
+                    row16[i] = o;
+                else
+                    row[i] = o;
+            }
         }
     }
     return ff_filter_frame(ctx->outputs[0], frame);
