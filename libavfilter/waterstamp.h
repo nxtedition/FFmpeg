@@ -285,6 +285,61 @@ static inline int ws_symbol(const uint8_t bits[WS_BITS], int s)
  */
 int64_t ff_waterstamp_wall_anchor(const char *group, int64_t pts_us);
 
+/* --- soft-decision frame decoder (shared by both detectors) -------------
+ *
+ * A frame is a codeword of 12 symbols fully determined by (id, key,
+ * payload), and payloads of consecutive frames differ by exactly 6 s. So
+ * instead of deciding each symbol and checking the CRC, the decoder scores
+ * every codeword against the soft symbol metrics and accumulates the
+ * scores along the payload sequence across frames: the metric is
+ * maximum-likelihood over the whole code, and a weak stamp locks after
+ * more frames instead of never. Payloads are even (frames start at
+ * multiples of 6 s), so there are 16384 hypotheses per frame alignment.
+ */
+#define WS_FD_HYP     (WS_PAYLOAD_MOD / 2)
+#define WS_FD_LAMBDA  0.75f     /* per-frame forgetting of the accumulator  */
+#define WS_FD_LOCK    7.0f      /* normalised score to acquire a lock       */
+#define WS_FD_HOLD    4.0f      /* ... and below which a held lock misses   */
+#define WS_FD_MISSES  3         /* consecutive misses that drop the lock    */
+#define WS_FD_ZMAX    3.0f      /* symbol metrics are clipped to +-this     */
+#define WS_FD_SWITCH  1.3f      /* a lead this large moves a held lock      */
+
+enum { WS_FD_NONE, WS_FD_FRAME, WS_FD_LOCK_ON, WS_FD_JUMP, WS_FD_LOCK_OFF };
+
+typedef struct WSFrameDec {
+    uint8_t *cw;                        /* [WS_FD_HYP][WS_SLOTS] symbols       */
+    float   *acc;                       /* [WS_SLOTS][WS_FD_HYP] scores         */
+    float    var[WS_SLOTS];             /* accumulated noise variance           */
+    int      nfr[WS_SLOTS];             /* frames accumulated per alignment     */
+    float    z[WS_SLOTS][WS_CSK_M];     /* last 12 slots' metrics               */
+    double   pos[WS_SLOTS];             /* caller's position of those slots     */
+    int64_t  nslot;
+    float    best[WS_SLOTS];            /* best normalised score per alignment  */
+    int      best_q[WS_SLOTS];
+    int      lock, lock_a, lock_q, misses;
+    float    stat;                      /* normalised score of the last frame   */
+} WSFrameDec;
+
+typedef struct WSFrameResult {
+    double   pos;                       /* position of the frame's first slot   */
+    unsigned payload;
+    float    stat;
+} WSFrameResult;
+
+int  ff_ws_framedec_init(WSFrameDec *d, int id, const uint8_t *key, size_t keylen);
+void ff_ws_framedec_reset(WSFrameDec *d);
+void ff_ws_framedec_uninit(WSFrameDec *d);
+/**
+ * Push one slot: z[] are the eight symbol metrics, unit variance under
+ * noise and positive for the sent symbol; NULL marks a missed slot.
+ * @return WS_FD_* event; res is filled for every event but WS_FD_NONE.
+ */
+int  ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult *res);
+/** Symbol the held lock predicts for the slot pushed back slots ago, or -1. */
+int  ff_ws_framedec_expected(const WSFrameDec *d, int back);
+/** Drop the lock (the caller rejected it); the decoder re-decides later. */
+void ff_ws_framedec_unlock(WSFrameDec *d);
+
 /* --- video -------------------------------------------------------------
  *
  * The same 36-bit frame, ids, codes and key carried in the picture, by the

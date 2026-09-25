@@ -75,13 +75,34 @@
 #define MAX_RATE    60000e-6                /* clamp on the rate estimate    */
 #define FRAME_BB    (WS_SLOTS * WS_BB_PERIOD)
 #define MAX_TRACKERS 8
+#define UNLOCKED_SLOTS 120                  /* 60 s */
+#define HIST         (2 * WS_SLOTS)         /* slots kept for the layer check */
+/* Both layers of a stamp have the same amplitude and carrier phase, so the
+ * decoded symbols' metrics match layer A's projected on the same reference;
+ * cross-talk from another stamp lands in the two layers unrelated. Measured
+ * at lock: genuine 0.85-1.10 (down to 0.79 later, at -30 dB), cross-talk
+ * 0.3-0.5 but up to 0.71 at the frame the decoder picked it on. */
+#define LAYER_RATIO  0.8f                   /* to report a lock               */
+#define LAYER_HOLD   0.6f                   /* to keep one                    */
+/* A code's reference correlates with another code's stamp at up to -24 dB
+ * (Gold) or about -18 dB (keyed, random codes): a tracker this far below a
+ * stronger one is taken for its cross-talk and never reported. */
+#define XTALK        0.025f                 /* -16 dB */
 
 /* Acquisition rate hypotheses in ppm, all evaluated in parallel while a
  * code is not tracked. A 1000 ppm error (25 <-> 23.98 speed change) moves
  * the peak two bins per period, which smears an accumulator advanced at
  * the wrong rate before the loop could see it; the hypothesis nearest the
- * truth stays sharp and wins. */
-static const double rate_hyp[] = { 0, 500, -500, 1000, -1000, 1500, -1500, 2000, -2000 };
+ * truth stays sharp and wins. The grid is fine enough (125 ppm worst
+ * residual, a quarter bin per period) for the long acquisition average
+ * that weak stamps need. */
+static const double rate_hyp[] = { 0, 250, -250, 500, -500, 750, -750, 1000, -1000,
+                                   1250, -1250, 1500, -1500, 1750, -1750, 2000, -2000 };
+#define ACQ_ALPHA      (1.f / 16)          /* ~8 s acquisition average         */
+#define ACQ_ALPHA_WIDE (1.f / 4)           /* 1000 ppm grid: must stay short   */
+#define THRESH_AUTO    2.5                 /* dB; a tracker is only reported
+                                            * once its frames decode        */
+#define THRESH_WIDE    4.0
 #define WIDE_PPM    50000                   /* wide search: +-5 % in 1000 ppm steps */
 #define WIDE_STEP   1000
 #define MAX_HYP     (2 * WIDE_PPM / WIDE_STEP + 1)
@@ -91,6 +112,7 @@ enum ClockMode { CLOCK_WALL, CLOCK_PTS, NB_CLOCK };
 typedef struct PeakStats {
     double phase;                       /* interpolated peak, 0..2046         */
     float  psr, snr_db;                 /* peak-to-sidelobe, peak-to-mean     */
+    float  peak;                        /* accumulated |corr|^2 at the peak   */
 } PeakStats;
 
 typedef struct Candidate {
@@ -105,23 +127,24 @@ typedef struct Tracker {
     double   blk_pos;                   /* baseband position of next block    */
     double   rate;                      /* detector/emitter sample ratio - 1  */
     double   phase;
-    float    psr, snr_db;
+    float    psr, snr_db, peak;
 
     double   slot_pos;                  /* baseband position of next slot     */
     int      slot_valid;
+    int      have_last;
     double   last_slot_pos;
-    int      sym[WS_SLOTS];
-    double   sym_pos[WS_SLOTS];
-    int64_t  nsym;
+    AVComplexFloat ref;                 /* smoothed layer A carrier reference */
+    WSFrameDec fd;
+    int      unlocked_slots;            /* slots decoded without a frame lock */
+    int      xtalk;                     /* found to be cross-talk: release    */
+    float    hz[HIST][WS_CSK_M];        /* recent symbol metrics, clipped     */
+    float    hza[HIST];                 /* recent layer A metric, same scale  */
+    int64_t  nhist;
 
     int      lock;
     unsigned id;
     double   ref_pos;                   /* baseband position of a frame start */
     int64_t  ref_t_us;                  /* recovered source time at ref_pos   */
-    int      have_valid;
-    unsigned last_payload;
-    double   last_valid_pos;
-    int64_t  slots_since_valid;
 } Tracker;
 
 typedef struct WaterDetectContext {
@@ -191,7 +214,7 @@ static const AVOption waterdetect_options[] = {
     { "pts",       "media timestamps",                           0,                  AV_OPT_TYPE_CONST,  {.i64 = CLOCK_PTS},  0, 0, FLAGS, .unit = "clock" },
     { "epoch",     "hint for the absolute time in seconds, resolves the 9.1 h payload ambiguity; -1 = use the reference clock", OFFSET(epoch), AV_OPT_TYPE_INT64, {.i64 = -1}, -1, INT64_MAX, FLAGS },
     { "rate",      "centre of the sample-rate error search in ppm", OFFSET(rate_ppm), AV_OPT_TYPE_DOUBLE, {.dbl = 0}, -5000, 5000, FLAGS },
-    { "threshold", "layer A lock threshold, peak-to-sidelobe ratio in dB", OFFSET(thresh_db), AV_OPT_TYPE_DOUBLE, {.dbl = 4}, 0, 30, FLAGS },
+    { "threshold", "layer A acquisition threshold, peak-to-sidelobe ratio in dB, -1 = auto", OFFSET(thresh_db), AV_OPT_TYPE_DOUBLE, {.dbl = -1}, -1, 30, FLAGS },
     { "limit",     "clip spectral lines this many dB above the mean magnitude before correlating, 0 = off", OFFSET(limit_db), AV_OPT_TYPE_DOUBLE, {.dbl = 20}, 0, 60, FLAGS },
     { "sources",   "maximum number of stamps tracked at once",        OFFSET(max_sources), AV_OPT_TYPE_INT, {.i64 = 4}, 1, MAX_TRACKERS, FLAGS },
     { "id",        "only search for this source id, -1 = all",        OFFSET(only_id), AV_OPT_TYPE_INT,  {.i64 = -1}, -1, WS_MAX_IDS - 1, FLAGS },
@@ -268,6 +291,8 @@ static av_cold int init(AVFilterContext *ctx)
     int ret;
 
     s->nhyp = s->wide ? MAX_HYP : FF_ARRAY_ELEMS(rate_hyp);
+    if (s->thresh_db < 0)
+        s->thresh_db = s->wide ? THRESH_WIDE : THRESH_AUTO;
 
     s->bb   = av_calloc(BB_RING, sizeof(*s->bb));
     s->RefA = av_calloc((size_t)WS_MAX_IDS * FFT_N, sizeof(*s->RefA));
@@ -338,6 +363,8 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&s->corr);
     av_freep(&s->cand);
     av_freep(&s->cand_mem);
+    for (int i = 0; i < MAX_TRACKERS; i++)
+        ff_ws_framedec_uninit(&s->trk[i].fd);
     av_freep(&s->trk_mem);
     av_freep(&s->ana);
     swr_free(&s->swr);
@@ -481,6 +508,7 @@ static void accumulate(const WaterDetectContext *s, float *acc, float alpha, Pea
         }
     }
     mean /= WS_BB_PERIOD - 17;
+    st->peak   = peak;
     st->psr    = msl  > 0 ? peak / msl : 0;
     st->snr_db = mean > 0 ? 10.0 * log10(peak / mean) : 0;
 
@@ -515,67 +543,49 @@ static void set_lock(AVFilterContext *ctx, Tracker *t, int lock, double at_pos)
     log_state(ctx, t, at_pos);
 }
 
-static void try_frame(AVFilterContext *ctx, Tracker *t)
+/* Strongest timing-layer peak among the other trackers. */
+static float strongest_other(const WaterDetectContext *s, const Tracker *self)
+{
+    float m = 0.f;
+    for (int i = 0; i < MAX_TRACKERS; i++)
+        if (s->trk[i].used && &s->trk[i] != self)
+            m = FFMAX(m, s->trk[i].peak);
+    return m;
+}
+
+/* Do the held lock's symbols carry layer A's level (see LAYER_RATIO)? */
+static int layers_consistent(const Tracker *t)
+{
+    float zs = 0.f, za = 0.f;
+    const int n = (int)FFMIN(t->nhist, HIST);
+    for (int b = 0; b < n; b++) {
+        const int e = ff_ws_framedec_expected(&t->fd, b);
+        const int k = (int)((t->nhist - 1 - b) % HIST);
+        if (e < 0)
+            break;
+        zs += t->hz[k][e];
+        za += t->hza[k];
+    }
+    return za > 0.f && zs >= (t->lock ? LAYER_HOLD : LAYER_RATIO) * za;
+}
+
+/* Take a decoded frame: resolve the 9.1 h ambiguity and re-anchor. */
+static void take_frame(AVFilterContext *ctx, Tracker *t, int ev, const WSFrameResult *r)
 {
     WaterDetectContext *s = ctx->priv;
-    uint8_t bits[WS_BITS];
-    unsigned id, payload;
-    double frame_pos;
-    int64_t k;
+    int64_t k = reference_s(s, r->pos, r->payload) - (int64_t)r->payload + WS_PAYLOAD_MOD / 2;
+    k = k >= 0 ? k / WS_PAYLOAD_MOD : -((-k + WS_PAYLOAD_MOD - 1) / WS_PAYLOAD_MOD);
 
-    if (t->nsym < WS_SLOTS)
-        return;
-
-    for (int i = 0; i < WS_SLOTS; i++) {
-        int sym = t->sym[(t->nsym - WS_SLOTS + i) % WS_SLOTS];
-        bits[3 * i]     = (sym >> 2) & 1;
-        bits[3 * i + 1] = (sym >> 1) & 1;
-        bits[3 * i + 2] =  sym       & 1;
-    }
-    if (!ws_frame_parse(bits, &id, &payload, (const uint8_t *)s->key, s->keylen))
-        return;
-    if (id != t->code) {
-        av_log(ctx, AV_LOG_VERBOSE, "code %d decoded id %u, rejected\n", t->code, id);
-        return;
-    }
-
-    frame_pos = t->sym_pos[(t->nsym - WS_SLOTS) % WS_SLOTS];
-
-    /* A frame is confirmed by a previous valid frame whose payload matches
-     * the number of slots elapsed since it. */
-    if (t->have_valid) {
-        double  dpos  = frame_pos - t->last_valid_pos;
-        int64_t nfrm  = llrint(dpos / (FRAME_BB * (1.0 + t->rate)));
-        double  resid = dpos - nfrm * FRAME_BB * (1.0 + t->rate);
-        unsigned want = (t->last_payload + WS_FRAME_S * nfrm) & (WS_PAYLOAD_MOD - 1);
-
-        if (nfrm >= 1 && fabs(resid) < 8.0 && want == payload) {
-            /* coarse time: resolve the 9.1 h ambiguity */
-            int64_t ref_s = reference_s(s, frame_pos, payload);
-            k = (ref_s - (int64_t)payload + WS_PAYLOAD_MOD / 2);
-            k = k >= 0 ? k / WS_PAYLOAD_MOD : -((-k + WS_PAYLOAD_MOD - 1) / WS_PAYLOAD_MOD);
-
-            if (t->lock && id != t->id)
-                av_log(ctx, AV_LOG_WARNING, "source id changed %u -> %u\n", t->id, id);
-            t->id       = id;
-            t->ref_pos  = frame_pos;
-            t->ref_t_us = ((int64_t)payload + k * WS_PAYLOAD_MOD) * 1000000;
-            t->slots_since_valid = 0;
-            if (!t->lock)
-                set_lock(ctx, t, 1, frame_pos);
-            else
-                log_state(ctx, t, frame_pos);
-        } else {
-            av_log(ctx, AV_LOG_VERBOSE,
-                   "frame id:%u payload:%u not consistent with previous (want %u, resid %.1f)\n",
-                   id, payload, want, resid);
-        }
-    } else {
-        av_log(ctx, AV_LOG_VERBOSE, "first CRC-valid frame id:%u payload:%u\n", id, payload);
-    }
-    t->have_valid     = 1;
-    t->last_payload   = payload;
-    t->last_valid_pos = frame_pos;
+    if (ev == WS_FD_JUMP && t->lock)
+        av_log(ctx, AV_LOG_WARNING, "id %d: source time jumped\n", t->code);
+    t->id       = t->code;
+    t->ref_pos  = r->pos;
+    t->ref_t_us = ((int64_t)r->payload + k * WS_PAYLOAD_MOD) * 1000000;
+    av_log(ctx, AV_LOG_DEBUG, "id %d: frame payload %u score %.1f\n", t->code, r->payload, r->stat);
+    if (!t->lock)
+        set_lock(ctx, t, 1, r->pos);
+    else
+        log_state(ctx, t, r->pos);
 }
 
 /* ---- trackers -------------------------------------------------------- */
@@ -588,12 +598,14 @@ static inline double period_bb(double rate)
 static void release_tracker(AVFilterContext *ctx, Tracker *t, double at_pos)
 {
     WaterDetectContext *s = ctx->priv;
+    float *acc = t->acc;
     set_lock(ctx, t, 0, at_pos);
     s->tracked[t->code] = 0;
     for (int h = 0; h < s->nhyp; h++)
         memset(s->cand[t->code * s->nhyp + h].acc, 0, WS_BB_PERIOD * sizeof(float));
-    memset(t, 0, offsetof(Tracker, acc));
-    t->used = 0;
+    ff_ws_framedec_uninit(&t->fd);
+    memset(t, 0, sizeof(*t));           /* every field, or a new tracker inherits slot state */
+    t->acc = acc;
     memset(t->acc, 0, WS_BB_PERIOD * sizeof(float));
 }
 
@@ -604,7 +616,7 @@ static void schedule_slot(Tracker *t, double phase)
     if (!t->slot_valid) {
         t->slot_pos   = cand;
         t->slot_valid = 1;
-        t->nsym       = 0;
+        t->have_last  = 0;
     } else {
         double p = period_bb(t->rate);
         double d = cand - t->slot_pos;
@@ -618,41 +630,98 @@ static void schedule_slot(Tracker *t, double phase)
 static void decode_slot(AVFilterContext *ctx, Tracker *t)
 {
     WaterDetectContext *s = ctx->priv;
-    float e[WS_CSK_M];
-    int best = 0;
+    const double p = period_bb(t->rate);
+    AVComplexFloat b[WS_CSK_M], a, rot;
+    WSFrameResult res;
+    float z[WS_CSK_M], nsum = 0.f, sigma, rm;
+    double ph;
+    int nn = 0, ev;
+
+    /* slots the tracker skipped are erasures, so the frame count holds */
+    if (t->have_last) {
+        int gap = (int)llrint((t->slot_pos - t->last_slot_pos) / p) - 1;
+        for (int i = 0; i < FFMIN(gap, WS_SLOTS); i++) {
+            ev = ff_ws_framedec_push(&t->fd, NULL, t->last_slot_pos + (i + 1) * p, &res);
+            if (ev == WS_FD_LOCK_OFF)
+                set_lock(ctx, t, 0, t->slot_pos);
+        }
+    }
 
     read_window(s, t->slot_pos, WS_BB_PERIOD, s->win, t->rate);
     memcpy(s->win + WS_BB_PERIOD, s->win, WS_BB_PERIOD * sizeof(*s->win));
     memset(s->win + WIN_A, 0, (FFT_N - WIN_A) * sizeof(*s->win));
     fwd_spec(s);
+
+    /* The emitter's carrier restarts at phase 0 on every slot boundary, so
+     * after undoing the local oscillator's phase at the window start the
+     * carrier phase is the same slot after slot: layer A, which shares the
+     * carrier, then gives a phase reference that can be smoothed. */
+    ph  = 2.0 * M_PI * WS_CARRIER / WS_BB_RATE * t->slot_pos;
+    rot.re = cos(ph);
+    rot.im = sin(ph);
+
+    /* layer B: symbol sym shifts the sequence by sym*128 chips; its peak
+     * then sits at lag 2046 - 2*128*sym. Noise from the lags between. */
     corr_from_spec(s, s->RefB + (size_t)t->code * FFT_N);
-
-    /* symbol sym shifts the sequence by sym*128 chips; the peak then sits at
-     * lag 2046 - 2*128*sym. Take the best of three bins to absorb the
-     * half-sample uncertainty of the slot boundary. */
+    for (int L = 0; L < WS_BB_PERIOD; L++) {
+        int d = L % (2 * WS_CSK_STEP);
+        if (d > 4 && d < 2 * WS_CSK_STEP - 4) {
+            nsum += mag2(s->corr[L]);
+            nn++;
+        }
+    }
     for (int sym = 0; sym < WS_CSK_M; sym++) {
-        int L = (WS_BB_PERIOD - 2 * WS_CSK_STEP * sym) % WS_BB_PERIOD;
-        float m = 0.f;
-        for (int d = -1; d <= 1; d++)
-            m = FFMAX(m, mag2(s->corr[(L + d + WS_BB_PERIOD) % WS_BB_PERIOD]));
-        e[sym] = m;
-        if (m > e[best])
-            best = sym;
+        const AVComplexFloat c = s->corr[(WS_BB_PERIOD - 2 * WS_CSK_STEP * sym) % WS_BB_PERIOD];
+        b[sym].re = c.re * rot.re - c.im * rot.im;
+        b[sym].im = c.re * rot.im + c.im * rot.re;
     }
+    sigma = sqrtf(nsum / FFMAX(nn, 1) / 2.f) + 1e-20f;
 
-    t->sym[t->nsym % WS_SLOTS]     = best;
-    t->sym_pos[t->nsym % WS_SLOTS] = t->slot_pos;
-    t->nsym++;
+    /* layer A at lag 0 of the same window: the phase reference */
+    corr_from_spec(s, s->RefA + (size_t)t->code * FFT_N);
+    a.re = s->corr[0].re * rot.re - s->corr[0].im * rot.im;
+    a.im = s->corr[0].re * rot.im + s->corr[0].im * rot.re;
+    t->ref.re = 0.6f * t->ref.re + a.re;
+    t->ref.im = 0.6f * t->ref.im + a.im;
+    rm = sqrtf(mag2(t->ref)) + 1e-20f;
+    for (int sym = 0; sym < WS_CSK_M; sym++)
+        z[sym] = (b[sym].re * t->ref.re + b[sym].im * t->ref.im) / (rm * sigma);
+
+    ev = ff_ws_framedec_push(&t->fd, z, t->slot_pos, &res);
+    /* keep this slot for the layer consistency check */
+    {
+        const int k = t->nhist++ % HIST;
+        const float za = (a.re * t->ref.re + a.im * t->ref.im) / (rm * sigma);
+        for (int sym = 0; sym < WS_CSK_M; sym++)
+            t->hz[k][sym] = av_clipf(z[sym], -WS_FD_ZMAX, WS_FD_ZMAX);
+        t->hza[k] = av_clipf(za, -WS_FD_ZMAX, WS_FD_ZMAX);
+    }
     t->last_slot_pos = t->slot_pos;
-    t->slot_pos     += period_bb(t->rate);
+    t->have_last     = 1;
+    t->slot_pos     += p;
 
-    if (t->lock && ++t->slots_since_valid > 3 * WS_SLOTS) {
-        av_log(ctx, AV_LOG_VERBOSE, "id %u: no valid frame for %d slots\n",
-               t->id, (int)t->slots_since_valid);
-        set_lock(ctx, t, 0, t->slot_pos);
-        t->have_valid = 0;
+    if (ev == WS_FD_LOCK_OFF) {
+        av_log(ctx, AV_LOG_VERBOSE, "id %d: frames lost\n", t->code);
+        set_lock(ctx, t, 0, t->last_slot_pos);
+    } else if (ev != WS_FD_NONE) {
+        if (t->peak < XTALK * strongest_other(s, t)) {
+            av_log(ctx, AV_LOG_VERBOSE, "code %d: cross-talk of a stronger stamp, released\n", t->code);
+            t->xtalk = 1;
+            return;
+        }
+        if (!layers_consistent(t)) {
+            /* not reported; a genuine weak stamp passes on a later frame */
+            av_log(ctx, AV_LOG_VERBOSE, "code %d: layers inconsistent, not reported\n", t->code);
+            ff_ws_framedec_unlock(&t->fd);
+            if (t->lock)
+                set_lock(ctx, t, 0, res.pos);
+            return;
+        }
+        take_frame(ctx, t, ev, &res);
     }
-    try_frame(ctx, t);
+    /* a timing lock that yields no frame is noise or a stamp too weak to
+     * read: free the tracker for another code */
+    t->unlocked_slots = t->lock ? 0 : t->unlocked_slots + 1;
 }
 
 static void track_block(AVFilterContext *ctx, Tracker *t)
@@ -668,6 +737,7 @@ static void track_block(AVFilterContext *ctx, Tracker *t)
     t->blk_pos += period_bb(t->rate);
     t->psr    = st.psr;
     t->snr_db = st.snr_db;
+    t->peak   = st.peak;
 
     if (st.psr < thr / 1.585) {                         /* 2 dB hysteresis */
         av_log(ctx, AV_LOG_VERBOSE, "code %d: layer A lost psr:%.1f dB\n",
@@ -706,6 +776,7 @@ static void acquire_block(AVFilterContext *ctx)
     WaterDetectContext *s = ctx->priv;
     const double thr = pow(10.0, s->thresh_db / 10.0);
     int any = 0, best_c = -1, best_h = -1, min_periods = INT_MAX;
+    float xt;
     Tracker *t = NULL;
 
     for (int c = 0; c < WS_MAX_IDS; c++)
@@ -719,7 +790,7 @@ static void acquire_block(AVFilterContext *ctx)
                 if (!code_wanted(s, c))
                     continue;
                 corr_from_spec(s, s->RefA + (size_t)c * FFT_N);
-                accumulate(s, cd->acc, 1.f / 4, &cd->st);
+                accumulate(s, cd->acc, s->wide ? ACQ_ALPHA_WIDE : ACQ_ALPHA, &cd->st);
             }
         }
         s->hyp_blk[h] += period_bb(s->hyp_rate[h]);
@@ -729,12 +800,13 @@ static void acquire_block(AVFilterContext *ctx)
     if (!any || min_periods < MIN_PERIODS || n_tracked(s) >= s->max_sources)
         return;
 
+    xt = XTALK * strongest_other(s, NULL);
     for (int c = 0; c < WS_MAX_IDS; c++) {
         if (!code_wanted(s, c))
             continue;
         for (int h = 0; h < s->nhyp; h++) {
             const Candidate *cd = &s->cand[c * s->nhyp + h];
-            if (cd->st.psr >= thr && (best_c < 0 || cd->st.psr > s->cand[best_c * s->nhyp + best_h].st.psr)) {
+            if (cd->st.psr >= thr && cd->st.peak >= xt && (best_c < 0 || cd->st.psr > s->cand[best_c * s->nhyp + best_h].st.psr)) {
                 best_c = c;
                 best_h = h;
             }
@@ -754,6 +826,10 @@ static void acquire_block(AVFilterContext *ctx)
 
     {
         Candidate *cd = &s->cand[best_c * s->nhyp + best_h];
+        if (ff_ws_framedec_init(&t->fd, best_c, (const uint8_t *)s->key, s->keylen) < 0) {
+            s->tracked[best_c] = 0;
+            return;
+        }
         memcpy(t->acc, cd->acc, WS_BB_PERIOD * sizeof(float));
         t->used    = 1;
         t->code    = best_c;
@@ -762,6 +838,8 @@ static void acquire_block(AVFilterContext *ctx)
         t->phase   = cd->st.phase;
         t->psr     = cd->st.psr;
         t->snr_db  = cd->st.snr_db;
+        t->peak    = cd->st.peak;
+        t->nhist   = 0;
         av_log(ctx, AV_LOG_VERBOSE, "code %d: layer A lock psr:%.1f dB snr:%.1f dB rate:%.0f ppm\n",
                best_c, 10 * log10(cd->st.psr), cd->st.snr_db, t->rate * 1e6);
         schedule_slot(t, t->phase);
@@ -799,12 +877,23 @@ static void run_detector(AVFilterContext *ctx)
                 if (!t->used)
                     continue;
             }
+            if (t->xtalk) {
+                release_tracker(ctx, t, s->bb_count);
+                continue;
+            }
+            if (t->unlocked_slots > UNLOCKED_SLOTS) {
+                av_log(ctx, AV_LOG_VERBOSE, "code %d: no frame lock in %d s, released\n",
+                       t->code, UNLOCKED_SLOTS / 2);
+                release_tracker(ctx, t, s->bb_count);
+                continue;
+            }
             need_b = period_bb(t->rate) + 2;
             while (t->slot_valid && t->slot_pos + need_b <= s->bb_count) {
                 if (t->slot_pos < s->bb_count - BB_RING + need_b) {
                     /* fell out of the ring; resynchronise on the next block */
                     t->slot_valid = 0;
-                    t->nsym = 0;
+                    ff_ws_framedec_reset(&t->fd);
+                    set_lock(ctx, t, 0, s->bb_count);
                     break;
                 }
                 decode_slot(ctx, t);

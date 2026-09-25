@@ -7864,6 +7864,16 @@ Recover the inaudible spread-spectrum time stamp mixed in by the
 @ref{waterstamp} filter and report the recovered source time, the offset
 against a reference clock and the sample-rate drift.
 
+Frames are decoded with soft decisions: every one of the 16384 possible
+frames of the source's id is scored against all twelve symbols, and the
+scores are accumulated along the 6 s payload progression, so a weak stamp
+locks after a few more frames instead of never. A lock is reported only
+once the decoded symbols carry the same level as the timing layer, which
+rejects the cross-talk of a strong stamp into another source's code. At
+the default emitter level a lock takes 12 s on noise-like programme and
+holds with about 7 dB of margin, enough for an equal mix of two stamped
+sources.
+
 The audio passes through untouched, so the filter can sit in a live
 chain. Internally it sums every channel except LFE with equal weight,
 which adds the identical per-channel watermarks coherently, and resamples
@@ -7898,13 +7908,15 @@ the payload is reported as is.
 
 @item rate
 Centre of the sample-rate error search in ppm. While acquiring, the
-detector evaluates hypotheses at this value plus 0, ±500, ±1000,
-±1500 and ±2000 ppm in parallel, then tracks the error itself;
+detector evaluates hypotheses at this value plus 0 to ±2000 ppm in
+250 ppm steps in parallel, then tracks the error itself;
 a 25 to 23.976 speed change is therefore caught without a hint. Set it
 when a feed is known to run further off than 2000 ppm. Default 0.
 
 @item threshold
-Layer A lock threshold as peak-to-sidelobe ratio in dB. Default 4.
+Acquisition threshold of the timing layer as peak-to-sidelobe ratio in
+dB. It only starts a tracker: nothing is reported until whole frames
+decode. The default of -1 picks 2.5, or 4 with @option{wide}.
 
 @item limit
 Clip spectral lines this many dB above the mean magnitude of the analysis
