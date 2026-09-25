@@ -8069,9 +8069,13 @@ the layer instead of the public Gold codes, and the 8-bit check field of
 every frame is a truncated HMAC-SHA256 over the frame bits instead of
 CRC-8. A detector without the key neither accepts nor sees the stamp, and
 a stamp made with the same id under another key, or without one, is
-rejected. This proves a stamp is yours; it is not a strong signature,
-since a frame carries only 8 check bits. Without a key everything is
-public and interoperable. Default unset.
+rejected. This shows a stamp is yours; it is not a strong signature,
+since a frame carries only 8 check bits. Nor is it tamper-proof: the
+timing layer repeats unchanged every 500 ms, so someone with enough
+stamped material can in principle average it out, recover that code
+without the key and then strip or imitate the timing layer (the check
+field still needs the key). Treat keyed mode as keeping stamps private.
+Without a key everything is public and interoperable. Default unset.
 
 @item mode
 @code{normal} (default): inaudible, the level follows the programme as
@@ -26498,14 +26502,20 @@ and reports the same metadata keys and log line under the name
 @code{vwaterdetect}, so audio and video offsets of one source can be
 compared directly.
 
-The detector skips black letterbox and pillarbox bars, averages the luma
-over a 132x124 grid of the active picture, demodulates the per-cell Walsh
-carrier, subtracts a running mean per cell so that static picture content
+The detector demodulates two geometries side by side: the whole frame,
+for a stamp made on a picture that already had bars, and the active
+picture inside black letterbox or pillarbox bars, for bars added after
+stamping (the bars must hold for a second before they count, so a dark
+scene does not move the grid). For each it averages the luma over a
+132x124 grid, demodulates the per-cell Walsh carrier, subtracts a running mean per cell so that static picture content
 cancels, whitens each cell by its own recent magnitude so that busy edges
 do not outvote quiet areas, and correlates the result with every source's
 code. Frames vote for the slot phase that fits their timestamps, so
 timing is resolved well below one frame period after a few seconds.
-Video passes through unchanged.
+Frames are decoded with soft decisions and the same layer check as
+@ref{waterdetect}. A tracker coasts through up to 10 s of flat or black
+picture, which carries almost no stamp, instead of starting over.
+8-bit and 10/12-bit input is accepted. Video passes through unchanged.
 
 The filter accepts the following options:
 
@@ -26518,12 +26528,13 @@ Reference clock: @code{wall} (default) or @code{pts}, as for
 Hint for the absolute time in seconds, as for @ref{waterdetect}.
 
 @item threshold
-Lock threshold, the peak-to-sidelobe ratio of the slot-phase accumulator.
-Default 7.
+Acquisition threshold, the peak-to-sidelobe ratio of the slot-phase
+accumulator. It only starts a tracker: nothing is reported until whole
+frames decode. Default 5.
 
 @item area
-@code{auto} (default) skips black letterbox and pillarbox bars, @code{full}
-uses the whole frame.
+@code{auto} (default) searches both the whole frame and the picture
+inside black bars; @code{full} only the whole frame.
 
 @item sources
 Maximum number of stamps tracked and reported at once, 1 to 8. Default 4.
@@ -26581,19 +26592,23 @@ The stamp of media timestamp @var{p} reads @option{t0} + @var{p}, the
 same timeline as @ref{waterstamp}, so the two detectors report comparable
 times for picture and sound.
 
-Supported formats: 8-bit YUV 4:2:0, 4:2:2, 4:4:4, NV12/NV21 and gray;
-only the luma plane is modified.
+Supported formats: 8, 10 and 12-bit planar YUV 4:2:0, 4:2:2 and 4:4:4,
+NV12/NV21 and gray, so a 10-bit chain stays 10-bit; only the luma plane is
+modified. Amplitudes are given in 8-bit LSB and scaled to the bit depth.
+A sample is never pushed outside the 16-235 video range (scaled to the
+bit depth) unless it already was; full-range formats use the whole range.
 
 What survives, measured on a 720p25 synthetic clip with camera-like noise
 at the default level: lossless and broadcast-quality H.264 (crf 18),
-scaling up, letterboxing and pillarboxing of the whole frame, brightness
-and contrast changes, frame delays and 25 to 30 fps conversion, all with
-the offset within 0.3 ms of the truth; a 1000 ppm speed change reads its
-growing offset within 1.2 ms and its drift within 6 %, with the drift
-figure valid about 20 s after lock. Heavy
-compression (H.264 crf 28, 1 Mbit/s at 720p, 360p) and cropping of the
-stamped frame are not recovered in this version: the first needs more
-amplitude than the default allows, the second a geometry search.
+scaling up, letterboxing and pillarboxing before or after stamping,
+brightness and contrast changes and frame delays, all with the offset
+within 0.3 ms of the truth; 25 to 30 fps conversion within 1.2 ms; H.264
+crf 28 within 1.2 ms, locking after about 35 s; a 1000 ppm speed change
+reads its growing offset within 1.2 ms and its drift within 6 %, with the
+drift figure valid about 20 s after lock. Not recovered at the default
+level within 50 s: 1 Mbit/s at 720p and 360p, which need longer or more
+amplitude, and cropping of the stamped frame, which needs a geometry
+search.
 
 The filter accepts the following options:
 
