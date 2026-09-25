@@ -76,14 +76,6 @@
 #define FRAME_BB    (WS_SLOTS * WS_BB_PERIOD)
 #define MAX_TRACKERS 8
 #define UNLOCKED_SLOTS 120                  /* 60 s */
-#define HIST         (2 * WS_SLOTS)         /* slots kept for the layer check */
-/* Both layers of a stamp have the same amplitude and carrier phase, so the
- * decoded symbols' metrics match layer A's projected on the same reference;
- * cross-talk from another stamp lands in the two layers unrelated. Measured
- * at lock: genuine 0.85-1.10 (down to 0.79 later, at -30 dB), cross-talk
- * 0.3-0.5 but up to 0.71 at the frame the decoder picked it on. */
-#define LAYER_RATIO  0.8f                   /* to report a lock               */
-#define LAYER_HOLD   0.6f                   /* to keep one                    */
 /* A code's reference correlates with another code's stamp at up to -24 dB
  * (Gold) or about -18 dB (keyed, random codes): a tracker this far below a
  * stronger one is taken for its cross-talk and never reported. */
@@ -137,9 +129,6 @@ typedef struct Tracker {
     WSFrameDec fd;
     int      unlocked_slots;            /* slots decoded without a frame lock */
     int      xtalk;                     /* found to be cross-talk: release    */
-    float    hz[HIST][WS_CSK_M];        /* recent symbol metrics, clipped     */
-    float    hza[HIST];                 /* recent layer A metric, same scale  */
-    int64_t  nhist;
 
     int      lock;
     unsigned id;
@@ -553,22 +542,6 @@ static float strongest_other(const WaterDetectContext *s, const Tracker *self)
     return m;
 }
 
-/* Do the held lock's symbols carry layer A's level (see LAYER_RATIO)? */
-static int layers_consistent(const Tracker *t)
-{
-    float zs = 0.f, za = 0.f;
-    const int n = (int)FFMIN(t->nhist, HIST);
-    for (int b = 0; b < n; b++) {
-        const int e = ff_ws_framedec_expected(&t->fd, b);
-        const int k = (int)((t->nhist - 1 - b) % HIST);
-        if (e < 0)
-            break;
-        zs += t->hz[k][e];
-        za += t->hza[k];
-    }
-    return za > 0.f && zs >= (t->lock ? LAYER_HOLD : LAYER_RATIO) * za;
-}
-
 /* Take a decoded frame: resolve the 9.1 h ambiguity and re-anchor. */
 static void take_frame(AVFilterContext *ctx, Tracker *t, int ev, const WSFrameResult *r)
 {
@@ -633,7 +606,7 @@ static void decode_slot(AVFilterContext *ctx, Tracker *t)
     const double p = period_bb(t->rate);
     AVComplexFloat b[WS_CSK_M], a, rot;
     WSFrameResult res;
-    float z[WS_CSK_M], nsum = 0.f, sigma, rm;
+    float z[WS_CSK_M], nsum = 0.f, sigma, rm, za;
     double ph;
     int nn = 0, ev;
 
@@ -641,7 +614,7 @@ static void decode_slot(AVFilterContext *ctx, Tracker *t)
     if (t->have_last) {
         int gap = (int)llrint((t->slot_pos - t->last_slot_pos) / p) - 1;
         for (int i = 0; i < FFMIN(gap, WS_SLOTS); i++) {
-            ev = ff_ws_framedec_push(&t->fd, NULL, t->last_slot_pos + (i + 1) * p, &res);
+            ev = ff_ws_framedec_push(&t->fd, NULL, 0.f, t->last_slot_pos + (i + 1) * p, &res);
             if (ev == WS_FD_LOCK_OFF)
                 set_lock(ctx, t, 0, t->slot_pos);
         }
@@ -687,15 +660,9 @@ static void decode_slot(AVFilterContext *ctx, Tracker *t)
     for (int sym = 0; sym < WS_CSK_M; sym++)
         z[sym] = (b[sym].re * t->ref.re + b[sym].im * t->ref.im) / (rm * sigma);
 
-    ev = ff_ws_framedec_push(&t->fd, z, t->slot_pos, &res);
-    /* keep this slot for the layer consistency check */
-    {
-        const int k = t->nhist++ % HIST;
-        const float za = (a.re * t->ref.re + a.im * t->ref.im) / (rm * sigma);
-        for (int sym = 0; sym < WS_CSK_M; sym++)
-            t->hz[k][sym] = av_clipf(z[sym], -WS_FD_ZMAX, WS_FD_ZMAX);
-        t->hza[k] = av_clipf(za, -WS_FD_ZMAX, WS_FD_ZMAX);
-    }
+    /* layer A projected on the same reference: the decoder's layer check */
+    za = (a.re * t->ref.re + a.im * t->ref.im) / (rm * sigma);
+    ev = ff_ws_framedec_push(&t->fd, z, za, t->slot_pos, &res);
     t->last_slot_pos = t->slot_pos;
     t->have_last     = 1;
     t->slot_pos     += p;
@@ -707,14 +674,6 @@ static void decode_slot(AVFilterContext *ctx, Tracker *t)
         if (t->peak < XTALK * strongest_other(s, t)) {
             av_log(ctx, AV_LOG_VERBOSE, "code %d: cross-talk of a stronger stamp, released\n", t->code);
             t->xtalk = 1;
-            return;
-        }
-        if (!layers_consistent(t)) {
-            /* not reported; a genuine weak stamp passes on a later frame */
-            av_log(ctx, AV_LOG_VERBOSE, "code %d: layers inconsistent, not reported\n", t->code);
-            ff_ws_framedec_unlock(&t->fd);
-            if (t->lock)
-                set_lock(ctx, t, 0, res.pos);
             return;
         }
         take_frame(ctx, t, ev, &res);
@@ -839,7 +798,6 @@ static void acquire_block(AVFilterContext *ctx)
         t->psr     = cd->st.psr;
         t->snr_db  = cd->st.snr_db;
         t->peak    = cd->st.peak;
-        t->nhist   = 0;
         av_log(ctx, AV_LOG_VERBOSE, "code %d: layer A lock psr:%.1f dB snr:%.1f dB rate:%.0f ppm\n",
                best_c, 10 * log10(cd->st.psr), cd->st.snr_db, t->rate * 1e6);
         schedule_slot(t, t->phase);

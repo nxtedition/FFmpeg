@@ -95,12 +95,61 @@ void ff_ws_framedec_uninit(WSFrameDec *d)
     av_freep(&d->acc);
 }
 
-int ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult *res)
+/* Do the held codeword's metrics carry layer A's level? */
+static int layers_consistent(WSFrameDec *d, float ratio)
+{
+    float zs = 0.f, za = 0.f;
+    const int n = (int)FFMIN(d->nslot, WS_FD_HIST);
+    for (int b = 0; b < n; b++) {
+        const int e = ff_ws_framedec_expected(d, b);
+        const int k = (int)((d->nslot - 1 - b) % WS_FD_HIST);
+        if (e < 0)
+            break;
+        zs += d->hz[k][e];
+        za += d->hza[k];
+    }
+    d->ratio = za > 0.f ? zs / za : 0.f;
+    return za > 0.f && zs >= ratio * za;
+}
+
+static int push_slot(WSFrameDec *d, const float *z, double pos, WSFrameResult *res);
+
+int ff_ws_framedec_push(WSFrameDec *d, const float *z, float za, double pos, WSFrameResult *res)
+{
+    const int h = d->nslot % WS_FD_HIST;
+    int ev;
+
+    for (int i = 0; i < WS_CSK_M; i++)
+        d->hz[h][i] = z ? av_clipf(z[i], -WS_FD_ZMAX, WS_FD_ZMAX) : 0.f;
+    d->hza[h] = z ? av_clipf(za, -WS_FD_ZMAX, WS_FD_ZMAX) : 0.f;
+
+    ev = push_slot(d, z, pos, res);
+    if (ev == WS_FD_LOCK_OFF) {
+        const int was = d->reported;
+        d->reported = 0;
+        return was ? WS_FD_LOCK_OFF : WS_FD_NONE;
+    }
+    if (ev == WS_FD_NONE)
+        return ev;
+    if (!layers_consistent(d, d->reported ? WS_FD_RHOLD : WS_FD_RATIO)) {
+        /* drop it and let the decoder re-decide on more data */
+        const int was = d->reported;
+        d->lock = d->reported = 0;
+        return was ? WS_FD_LOCK_OFF : WS_FD_NONE;
+    }
+    if (!d->reported) {
+        d->reported = 1;
+        return ev == WS_FD_FRAME ? WS_FD_LOCK_ON : ev;
+    }
+    return ev;
+}
+
+static int push_slot(WSFrameDec *d, const float *z, double pos, WSFrameResult *res)
 {
     const int k = d->nslot % WS_SLOTS;
     int64_t f, j;
     int a, adv, best_q = 0, ga = 0, ev = WS_FD_NONE;
-    float *acc, best = -1e30f, norm;
+    float *acc, best = -1e30f, second = -1e30f, norm;
 
     /* A slot's weight is bounded: a near-silent slot with an underestimated
      * noise floor would otherwise outvote every other slot. At high SNR
@@ -131,8 +180,11 @@ int ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult
             sc += d->z[(f + i) % WS_SLOTS][c[i]];
         acc[q] = WS_FD_LAMBDA * acc[q] + sc;
         if (acc[q] > best) {
+            second = best;
             best   = acc[q];
             best_q = q;
+        } else if (acc[q] > second) {
+            second = acc[q];
         }
     }
     d->var[a] = WS_FD_LAMBDA * WS_FD_LAMBDA * d->var[a] + WS_SLOTS;
@@ -141,6 +193,9 @@ int ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult
 
     d->best[a]   = best * norm;
     d->best_q[a] = best_q;
+    /* neighbouring codewords differ in only a few symbols: a weak stamp
+     * must lead the runner-up clearly before its payload is trusted */
+    d->sure[a]   = (best - second) * norm >= WS_FD_MARGIN;
     res->pos = d->pos[f % WS_SLOTS];
 
     /* A wrong alignment still half-matches a strong stamp and scores far
@@ -150,7 +205,7 @@ int ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult
             ga = i;
 
     if (!d->lock) {
-        if (d->nslot < 2 * WS_SLOTS || d->nfr[a] < 2 || ga != a || d->best[a] < WS_FD_LOCK)
+        if (d->nslot < 2 * WS_SLOTS || d->nfr[a] < 2 || ga != a || d->best[a] < WS_FD_LOCK || !d->sure[a])
             return WS_FD_NONE;
         d->lock   = 1;
         d->lock_a = a;
@@ -160,8 +215,9 @@ int ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult
         ev = WS_FD_LOCK_ON;
     } else if (a == d->lock_a) {
         d->stat = acc[d->lock_q] * norm;
-        if (ga == a && best_q != d->lock_q && d->best[a] >= WS_FD_LOCK &&
-            (d->stat < WS_FD_HOLD || d->best[a] > WS_FD_SWITCH * d->stat)) {
+        if (ga == a && best_q != d->lock_q && d->best[a] >= WS_FD_LOCK && d->sure[a]) {
+            /* another payload clearly leads the held one: the source time
+             * jumped, or an early weak lock took a neighbouring codeword */
             d->lock_q = best_q;             /* the source time jumped */
             d->stat   = d->best[a];
             d->misses = 0;
@@ -175,7 +231,7 @@ int ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult
         } else {
             return WS_FD_NONE;
         }
-    } else if (ga == a && d->best[a] >= WS_FD_LOCK &&
+    } else if (ga == a && d->best[a] >= WS_FD_LOCK && d->sure[a] &&
                (d->stat < WS_FD_HOLD || d->best[a] > WS_FD_SWITCH * d->stat)) {
         /* another alignment leads: a jump off the 6 s grid, or an early
          * lock on a half-matching alignment corrected */
@@ -206,7 +262,3 @@ int ff_ws_framedec_expected(const WSFrameDec *d, int back)
     return d->cw[(size_t)idx * WS_SLOTS + (n - f0)];
 }
 
-void ff_ws_framedec_unlock(WSFrameDec *d)
-{
-    d->lock = 0;
-}

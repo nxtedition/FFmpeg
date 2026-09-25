@@ -302,7 +302,16 @@ int64_t ff_waterstamp_wall_anchor(const char *group, int64_t pts_us);
 #define WS_FD_HOLD    4.0f      /* ... and below which a held lock misses   */
 #define WS_FD_MISSES  3         /* consecutive misses that drop the lock    */
 #define WS_FD_ZMAX    3.0f      /* symbol metrics are clipped to +-this     */
-#define WS_FD_SWITCH  1.3f      /* a lead this large moves a held lock      */
+#define WS_FD_SWITCH  1.3f      /* lead that moves a lock to another alignment */
+#define WS_FD_MARGIN  0.3f      /* normalised lead over the runner-up       */
+#define WS_FD_HIST    (2 * WS_SLOTS)
+/* Both layers of a stamp have the same amplitude, so over the last two
+ * frames the held codeword's metrics must add up to layer A's on the same
+ * scale; cross-talk of another stamp lands in the two layers unrelated.
+ * Measured at lock: genuine 0.85-1.10, cross-talk 0.3-0.5, up to 0.71 on
+ * the frame the decoder picked it. */
+#define WS_FD_RATIO   0.8f      /* to report a lock                         */
+#define WS_FD_RHOLD   0.6f      /* to keep one                              */
 
 enum { WS_FD_NONE, WS_FD_FRAME, WS_FD_LOCK_ON, WS_FD_JUMP, WS_FD_LOCK_OFF };
 
@@ -312,11 +321,16 @@ typedef struct WSFrameDec {
     float    var[WS_SLOTS];             /* accumulated noise variance           */
     int      nfr[WS_SLOTS];             /* frames accumulated per alignment     */
     float    z[WS_SLOTS][WS_CSK_M];     /* last 12 slots' metrics               */
+    float    hz[WS_FD_HIST][WS_CSK_M];  /* last 24 slots, for the layer check   */
+    float    hza[WS_FD_HIST];
     double   pos[WS_SLOTS];             /* caller's position of those slots     */
     int64_t  nslot;
     float    best[WS_SLOTS];            /* best normalised score per alignment  */
     int      best_q[WS_SLOTS];
+    int      sure[WS_SLOTS];            /* best leads the runner-up clearly     */
     int      lock, lock_a, lock_q, misses;
+    int      reported;                  /* the lock passed the layer check      */
+    float    ratio;                     /* last layer check: symbols / layer A  */
     float    stat;                      /* normalised score of the last frame   */
 } WSFrameDec;
 
@@ -331,14 +345,14 @@ void ff_ws_framedec_reset(WSFrameDec *d);
 void ff_ws_framedec_uninit(WSFrameDec *d);
 /**
  * Push one slot: z[] are the eight symbol metrics, unit variance under
- * noise and positive for the sent symbol; NULL marks a missed slot.
+ * noise and positive for the sent symbol; za is layer A's metric on the
+ * same scale; z NULL marks a missed slot.
  * @return WS_FD_* event; res is filled for every event but WS_FD_NONE.
+ *         Locks are only reported once they pass the layer check.
  */
-int  ff_ws_framedec_push(WSFrameDec *d, const float *z, double pos, WSFrameResult *res);
+int  ff_ws_framedec_push(WSFrameDec *d, const float *z, float za, double pos, WSFrameResult *res);
 /** Symbol the held lock predicts for the slot pushed back slots ago, or -1. */
 int  ff_ws_framedec_expected(const WSFrameDec *d, int back);
-/** Drop the lock (the caller rejected it); the decoder re-decides later. */
-void ff_ws_framedec_unlock(WSFrameDec *d);
 
 /* --- video -------------------------------------------------------------
  *
