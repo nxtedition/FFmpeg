@@ -178,6 +178,9 @@ static const CheckasmTest tests[] = {
     #if CONFIG_PNG_DECODER
         { "png", checkasm_check_png },
     #endif
+    #if CONFIG_PRORES_DECODER
+        { "proresdsp", checkasm_check_proresdsp },
+    #endif
     #if CONFIG_QPELDSP
         { "qpeldsp", checkasm_check_qpeldsp },
     #endif
@@ -303,6 +306,7 @@ static const CheckasmTest tests[] = {
 #endif
 #if CONFIG_AVUTIL
         { "aes",       checkasm_check_aes },
+        { "base64",    checkasm_check_base64 },
         { "crc",       checkasm_check_crc,   .uninit = checkasm_uninit_crc },
         { "fixed_dsp", checkasm_check_fixed_dsp },
         { "float_dsp", checkasm_check_float_dsp },

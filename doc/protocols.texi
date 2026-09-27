@@ -1199,6 +1199,11 @@ delay will be honored, rather than using exponential backoff. Useful for 429 and
 503 errors. Default enabled.
 @end table
 
+A stream carrying in-band ICY metadata is always treated as non-seekable, since
+its byte offsets do not address the payload. @option{seekable},
+@option{request_size} and @option{max_retries} therefore have no effect on such
+a stream.
+
 For more information see: @url{https://curl.se/libcurl/}.
 
 @section libsmbclient
