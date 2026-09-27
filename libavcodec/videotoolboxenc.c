@@ -756,6 +756,7 @@ static void vtenc_output_callback(
     }
 
     if (!sample_buffer) {
+        vtenc_free_buf_node(info);
         return;
     }
 
@@ -2674,9 +2675,14 @@ static int vtenc_populate_extradata(AVCodecContext   *avctx,
         goto pe_cleanup;
     }
 
+    if (!buf) {
+        // VideoToolbox reports a dropped frame as success with no buffer.
+        av_log(avctx, AV_LOG_ERROR, "Extradata frame dropped, no param sets\n");
+        status = AVERROR_EXTERNAL;
+        goto pe_cleanup;
+    }
+
     CFRelease(buf);
-
-
 
 pe_cleanup:
     CVPixelBufferRelease(pix_buf);
@@ -2691,8 +2697,8 @@ pe_cleanup:
     vtctx->frame_ct_out = 0;
 
     av_assert0(status != 0 || (avctx->extradata && avctx->extradata_size > 0));
-    if (!status)
-        vtenc_free_buf_node(node);
+    // NULL once ownership passed to VideoToolbox, so a set node must be freed.
+    vtenc_free_buf_node(node);
 
     return status;
 }

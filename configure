@@ -400,7 +400,7 @@ Toolchain options:
   --x86asmexe=EXE          use nasm-compatible assembler EXE [$x86asmexe_default]
   --cc=CC                  use C compiler CC [$cc_default]
   --stdc=STDC              use C standard STDC [$stdc_default]
-  --cxx=CXX                use C compiler CXX [$cxx_default]
+  --cxx=CXX                use C++ compiler CXX [C++ driver of CC]
   --stdcxx=STDCXX          use C standard STDCXX [$stdcxx_default]
   --objcc=OCC              use ObjC compiler OCC [$cc_default]
   --dep-cc=DEPCC           use dependency generator DEPCC [$cc_default]
@@ -1391,7 +1391,8 @@ check_objcflags(){
 }
 
 check_allcflags(){
-    check_cflags "$@" && check_cxxflags "$@"
+    check_cxxflags "$@"
+    check_cflags "$@"
 }
 
 test_ldflags(){
@@ -2280,11 +2281,6 @@ THREADS_LIST="
     w32threads
 "
 
-ATOMICS_LIST="
-    atomics_win32
-    atomics_os2
-"
-
 AUTODETECT_LIBS="
     $EXTERNAL_AUTODETECT_LIBRARY_LIST
     $HWACCEL_AUTODETECT_LIBRARY_LIST
@@ -2429,7 +2425,6 @@ ARCH_FEATURES="
 "
 
 BUILTIN_LIST="
-    MemoryBarrier
     mm_empty
     rdtsc
     sem_timedwait
@@ -2477,6 +2472,7 @@ HEADERS_LIST="
     termios_h
     udplite_h
     unistd_h
+    valgrind_memcheck_h
     valgrind_valgrind_h
     windows_h
     winsock2_h
@@ -2805,6 +2801,7 @@ CONFIG_EXTRA="
     vp3dsp
     vp8dsp
     vulkan_encode
+    vulkan_seg_gather
     vvc_sei
     wma_freqs
     wmv2dsp
@@ -3017,9 +3014,7 @@ valgrind_backtrace_conflict="optimizations"
 valgrind_backtrace_deps="valgrind_valgrind_h"
 
 # threading support
-atomics_win32_if="MemoryBarrier"
-atomics_os2_if="stdatomic"
-atomics_native_if_any="$ATOMICS_LIST"
+atomics_native_if_any="stdatomic atomics_win32"
 w32threads_deps="atomics_native"
 os2threads_deps="atomics_native"
 threads_if_any="$THREADS_LIST"
@@ -3039,7 +3034,7 @@ deflate_wrapper_deps="zlib"
 dirac_parse_select="golomb"
 dovi_rpudec_select="golomb"
 dovi_rpuenc_select="golomb"
-dnn_deps="avformat swscale"
+dnn_deps="avformat swscale threads"
 dnn_deps_any="libtensorflow libopenvino libtorch libonnxruntime"
 error_resilience_select="me_cmp"
 evcparse_select="golomb"
@@ -3109,7 +3104,7 @@ apng_encoder_select="deflate_wrapper llvidencdsp"
 aptx_encoder_select="audio_frame_queue"
 aptx_hd_encoder_select="audio_frame_queue"
 apv_decoder_select="cbs_apv"
-apv_vulkan_encoder_select="vulkan spirv_compiler cbs_apv"
+apv_vulkan_encoder_select="vulkan spirv_compiler cbs_apv vulkan_seg_gather"
 asv1_decoder_select="blockdsp bswapdsp idctdsp"
 asv1_encoder_select="aandcttables bswapdsp fdctdsp pixblockdsp"
 asv2_decoder_select="blockdsp bswapdsp idctdsp"
@@ -3147,7 +3142,7 @@ exr_decoder_select="bswapdsp"
 exr_encoder_deps="zlib"
 ffv1_decoder_select="rangecoder"
 ffv1_encoder_select="rangecoder"
-ffv1_vulkan_encoder_select="vulkan spirv_compiler"
+ffv1_vulkan_encoder_select="vulkan spirv_compiler vulkan_seg_gather"
 ffvhuff_decoder_select="huffyuv_decoder"
 ffvhuff_encoder_select="huffyuv_encoder"
 fic_decoder_select="golomb"
@@ -3173,7 +3168,7 @@ h263_encoder_select="h263dsp mpegvideoenc"
 h263i_decoder_select="h263_decoder"
 h263p_decoder_select="h263_decoder"
 h263p_encoder_select="h263_encoder"
-h264_decoder_select="cabac golomb h264chroma h264dsp h264parse h264pred h264qpel h264_sei videodsp"
+h264_decoder_select="bswapdsp cabac golomb h264chroma h264dsp h264parse h264pred h264qpel h264_sei videodsp"
 h264_decoder_suggest="error_resilience"
 hap_decoder_select="snappy texturedsp"
 hap_encoder_deps="libsnappy"
@@ -3256,7 +3251,7 @@ prores_decoder_select="blockdsp idctdsp"
 prores_encoder_select="fdctdsp"
 prores_aw_encoder_select="fdctdsp"
 prores_ks_encoder_select="fdctdsp"
-prores_ks_vulkan_encoder_select="vulkan spirv_compiler"
+prores_ks_vulkan_encoder_select="vulkan spirv_compiler vulkan_seg_gather"
 prores_raw_decoder_select="blockdsp idctdsp"
 qcelp_decoder_select="lsp"
 qdm2_decoder_select="mpegaudiodsp"
@@ -3321,7 +3316,7 @@ vp6f_decoder_select="vp6_decoder"
 vp7_decoder_select="h264pred videodsp vp8dsp"
 vp8_decoder_select="h264pred videodsp vp8dsp"
 vp9_decoder_select="videodsp vp9_parser cbs_vp9 vp9_superframe_split_bsf"
-vvc_decoder_select="cabac cbs_h266 golomb videodsp vvc_sei"
+vvc_decoder_select="bswapdsp cabac cbs_h266 golomb videodsp vvc_sei"
 wcmv_decoder_select="inflate_wrapper"
 webp_decoder_select="vp8_decoder"
 webp_anim_decoder_select="vp8_decoder"
@@ -3361,6 +3356,8 @@ videotoolbox_hwaccel_deps="videotoolbox pthreads"
 videotoolbox_hwaccel_extralibs="-framework QuartzCore"
 vulkan_deps="threads"
 vulkan_deps_any="libdl LoadLibrary"
+spirv_headers_spirv_h_deps="vulkan"
+spirv_unified1_spirv_h_deps="vulkan"
 
 apv_vulkan_hwaccel_deps="vulkan spirv_compiler"
 apv_vulkan_hwaccel_select="apv_decoder"
@@ -3543,6 +3540,7 @@ qsvvpp_select="qsv"
 vaapi_encode_deps="vaapi"
 vulkan_1_4_deps="vulkan"
 vulkan_encode_deps="vulkan"
+vulkan_seg_gather_deps="vulkan spirv_compiler"
 v4l2_m2m_deps="linux_videodev2_h sem_timedwait"
 
 bilateral_cuda_filter_deps="ffnvcodec"
@@ -4085,8 +4083,7 @@ schannel_conflict="openssl gnutls libtls mbedtls"
 sctp_protocol_deps="struct_sctp_event_subscribe struct_msghdr_msg_flags"
 sctp_protocol_select="network"
 securetransport_conflict="openssl gnutls libtls mbedtls"
-shared_protocol_deps="mmap unistd_h"
-shared_protocol_deps_any="stdatomic atomics_native"
+shared_protocol_deps="atomics_native"
 srtp_protocol_select="rtp_protocol srtp"
 tcp_protocol_select="network"
 tls_protocol_deps_any="gnutls openssl schannel securetransport libtls mbedtls"
@@ -4350,7 +4347,7 @@ avutil_suggest="amf clock_gettime ffnvcodec gcrypt libm zlib libdrm libmfx openc
 swresample_deps="avutil"
 swresample_suggest="libm libsoxr stdatomic"
 swscale_deps="avutil"
-swscale_suggest="libm stdatomic"
+swscale_suggest="libm stdatomic int128"
 shader_compression_suggest="zlib"
 
 avcodec_extralibs="pthreads_extralibs iconv_extralibs dxva2_extralibs liblcevc_dec_extralibs lcms2_extralibs"
@@ -4364,8 +4361,8 @@ ffmpeg_select="aformat_filter anull_filter atrim_filter crop_filter
                transpose_filter trim_filter vflip_filter"
 ffmpeg_suggest="ole32 psapi shell32"
 ffplay_deps="avcodec avformat avfilter swscale swresample sdl2"
-ffplay_select="crop_filter transpose_filter hflip_filter vflip_filter rotate_filter"
-ffplay_suggest="shell32 libplacebo vulkan"
+ffplay_select="crop_filter transpose_filter hflip_filter vflip_filter rotate_filter lcevc_merge_bsf color_filter"
+ffplay_suggest="shell32 libplacebo vulkan ass_filter"
 ffprobe_deps="avcodec avformat"
 ffprobe_suggest="shell32"
 
@@ -4395,7 +4392,6 @@ ar_default="ar"
 cc_default="gcc"
 stdc_default="c17"
 stdcxx_default="c++17"
-cxx_default="g++"
 host_cc_default="gcc"
 doxygen_default="doxygen"
 makeinfo_default="makeinfo"
@@ -4926,11 +4922,9 @@ case "$toolchain" in
     clang-*)
         requested_sanitizers="${toolchain#clang-}"
         cc_default="clang"
-        cxx_default="clang++"
     ;;
     llvm|llvm-*)
         cc_default="clang"
-        cxx_default="clang++"
         ar_default="llvm-ar"
         nm_default="llvm-nm -g"
         ranlib_default="llvm-ranlib"
@@ -4941,7 +4935,6 @@ case "$toolchain" in
     gcc-*)
         requested_sanitizers="${toolchain#gcc-}"
         cc_default="gcc"
-        cxx_default="g++"
         # In case of tsan with gcc, PIC has to be enabled
         if [ "${toolchain#gcc-}" = "tsan" ]; then
             add_allcflags -fPIC
@@ -4961,7 +4954,6 @@ case "$toolchain" in
     ;;
     msvc|msvc-*)
         cc_default="cl.exe"
-        cxx_default="cl.exe"
         ld_default="$source_path/compat/windows/mslink"
         windres_default="$source_path/compat/windows/mswindres"
         nm_default="dumpbin.exe -symbols"
@@ -5023,7 +5015,6 @@ fi
 
 ar_default="${cross_prefix}${ar_default}"
 cc_default="${cross_prefix}${cc_default}"
-cxx_default="${cross_prefix}${cxx_default}"
 nm_default="${cross_prefix}${nm_default}"
 pkg_config_default="${cross_prefix}${pkg_config_default}"
 ranlib_default="${cross_prefix}${ranlib_default}"
@@ -5057,7 +5048,7 @@ if enabled cuda_nvcc; then
     fi
 fi
 
-set_default arch cc cxx doxygen pkg_config ranlib strip sysinclude \
+set_default arch cc doxygen pkg_config ranlib strip sysinclude \
     target_exec x86asmexe glslc metalcc metallib stdc stdcxx makeinfo
 enabled cross_compile || host_cc_default=$cc
 set_default host_cc
@@ -5175,6 +5166,7 @@ msvc_common_flags(){
             # generic catch all at the bottom will print the original flag.
             -Wall)                ;;
             -Wextra)              ;;
+            -Werror)              echo -WX ;;
             -std=c*)              echo /std:${flag#-std=};;
             # Common flags
             -fomit-frame-pointer) ;;
@@ -5448,7 +5440,15 @@ test -n "$cc_type" && enable $cc_type ||
 : ${dep_cc_default:=$cc}
 : ${ld_default:=$cc}
 : ${host_ld_default:=$host_cc}
-set_default ar as objcc dep_cc ld ln_s host_ld windres response_files
+
+case $cc_type,$cc in
+    clang,*clang*)         cxx_default="${cc%clang*}clang++${cc##*clang}" ;;
+    gcc,*gcc*|clang,*gcc*) cxx_default="${cc%gcc*}g++${cc##*gcc}" ;;
+    gcc,*cc*|clang,*cc*)   cxx_default="${cc%cc*}c++${cc##*cc}" ;;
+    icc,*icc*)             cxx_default="${cc%icc*}icpc${cc##*icc}" ;;
+    *)                     cxx_default=$cc ;;
+esac
+set_default ar as cxx objcc dep_cc ld ln_s host_ld windres response_files
 
 probe_cc as "$as"
 asflags_filter=$_flags_filter
@@ -6307,25 +6307,21 @@ case $target_os in
         ;;
 esac
 
-# test if creating links works
-link_dest=$(mktemp -u $TMPDIR/dest_XXXXXXXX)
-link_name=$(mktemp -u $TMPDIR/name_XXXXXXXX)
-mkdir "$link_dest"
-$ln_s "$link_dest" "$link_name"
-touch "$link_dest/test_file"
-if [ "$source_path" != "." ] && [ "$source_path" != "./src" ] && ([ ! -d src ] || [ -L src ]) && [ -e "$link_name/test_file" ]; then
-    # create link to source path
+# Ask for native links and keep the link only if the compiler works with them.
+link_dir(){
+    MSYS="$MSYS winsymlinks:native" CYGWIN="$CYGWIN winsymlinks:native" $ln_s "$@"
+}
+
+# Link the source tree into the build directory and use it the way the build
+# does, with the full source path as the fallback.
+source_link="$source_path"
+if [ "$source_path" != "." ] && [ "$source_path" != "./src" ] && ([ ! -d src ] || [ -L src ]); then
     [ -e src ] && rm src
-    $ln_s "$source_path" src
-    source_link=src
-else
-    # creating directory links doesn't work
-    # fall back to using the full source path
-    source_link="$source_path"
+    link_dir "$source_path" src && [ -L src ] && test_cpp -I. <<EOF && source_link=src
+#include "src/libavutil/version_major.h"
+EOF
+    [ "$source_link" = src ] || rm -rf src
 fi
-# cleanup
-rm -r "$link_dest"
-rm -r "$link_name"
 
 # determine libc flavour
 
@@ -6821,10 +6817,26 @@ if ! disabled network; then
     fi
 fi
 
-check_builtin MemoryBarrier windows.h "MemoryBarrier()"
+check_builtin atomics_win32 intrin.h "long v = 0; _InterlockedOr(&v, 0)"
 check_builtin gmtime_r time.h "time_t *time; struct tm *tm; gmtime_r(time, tm)"
 check_builtin localtime_r time.h "time_t *time; struct tm *tm; localtime_r(time, tm)"
-check_builtin int128 "" "volatile __int128 i128var = 1; i128var /= 100;"
+check_int128(){
+    check_builtin int128 "" "volatile __int128 i128var = 1; i128var /= 100;" "$@" &&
+        int128_extralibs="$*"
+}
+
+# Clang targeting MSVC compiles __int128 but does not link the compiler-rt
+# builtins providing the 128-bit division helpers. Ask the driver for the
+# library name and link it explicitly.
+check_int128 ||
+    case "$cc_type" in
+        clang|msvc)
+            rtlib=$($cc $CFLAGS -print-libgcc-file-name --rtlib=compiler-rt 2>/dev/null)
+            case $rtlib in
+                *.lib) check_int128 -l$(basename "$rtlib" .lib) ;;
+            esac
+        ;;
+    esac
 
 check_builtin float16 "" "_Float16 f16var"
 if enabled float16; then
@@ -6949,6 +6961,7 @@ check_headers sys/time.h
 check_headers sys/un.h
 check_headers termios.h
 check_headers unistd.h
+check_headers valgrind/memcheck.h
 check_headers valgrind/valgrind.h
 check_func_headers VideoToolbox/VTCompressionSession.h VTCompressionSessionPrepareToEncodeFrames -framework VideoToolbox
 check_func_headers VideoToolbox/VideoToolbox.h VTDecompressionSessionDecodeFrame -framework VideoToolbox
@@ -7796,18 +7809,11 @@ fi
 
 enabled debug && add_allcflags -g"$debuglevel" && add_asflags -g"$debuglevel"
 
-for lang in c cxx; do
-    test_${lang}flags -Werror=unused-command-line-argument &&
-        append unknown_warning_${lang}flags "-Werror=unused-command-line-argument"
-    test_${lang}flags -Werror=unknown-warning-option &&
-        append unknown_warning_${lang}flags "-Werror=unknown-warning-option"
-done
-
 check_warning(){
     warning_flag=$1
     flag_to_add=${2:-$1}
-    test_cflags $unknown_warning_cflags $warning_flag && add_cflags $flag_to_add
-    test_cxxflags $unknown_warning_cxxflags $warning_flag && add_cxxflags $flag_to_add
+    test_cflags -Werror $warning_flag && add_cflags $flag_to_add
+    test_cxxflags -Werror $warning_flag && add_cxxflags $flag_to_add
 }
 
 check_disable_warning(){
@@ -7817,7 +7823,7 @@ check_disable_warning(){
 
 check_c_warning(){
     warning_flag=$1
-    test_cflags $unknown_warning_cflags $warning_flag && add_cflags $warning_flag
+    test_cflags -Werror $warning_flag && add_cflags $warning_flag
 }
 
 # add some useful compiler flags if supported
@@ -7864,7 +7870,7 @@ check_disable_warning -Wno-microsoft-enum-forward-reference
 
 check_disable_warning_headers(){
     warning_flag=-W${1#-Wno-}
-    test_cflags $unknown_warning_cflags $warning_flag && add_cflags_headers $1
+    test_cflags -Werror $warning_flag && add_cflags_headers $1
 }
 
 check_disable_warning_headers -Wno-deprecated-declarations
@@ -8100,8 +8106,6 @@ check_deps $CONFIG_LIST       \
            $CONFIG_EXTRA      \
            $HAVE_LIST         \
            $ALL_COMPONENTS    \
-
-enabled threads && ! enabled pthreads && ! enabled atomics_native && die "non pthread threading without atomics not supported, try adding --enable-pthreads or --cpu=i486 or higher if you are on x86"
 
 enabled threads || warn \
     "Threading support was disabled or is not available on the target platform." \
