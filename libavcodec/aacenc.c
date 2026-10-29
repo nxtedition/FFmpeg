@@ -1425,6 +1425,17 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
         return ret;
     frame_bits = its = 0;
     do {
+        if (its && ((avctx->flags & AV_CODEC_FLAG_QSCALE) ||
+                    is_mode || ms_mode || tns_mode || pred_mode)) {
+            /* Every retry starts from the original coefficients, including
+             * strict-rate retries and both channels of each CPE. */
+            for (i = 0; i < s->chan_map[0]; i++) {
+                chans = s->chan_map[i + 1] == TYPE_CPE ? 2 : 1;
+                for (ch = 0; ch < chans; ch++)
+                    memcpy(s->cpe[i].ch[ch].coeffs, s->cpe[i].ch[ch].pcoeffs,
+                           sizeof(s->cpe[i].ch[ch].coeffs));
+            }
+        }
         init_put_bits(&s->pb, avpkt->data, avpkt->size);
 
         if ((avctx->frame_num & 0xFF)==1 && !(avctx->flags & AV_CODEC_FLAG_BITEXACT))
@@ -1576,17 +1587,23 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
             if (frame_bits < 6144 * s->channels - 3 || its >= 16)
                 break;
             s->lambda *= FFMIN(0.9f, (6144.0f * s->channels - 3) / frame_bits);
-            for (i = 0; i < s->chan_map[0]; i++) {
-                chans = s->chan_map[i + 1] == TYPE_CPE ? 2 : 1;
-                for (ch = 0; ch < chans; ch++)
-                    memcpy(s->cpe[i].ch[ch].coeffs, s->cpe[i].ch[ch].pcoeffs,
-                           sizeof(s->cpe[i].ch[ch].coeffs));
-            }
             its++;
             continue;
         }
 
         frame_bits = put_bits_count(&s->pb);
+
+        /* A coder that cannot get under the decoder buffer would otherwise
+         * re-encode this frame forever: emit it oversized instead. The
+         * retries drove lambda to its floor; don't carry that into the next
+         * frame (the NMR coder never raises it again, and would hold every
+         * later frame to its smallest legality cap). */
+        if (its >= 16 && frame_bits >= 6144 * s->channels - 3) {
+            av_log(avctx, AV_LOG_WARNING, "Frame of %d bits exceeds the decoder buffer\n",
+                   frame_bits);
+            s->lambda = avctx->global_quality > 0 ? avctx->global_quality : 120;
+            break;
+        }
 
         /* The NMR coder rate-controls itself (global-lambda reservoir servo):
          * per-frame bits intentionally float around the nominal rate, so skip
@@ -1607,13 +1624,12 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
 
         /* When strict bit-rate control is demanded */
         if (avctx->bit_rate_tolerance == 0) {
-            if (rate_bits < frame_bits) {
+            if (rate_bits < frame_bits && its < 16) {
                 float ratio = ((float)rate_bits) / frame_bits;
                 s->lambda *= FFMIN(0.9f, ratio);
+                its++;
                 continue;
             }
-            /* reset lambda when solution is found */
-            s->lambda = avctx->global_quality > 0 ? avctx->global_quality : 120;
             break;
         }
 
@@ -1646,22 +1662,13 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
             if (ratio > 0.9f && ratio < 1.1f) {
                 break;
             } else {
-                if (is_mode || ms_mode || tns_mode || pred_mode) {
-                    for (i = 0; i < s->chan_map[0]; i++) {
-                        // Must restore coeffs
-                        chans = tag == TYPE_CPE ? 2 : 1;
-                        cpe = &s->cpe[i];
-                        for (ch = 0; ch < chans; ch++)
-                            memcpy(cpe->ch[ch].coeffs, cpe->ch[ch].pcoeffs, sizeof(cpe->ch[ch].coeffs));
-                    }
-                }
                 its++;
             }
         } else {
             break;
         }
     } while (1);
-    if (avctx->flags & AV_CODEC_FLAG_QSCALE)
+    if ((avctx->flags & AV_CODEC_FLAG_QSCALE) || avctx->bit_rate_tolerance == 0)
         s->lambda = avctx->global_quality > 0 ? avctx->global_quality : 120;
 
     /* tool-usage stats over the final per-band decisions of this frame */

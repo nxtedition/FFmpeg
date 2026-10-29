@@ -1,3 +1,8 @@
+FATE_LIBAVCODEC-$(CONFIG_AAC_ENCODER) += fate-aacpsy
+fate-aacpsy: libavcodec/tests/aacpsy$(EXESUF)
+fate-aacpsy: CMD = run libavcodec/tests/aacpsy$(EXESUF)
+fate-aacpsy: CMP = null
+
 FATE_LIBAVCODEC-$(CONFIG_AC3DSP) += fate-ac3-bit-allocation
 fate-ac3-bit-allocation: libavcodec/tests/ac3$(EXESUF)
 fate-ac3-bit-allocation: CMD = run libavcodec/tests/ac3$(EXESUF)

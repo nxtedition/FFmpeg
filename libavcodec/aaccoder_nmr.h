@@ -561,6 +561,67 @@ static int nmr_slot_bits(const NMRSlot *t, const int (*nb)[NMR_NCAND], int step)
     return tot;
 }
 
+/* Zero a coded band for legality, subwindow flags included (the group flag is
+ * re-derived by ANDing). PNS skips bands with zeroes[] set, so it stays out. */
+static void nmr_drop_band(NMRSlot *t, int b)
+{
+    SingleChannelElement *sce = t->sce;
+    for (int w2 = 0; w2 < sce->ics.group_len[t->bw[b]]; w2++)
+        sce->zeroes[(t->bw[b] + w2)*16 + t->bg[b]] = 1;
+}
+
+/* Keep act[] chain-legal on the current candidate grid. A band's candidates
+ * only span [minsf, the sf at which it quantizes to zero], so a near-silent
+ * band that is codeable only around sf 0 next to a loud band whose minsf is
+ * more than SCALE_MAX_DIFF away leaves the trellis no legal path. It then
+ * fills every later band with FLT_MAX and backtracks to their finest
+ * candidates at any lambda, the commit clamps the loud bands below their
+ * minsf, and the oversized frame traps the outer re-encode loop forever.
+ * Drop the quieter band of each such pair. A no-op on a feasible chain. */
+static void nmr_chain_repair(NMRSlot *t, int step)
+{
+    int keep[128], rlo[128], rhi[128], n = 0;
+
+    for (int k = 0; k < t->nact; k++) {
+        const int b  = t->act[k];
+        const int lo = t->blo[b], hi = lo + (t->bnc[b] - 1) * step;
+        int clo = lo, chi = hi, drop = 0;
+        while (n) {
+            /* b's candidates within reach of the previous kept band's */
+            const int p = keep[n - 1];
+            int rl = FFMAX(lo, rlo[n - 1] - SCALE_MAX_DIFF);
+            int rh = FFMIN(hi, rhi[n - 1] + SCALE_MAX_DIFF);
+            if (rh >= lo) {
+                rl = lo + (rl - lo + step - 1) / step * step;
+                rh = lo + (rh - lo) / step * step;
+                if (rl <= rh) {
+                    clo = rl;
+                    chi = rh;
+                    break;
+                }
+            }
+            if (t->maxvals[t->bidx[p]] > t->maxvals[t->bidx[b]]) {
+                drop = 1;
+                break;
+            }
+            nmr_drop_band(t, p);
+            n--;
+        }
+        if (drop) {
+            nmr_drop_band(t, b);
+            continue;
+        }
+        keep[n] = b;
+        rlo[n]  = clo;
+        rhi[n]  = chi;
+        n++;
+    }
+    if (n != t->nact) {
+        memcpy(t->act, keep, n * sizeof(t->act[0]));
+        t->nact = n;
+    }
+}
+
 /* Run every slot's trellis at one fixed lambda; returns the pooled bits. */
 static int nmr_eval_slots(AACEncContext *s, NMRSlot *const *sl, int nsl, int step, float lam)
 {
@@ -569,11 +630,42 @@ static int nmr_eval_slots(AACEncContext *s, NMRSlot *const *sl, int nsl, int ste
         NMRSlot *t = sl[k];
         if (!t->nact)
             continue;
+        nmr_chain_repair(t, step);
         nmr_solve(s, s->nmr->nd[t->si], s->nmr->nb[t->si], t->blo, t->bnc, step,
                   t->act, t->nact, 0, t->chosen, lam, lam, 1);
         total += nmr_slot_bits(t, s->nmr->nb[t->si], step);
     }
     return total;
+}
+
+/* Dense short frames at high rates can exceed the decoder buffer even at the
+ * coarsest candidate grid; an illegal frame traps the outer re-encode loop
+ * forever. Shed the highest bands until the pooled bits fit cap. act[] runs
+ * window group by window group, so pick the highest band across all groups;
+ * the first band anchors the scalefactor chain and stays. Returns the bits. */
+static int nmr_shed_to_cap(AACEncContext *s, NMRSlot *const *sl, int nsl,
+                           float lam, int tot, int cap)
+{
+    while (tot > cap) {
+        int dropped = 0;
+        for (int k = 0; k < nsl; k++) {
+            NMRSlot *t = sl[k];
+            int hi = 1;
+            if (t->nact <= 1)
+                continue;
+            for (int b_ = 2; b_ < t->nact; b_++)
+                if (t->bg[t->act[b_]] >= t->bg[t->act[hi]])
+                    hi = b_;
+            nmr_drop_band(t, t->act[hi]);
+            memmove(&t->act[hi], &t->act[hi + 1], (t->nact - hi - 1) * sizeof(t->act[0]));
+            t->nact--;
+            dropped = 1;
+        }
+        if (!dropped)
+            break;
+        tot = nmr_eval_slots(s, sl, nsl, NMR_STEP, lam);
+    }
+    return tot;
 }
 
 /* Bisect ONE shared lambda across the slots so the POOLED bits meet destbits.
@@ -593,6 +685,25 @@ static float nmr_solve_slots(AACEncContext *s, NMRSlot *const *sl, int nsl, int 
             lo_l = lam;
         else
             hi_l = lam;
+    }
+    return lam;
+}
+
+/* Decoder-buffer legality is absolute, as on the VBR path: a frame over the
+ * hard cap is re-solved toward it up to the coarsest lambda, and shed if
+ * that still does not fit. Returns the operating lambda. */
+static float nmr_fit_hardcap(AACEncContext *s, NMRSlot *const *sl, int nsl,
+                             float lam, int hardcap)
+{
+    int tot = 0;
+    for (int k = 0; k < nsl; k++)
+        tot += nmr_slot_bits(sl[k], s->nmr->nb[sl[k]->si], NMR_STEP);
+    if (tot > hardcap) {
+        lam = nmr_solve_slots(s, sl, nsl, NMR_STEP, hardcap, lam, 1e4f, NMR_RC_ITERS);
+        tot = 0;
+        for (int k = 0; k < nsl; k++)
+            tot += nmr_slot_bits(sl[k], s->nmr->nb[sl[k]->si], NMR_STEP);
+        nmr_shed_to_cap(s, sl, nsl, lam, tot, hardcap);
     }
     return lam;
 }
@@ -1090,35 +1201,7 @@ static void nmr_solve_group(AVCodecContext *avctx, AACEncContext *s,
             tot = 0;
             for (int k = 0; k < nsl; k++)
                 tot += nmr_slot_bits(sl[k], s->nmr->nb[sl[k]->si], NMR_STEP);
-            /* dense short frames at high rates can exceed the decoder
-             * buffer even at the coarsest candidate grid; an illegal frame
-             * traps the outer re-encode loop forever. Shed the highest
-             * bands until the frame fits. act[] runs window group by window
-             * group, so pick the highest band across all groups; the first
-             * band anchors the scalefactor chain and stays. */
-            while (tot > hardcap) {
-                int dropped = 0;
-                for (int k = 0; k < nsl; k++) {
-                    NMRSlot *t = sl[k];
-                    SingleChannelElement *sce = t->sce;
-                    int hi = 1, b, w0, g;
-                    if (t->nact <= 1)
-                        continue;
-                    for (int b_ = 2; b_ < t->nact; b_++)
-                        if (t->bg[t->act[b_]] >= t->bg[t->act[hi]])
-                            hi = b_;
-                    b  = t->act[hi];
-                    w0 = t->bw[b]; g = t->bg[b];
-                    for (int w2 = 0; w2 < sce->ics.group_len[w0]; w2++)
-                        sce->zeroes[(w0+w2)*16+g] = 1;
-                    memmove(&t->act[hi], &t->act[hi + 1], (t->nact - hi - 1) * sizeof(t->act[0]));
-                    t->nact--;
-                    dropped = 1;
-                }
-                if (!dropped)
-                    break;
-                tot = nmr_eval_slots(s, sl, nsl, NMR_STEP, lam);
-            }
+            nmr_shed_to_cap(s, sl, nsl, lam, tot, hardcap);
         }
     }
 
@@ -1165,11 +1248,15 @@ static void nmr_solve_group(AVCodecContext *avctx, AACEncContext *s,
                 }
             }
         }
+        /* the cap solves above can rail at the coarsest lambda and still
+         * not fit */
+        lam = nmr_fit_hardcap(s, sl, nsl, lam, hardcap);
         s->nmr->lam_slew = lam;
     } else if (rc_eligible && !vbr) {
         /* corridor not yet bootstrapped: the same bucket-full floor, so a
          * fade-in bootstraps lam_rc at a spending operating point instead
          * of memorizing the intro's starvation lambda */
+        int hardcap = av_clip((int)(5800.f * FFMIN(1.f, lambda / 120.f)), 256, 5800) * chans;
         int headroom = rc_bmax - av_clip(s->nmr->rc_fill, -rc_bmax, rc_bmax);
         int fbits = (rc_rate_frame - headroom) * chans / s->channels;
         int tot = 0;
@@ -1177,6 +1264,8 @@ static void nmr_solve_group(AVCodecContext *avctx, AACEncContext *s,
             tot += nmr_slot_bits(sl[k], s->nmr->nb[sl[k]->si], NMR_STEP);
         if (tot < fbits)
             lam = nmr_solve_slots(s, sl, nsl, NMR_STEP, fbits, lam / 64.0f, lam, NMR_RC_ITERS);
+        /* the hard cap applies before the servo bootstraps, too */
+        lam = nmr_fit_hardcap(s, sl, nsl, lam, hardcap);
     }
 
     if (!vbr || vbr_subst)

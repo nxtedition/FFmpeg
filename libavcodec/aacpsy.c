@@ -965,8 +965,11 @@ static void psy_3gpp_analyze_channel(FFPsyContext *ctx, int channel,
             int start = 0;
             for (g = 0; g < num_bands; g++) {
                 AacPsyBand *band = &pch->band[w+g];
+                /* Do not let the signal-relative ceiling override the
+                 * threshold in quiet and make inaudible bands codeable. */
                 if (start * l2f >= knee)
-                    band->thr = FFMIN(band->thr, band->energy * lo);
+                    band->thr = FFMIN(band->thr, FFMAX(coeffs[g].ath,
+                                                     band->energy * lo));
                 start += band_sizes[g];
             }
         }
