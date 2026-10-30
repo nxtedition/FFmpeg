@@ -214,6 +214,19 @@ framecrc(){
     ffmpeg "$@" -bitexact -f framecrc -
 }
 
+aacenc_frame_sizes(){
+    channels=$1
+    shift
+    packetfile="${outdir}/${test}.packets"
+    cleanfiles="$cleanfiles $packetfile"
+    framecrc "$@" > "$packetfile"
+    echo "exit status: $?"
+    awk -F, -v cap="$((768 * channels))" '
+        !/^#/ && NF >= 6 { packets++; oversized += $5 > cap }
+        END { printf "packets: %d\noversized: %d\n", packets, oversized }
+    ' "$packetfile"
+}
+
 ffmetadata(){
     ffmpeg "$@" -bitexact -f ffmetadata -
 }
@@ -735,6 +748,31 @@ concat(){
     else
         run ffprobe${PROGSUF}${EXECSUF} -bitexact -threads $threads -show_streams -show_packets -of compact=p=0:nk=1 -safe 0 $extra_args $(target_path $concatfile)
     fi
+}
+
+seek_concat(){
+    template=$1
+    sample=$2
+    shift 2
+
+    concatfile="${outdir}/${test}.ffconcat"
+    cleanfiles="$cleanfiles $concatfile"
+
+    awk "{gsub(/%SRCFILE%/, \"$sample\"); print}" $template > $concatfile
+    run libavformat/tests/seek${EXECSUF} $(target_path $concatfile) -safe 0 "$@"
+}
+
+seek_staggered(){
+    sample=$1
+    offset=$2
+    shift 2
+
+    file="${outdir}/${test}.mov"
+    cleanfiles="$cleanfiles $file"
+
+    ffmpeg -i $sample -itsoffset $offset -i $sample -map 0:a -map 1:a -c copy \
+        -fflags +bitexact -f mov -y $(target_path $file) || return
+    run libavformat/tests/seek${EXECSUF} $(target_path $file) "$@"
 }
 
 venc_data(){

@@ -1,0 +1,12 @@
+CBR long audible: bands 16, finite 16, masked 0, limited 16
+CBR long quiet: bands 16, finite 16, masked 16, limited 0
+CBR short audible: bands 40, finite 40, masked 0, limited 40
+CBR short quiet: bands 40, finite 40, masked 40, limited 0
+VBR long audible: bands 16, finite 16, masked 0, limited 16
+VBR long quiet: bands 16, finite 16, masked 16, limited 0
+VBR short audible: bands 40, finite 40, masked 0, limited 40
+VBR short quiet: bands 40, finite 40, masked 40, limited 0
+ABR long audible: bands 16, finite 16, masked 0, limited 16
+ABR long quiet: bands 16, finite 16, masked 16, limited 0
+ABR short audible: bands 40, finite 40, masked 0, limited 40
+ABR short quiet: bands 40, finite 40, masked 40, limited 0

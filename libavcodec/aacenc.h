@@ -161,6 +161,8 @@ typedef struct AACCoefficientsEncoder {
 
 extern const AACCoefficientsEncoder ff_aac_coders[];
 
+void ff_aac_coder_init_tables(void);
+
 typedef struct AACQuantizeBandCostCacheEntry {
     float rd;
     float energy;

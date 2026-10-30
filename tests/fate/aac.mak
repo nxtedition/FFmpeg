@@ -279,6 +279,28 @@ fate-aac-nmr-abr-encode: REF = $(SAMPLES)/audio-reference/luckynight_2ch_44kHz_s
 fate-aac-nmr-abr-encode: CMP_TARGET = 451
 fate-aac-nmr-abr-encode: FUZZ = 15
 
+# A near-silent impulse in the short window before an onset sits ~90 dB under
+# the onset bands: the NMR trellis found no chain-legal scalefactor path and
+# re-encoded the frame forever
+FATE_AAC_NMR_CHAIN-$(call ALLYES, LAVFI_INDEV AEVALSRC_FILTER ARESAMPLE_FILTER PCM_F64LE_DECODER PCM_F64BE_DECODER AAC_ENCODER NULL_MUXER) += fate-aac-nmr-chain-encode
+fate-aac-nmr-chain-encode: CMD = ffmpeg -auto_conversion_filters -f lavfi -i "aevalsrc=if(eq(n\,24000)\,1e-10\,0)+if(gte(n\,24256)\,0.01*sin(n*n*0.37+n)\,0):s=48000:d=1.5" -c:a aac -b:a 128k -fflags +bitexact -flags +bitexact -f null -
+fate-aac-nmr-chain-encode: CMP = null
+
+# Upstream issue #25580: the same chain break in an initial short frame.
+FATE_AAC_NMR_CHAIN-$(call ALLYES, LAVFI_INDEV AEVALSRC_FILTER ARESAMPLE_FILTER PCM_F64LE_DECODER PCM_F64BE_DECODER AAC_ENCODER NULL_MUXER) += fate-aac-nmr-onset-encode
+fate-aac-nmr-onset-encode: CMD = ffmpeg -auto_conversion_filters -f lavfi -i "aevalsrc=1e-10*eq(n\,448)+gte(n\,704)*random(0):d=0.05" -c:a aac -fflags +bitexact -flags +bitexact -f null -
+fate-aac-nmr-onset-encode: CMP = null
+
+# Even a silent frame cannot meet a bitrate below its signalling overhead.
+FATE_AAC_NMR_CHAIN-$(call ALLYES, LAVFI_INDEV AEVALSRC_FILTER ARESAMPLE_FILTER PCM_F64LE_DECODER PCM_F64BE_DECODER AAC_ENCODER NULL_MUXER) += fate-aac-strict-rate-encode
+fate-aac-strict-rate-encode: CMD = ffmpeg -auto_conversion_filters -f lavfi -i "aevalsrc=0:s=48000:d=0.1" -c:a aac -b:a 1 -bt 0 -fflags +bitexact -flags +bitexact -f null -
+fate-aac-strict-rate-encode: CMP = null
+
+# Check packet legality as well as completion, including exhausted retries.
+FATE_AAC_NMR_CHAIN-$(call ALLYES, LAVFI_INDEV AEVALSRC_FILTER ARESAMPLE_FILTER PCM_F64LE_DECODER PCM_F64BE_DECODER AAC_ENCODER FRAMECRC_MUXER PIPE_PROTOCOL) += fate-aac-nmr-onset-packets fate-aac-overflow
+fate-aac-nmr-onset-packets: CMD = aacenc_frame_sizes 1 -auto_conversion_filters -f lavfi -i "aevalsrc=1e-10*eq(n\,448)+gte(n\,704)*random(0):d=0.05" -c:a aac -fflags +bitexact -flags +bitexact
+fate-aac-overflow: CMD = aacenc_frame_sizes 1 -auto_conversion_filters -f lavfi -i "aevalsrc=1e-10*eq(n\,448)+gte(n\,704)*random(0):d=0.05" -c:a aac -aac_coder twoloop -b:a 64k -fflags +bitexact -flags +bitexact
+
 tests/data/fate/aac-5_1_2.adts: TAG = GEN
 tests/data/fate/aac-5_1_2.adts: tests/data/asynth-44100-8.wav
 tests/data/fate/aac-5_1_2.adts: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data/fate
@@ -389,8 +411,27 @@ FATE_AAC_ENCODE_FFPROBE-$(call TRANSCODE, AAC, ADTS AAC, WAV_DEMUXER PCM_S16LE_D
 
 FATE_AAC_BSF-$(call FRAMECRC, AAC MATROSKA, AAC, AAC_PARSER AAC_ADTSTOASC_BSF MATROSKA_MUXER) += fate-aac-autobsf-adtstoasc
 
+# The pre-roll a seek needs, by how long a frame is in output samples.
+FATE_AAC_PREROLL-$(call DEMDEC, MOV, AAC) += fate-aac-seek-preroll-sbr \
+                                            fate-aac-seek-preroll-sbr-no-doubling \
+                                            fate-aac-seek-preroll-frame-length-short \
+                                            fate-aac-seek-preroll-eld
+fate-aac-seek-preroll-sbr: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_entries stream=profile,sample_rate,seek_preroll -print_format compact $(TARGET_SAMPLES)/aac/al_sbr_cm_48_2.mp4
+fate-aac-seek-preroll-sbr-no-doubling: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_entries stream=profile,sample_rate,seek_preroll -print_format compact $(TARGET_SAMPLES)/aac/al_sbr_sr_48_2_fsaac48.mp4
+fate-aac-seek-preroll-frame-length-short: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_entries stream=profile,sample_rate,seek_preroll -print_format compact $(TARGET_SAMPLES)/aac/al04sf_48.mp4
+fate-aac-seek-preroll-eld: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -show_entries stream=profile,sample_rate,seek_preroll -print_format compact $(TARGET_SAMPLES)/aac/er_eld2000np_48_ep0.mp4
+
+# Where a seek lands, by the same lengths of frame.
+FATE_AAC_PREROLL-$(call DEMDEC, MOV, AAC) += fate-aac-seek-landing-sbr \
+                                            fate-aac-seek-landing-frame-length-short
+fate-aac-seek-landing-sbr: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -read_intervals 10.3%+\#3 -show_entries packet=pts,dts,duration -print_format compact $(TARGET_SAMPLES)/aac/al_sbr_cm_48_2.mp4
+fate-aac-seek-landing-frame-length-short: CMD = run ffprobe$(PROGSSUF)$(EXESUF) -read_intervals 3.3%+\#3 -show_entries packet=pts,dts,duration -print_format compact $(TARGET_SAMPLES)/aac/al04sf_48.mp4
+
+FATE_SAMPLES_FFPROBE += $(FATE_AAC_PREROLL-yes)
+
 FATE_SAMPLES_FFMPEG += $(FATE_AAC_ALL) $(FATE_AAC_FRAMECRC-yes) $(FATE_AAC_ENCODE-yes) $(FATE_AAC_BSF-yes)
 FATE_SAMPLES_FFMPEG_FFPROBE += $(FATE_AAC_ENCODE_FFPROBE-yes)
+FATE_FFMPEG += $(FATE_AAC_NMR_CHAIN-yes)
 
-fate-aac: $(FATE_AAC_ALL) $(FATE_AAC_FRAMECRC-yes) $(FATE_AAC_ENCODE-yes) $(FATE_AAC_ENCODE_FFPROBE-yes) $(FATE_AAC_BSF-yes)
+fate-aac: $(FATE_AAC_ALL) $(FATE_AAC_PREROLL-yes) $(FATE_AAC_FRAMECRC-yes) $(FATE_AAC_ENCODE-yes) $(FATE_AAC_ENCODE_FFPROBE-yes) $(FATE_AAC_BSF-yes) $(FATE_AAC_NMR_CHAIN-yes)
 fate-aac-latm: $(FATE_AAC_LATM-yes)

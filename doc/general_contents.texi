@@ -650,6 +650,8 @@ library:
     @tab A format used by libvpx
 @item Internet Video Recording  @tab   @tab X
 @item IRCAM                     @tab X @tab X
+@item JPEG Multi-Picture Format @tab X @tab X
+    @tab Includes JPEG Ultra HDR (ISO 21496-1 gain map) images.
 @item LAF                       @tab   @tab X
     @tab Limitless Audio Format
 @item LATM                      @tab X @tab X
@@ -1136,6 +1138,8 @@ following image formats are supported:
 @item IFF ByteRun1           @tab     @tab  X
     @tab IFF run length encoded bitmap
 @item Infinity IMM4          @tab     @tab  X
+@item Infinity IMM5          @tab     @tab  X
+@item Infinity IMM6          @tab     @tab  X
 @item Intel H.263            @tab     @tab  X
 @item Intel Indeo 2          @tab     @tab  X
 @item Intel Indeo 3          @tab     @tab  X
@@ -1638,7 +1642,6 @@ performance on systems without hardware floating point support).
 @item LIBCDIO           @tab X
 @item LIBDC1394         @tab X      @tab
 @item OpenAL            @tab X
-@item OpenGL            @tab        @tab X
 @item OSS               @tab X      @tab X
 @item PulseAudio        @tab X      @tab X
 @item SDL               @tab        @tab X

@@ -1,3 +1,4 @@
+/auenc
 /id3v2
 /id3v2enc
 /fifo_muxer
@@ -6,6 +7,7 @@
 /noproxy
 /rename
 /rtmpdh
+/rtpdec
 /seek
 /srtp
 /url
