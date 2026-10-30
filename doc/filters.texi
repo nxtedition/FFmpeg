@@ -17216,6 +17216,10 @@ content with black borders, while a value of @code{1.0} always crops off parts
 of the content. Intermediate values are possible, leading to a mix of the two
 approaches.
 
+@item sar
+Force the output sample aspect ratio. The default of @code{0} derives it from
+the input, see @option{reset_sar}.
+
 @item fit_mode
 Specify the content fit strategy according to a list of predefined modes.
 Determines how the input image is to be placed inside the destination crop
@@ -17900,9 +17904,15 @@ Output frame width and height. Required. Constant expressions are accepted.
 Output frame rate. Required.
 
 @item sar
-Output sample aspect ratio. Default @code{1}.
+Output sample aspect ratio. The default of @code{0} means 1:1.
 
 @item format
+@item colorspace
+@item range
+@item color_primaries
+@item color_trc
+@item chroma_location
+@item alpha_mode
 @item inherit_device
 @item shader_cache
 @item apply_filmgrain
@@ -17910,10 +17920,9 @@ Output sample aspect ratio. Default @code{1}.
 Same as for the @ref{libplacebo} filter.
 @end table
 
-The output color space, representation and chroma location are taken from
-the scene's @code{color}, @code{repr} and @code{chroma_location}. Values not set
-there are negotiated, except for the color primaries and transfer, which follow
-the lowest visible input.
+The output color properties default to the scene's @code{color}, @code{repr}
+and @code{chroma_location}. They only control the output frame tags; rendering
+always follows the scene, including any animated changes.
 
 @subsection Example
 Show a second input in the bottom right quarter between 1 and 3 seconds:
