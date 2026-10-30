@@ -175,6 +175,7 @@ typedef struct SharedContext {
     int verify;
     int64_t cache_size_max;
     int64_t offset;
+    int64_t end_offset;
 
     /* misc state */
     int64_t pos; ///< current logical position
@@ -585,6 +586,10 @@ static int shared_read(URLContext *h, unsigned char *buf, int size)
     if (filesize < 0)
         return (int) filesize;
 
+    /* A reader's range boundary is not the shared resource's true EOF.
+     * Cache fills may still fetch a whole block from the unbounded inner URL. */
+    if (s->end_offset)
+        size = clamp_size(h, size, s->pos, s->end_offset);
     size = clamp_size(h, size, s->pos, filesize);
     if (size <= 0)
         return AVERROR_EOF;
@@ -952,6 +957,7 @@ static const AVOption options[] = {
     { "retry_corrupt",  "Re-request blocks that fail the CRC check",        OFFSET(retry_corrupt),  AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, .flags = D },
     { "cache_size_max", "Limit the maximum amount of data cached",          OFFSET(cache_size_max), AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, .flags = D },
     { "offset",         "Initial byte offset",                              OFFSET(offset),         AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, .flags = D },
+    { "end_offset",     "Exclusive byte offset to stop reading at",          OFFSET(end_offset),     AV_OPT_TYPE_INT64, {.i64 = 0}, 0, INT64_MAX, .flags = D },
     {0},
 };
 

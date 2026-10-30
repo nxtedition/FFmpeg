@@ -1879,6 +1879,11 @@ size.
 Initial byte offset to start reading from. This option is not passed on to the
 underlying protocol; it instead gets a regular seek on the first cache miss.
 Defaults to 0.
+@item end_offset
+Exclusive byte offset at which this reader stops. Defaults to 0 (unlimited).
+Like @option{offset}, this is not passed to the underlying protocol. Cache
+fills can read complete blocks past the requested end without treating that
+per-reader boundary as the resource size.
 @end table
 
 URL Syntax is

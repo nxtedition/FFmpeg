@@ -68,6 +68,11 @@ FATE_LIBAVFORMAT-$(CONFIG_SRTP) += fate-srtp
 fate-srtp: libavformat/tests/srtp$(EXESUF)
 fate-srtp: CMD = run libavformat/tests/srtp$(EXESUF)
 
+FATE_LIBAVFORMAT-$(call ALLYES, FILE_PROTOCOL SHARED_PROTOCOL) += fate-shared
+fate-shared: libavformat/tests/shared$(EXESUF)
+fate-shared: CMD = run libavformat/tests/shared$(EXESUF)
+fate-shared: CMP = null
+
 FATE_LIBAVFORMAT-yes += fate-url
 fate-url: libavformat/tests/url$(EXESUF)
 fate-url: CMD = run libavformat/tests/url$(EXESUF)
