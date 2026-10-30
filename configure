@@ -7342,7 +7342,7 @@ enabled libopus           && {
     }
 }
 enabled libplacebo        && require_pkg_config libplacebo "libplacebo >= 7.351.0" libplacebo/vulkan.h pl_vulkan_create
-enabled libplacebo        && check_pkg_config libplacebo_scene "libplacebo >= 7.386.0" libplacebo/compositor.h pl_scene_create_json
+enabled libplacebo        && check_pkg_config libplacebo_scene "libplacebo >= 7.386.0" libplacebo/compositor.h pl_queue_set_status
 enabled libpulse          && require_pkg_config libpulse libpulse pulse/pulseaudio.h pa_context_new
 enabled libqrencode       && require_pkg_config libqrencode libqrencode qrencode.h QRcode_encodeString
 enabled libquirc          && require libquirc quirc.h quirc_decode -lquirc
