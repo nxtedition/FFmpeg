@@ -640,7 +640,8 @@ static int write_index(NUTContext *nut, AVIOContext *bc) {
             int flag;
             int n = 0;
 
-            if (j && nus->keyframe_pts[j] == nus->keyframe_pts[j-1]) {
+            if (j && nus->keyframe_pts[j] != AV_NOPTS_VALUE &&
+                nus->keyframe_pts[j] == nus->keyframe_pts[j-1]) {
                 av_log(nut->avf, AV_LOG_WARNING, "Multiple keyframes with same PTS\n");
                 nus->keyframe_pts[j] = AV_NOPTS_VALUE;
             }
