@@ -296,7 +296,7 @@ FATE_AAC_NMR_CHAIN-$(call ALLYES, LAVFI_INDEV AEVALSRC_FILTER ARESAMPLE_FILTER P
 fate-aac-strict-rate-encode: CMD = ffmpeg -auto_conversion_filters -f lavfi -i "aevalsrc=0:s=48000:d=0.1" -c:a aac -b:a 1 -bt 0 -fflags +bitexact -flags +bitexact -f null -
 fate-aac-strict-rate-encode: CMP = null
 
-# Check packet legality as well as completion, including exhausted retries.
+# Check packet legality as well as completion, including bandwidth fallback.
 FATE_AAC_NMR_CHAIN-$(call ALLYES, LAVFI_INDEV AEVALSRC_FILTER ARESAMPLE_FILTER PCM_F64LE_DECODER PCM_F64BE_DECODER AAC_ENCODER FRAMECRC_MUXER PIPE_PROTOCOL) += fate-aac-nmr-onset-packets fate-aac-overflow
 fate-aac-nmr-onset-packets: CMD = aacenc_frame_sizes 1 -auto_conversion_filters -f lavfi -i "aevalsrc=1e-10*eq(n\,448)+gte(n\,704)*random(0):d=0.05" -c:a aac -fflags +bitexact -flags +bitexact
 fate-aac-overflow: CMD = aacenc_frame_sizes 1 -auto_conversion_filters -f lavfi -i "aevalsrc=1e-10*eq(n\,448)+gte(n\,704)*random(0):d=0.05" -c:a aac -aac_coder twoloop -b:a 64k -fflags +bitexact -flags +bitexact
