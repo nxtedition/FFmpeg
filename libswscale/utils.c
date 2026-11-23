@@ -512,7 +512,6 @@ static av_cold int initFilter(int16_t **outFilter, int32_t **filterPos,
         ret = RETCODE_USE_CASCADE;
         goto fail;
     }
-    *outFilterSize = filterSize;
 
     if (flags & SWS_PRINT_INFO)
         av_log(NULL, AV_LOG_VERBOSE,
@@ -576,6 +575,8 @@ static av_cold int initFilter(int16_t **outFilter, int32_t **filterPos,
             }
         }
     }
+
+    *outFilterSize = FFMIN(filterSize, FFALIGN(srcW, filterAlign));
 
     // Note the +1 is for the MMX scaler which reads over the end
     /* align at 16 for AltiVec (needed by hScale_altivec_real) */
@@ -836,6 +837,15 @@ static int handle_jpeg(/* enum AVPixelFormat */ int *format)
     case AV_PIX_FMT_GRAY16BE:
     case AV_PIX_FMT_YA16BE:
     case AV_PIX_FMT_YA16LE:
+    /* Floating point formats */
+    case AV_PIX_FMT_GRAYF16BE:
+    case AV_PIX_FMT_GRAYF16LE:
+    case AV_PIX_FMT_GRAYF32BE:
+    case AV_PIX_FMT_GRAYF32LE:
+    case AV_PIX_FMT_YAF16BE:
+    case AV_PIX_FMT_YAF16LE:
+    case AV_PIX_FMT_YAF32BE:
+    case AV_PIX_FMT_YAF32LE:
         return 1;
     default:
         return 0;
@@ -910,8 +920,12 @@ int sws_setColorspaceDetails(SwsContext *sws, const int inv_table[4],
 
     if(range_override_needed(sws->dst_format))
         dstRange = 0;
+    else if (isFloat(sws->dst_format))
+        dstRange = 1; /* float gray formats are always full range */
     if(range_override_needed(sws->src_format))
         srcRange = 0;
+    else if (isFloat(sws->src_format))
+        srcRange = 1;
 
     if (sws->src_range != srcRange ||
         sws->dst_range != dstRange ||
@@ -1383,6 +1397,10 @@ av_cold int ff_sws_init_single_context(SwsContext *sws, SwsFilter *srcFilter,
         dstFormat != AV_PIX_FMT_RGB48BE &&
         dstFormat != AV_PIX_FMT_BGR48LE &&
         dstFormat != AV_PIX_FMT_BGR48BE &&
+        dstFormat != AV_PIX_FMT_RGBF32LE &&
+        dstFormat != AV_PIX_FMT_RGBF32BE &&
+        dstFormat != AV_PIX_FMT_RGBAF32LE &&
+        dstFormat != AV_PIX_FMT_RGBAF32BE &&
         dstFormat != AV_PIX_FMT_RGBA  &&
         dstFormat != AV_PIX_FMT_ARGB  &&
         dstFormat != AV_PIX_FMT_BGRA  &&
@@ -1687,7 +1705,7 @@ av_cold int ff_sws_init_single_context(SwsContext *sws, SwsFilter *srcFilter,
     /* unscaled special cases */
     if (unscaled && !usesHFilter && !usesVFilter &&
         (sws->src_range == sws->dst_range || isAnyRGB(dstFormat) ||
-         isFloat(srcFormat) || isFloat(dstFormat) || isBayer(srcFormat))){
+         isBayer(srcFormat))){
 
         ff_get_unscaled_swscale(c);
 

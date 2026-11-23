@@ -55,8 +55,8 @@ int ff_sws_pass_aligned_width(const SwsPass *pass, int width)
 }
 
 /* Allocates (or refs) one buffer per plane */
-static int frame_alloc_planes_ref(AVFrame *dst, const AVFrame *src,
-                                  const int plane_copy[4])
+static int frame_alloc_planes_ref(AVFrame *dst, int padding[4],
+                                  const AVFrame *src, const int plane_copy[4])
 {
     int ret = av_image_check_size2(dst->width, dst->height, INT64_MAX,
                                    dst->format, 0, NULL);
@@ -97,6 +97,11 @@ static int frame_alloc_planes_ref(AVFrame *dst, const AVFrame *src,
             return AVERROR(ENOMEM);
         dst->data[i] = buf->data;
         dst->buf[i] = buf;
+    }
+
+    for (int i = 0; i < 4 && dst->data[i]; i++) {
+        padding[i] = dst->linesize[i] -
+                     av_image_get_linesize(dst->format, dst->width, i);
     }
 
     return 0;
@@ -140,6 +145,7 @@ static int pass_alloc_output(SwsPass *pass)
     avframe->height = buffer->height;
 
     int ret;
+    int padding[4] = {0};
 
 #if CONFIG_SWSCALE_VULKAN
     const SwsGraph *graph = pass->graph;
@@ -160,7 +166,7 @@ static int pass_alloc_output(SwsPass *pass)
         src = pass->input->output->avframe;
 
     avframe->format = pass->format;
-    ret = frame_alloc_planes_ref(avframe, src, buffer->plane_copy);
+    ret = frame_alloc_planes_ref(avframe, padding, src, buffer->plane_copy);
     if (ret < 0) {
         av_frame_free(&avframe);
         return ret;
@@ -171,6 +177,7 @@ done:
 #endif
     buffer->avframe = avframe;
     ff_sws_frame_from_avframe(&buffer->frame, avframe);
+    memcpy(buffer->frame.padding, padding, sizeof(padding));
     return 0;
 }
 
@@ -612,8 +619,10 @@ static int add_legacy_sws_pass(SwsGraph *graph, const SwsFormat *src,
     ff_sws_chroma_pos(src, &graph->incomplete, &sws->src_h_chr_pos, &sws->src_v_chr_pos);
     ff_sws_chroma_pos(dst, &graph->incomplete, &sws->dst_h_chr_pos, &sws->dst_v_chr_pos);
 
-    graph->incomplete |= src->range == AVCOL_RANGE_UNSPECIFIED;
-    graph->incomplete |= dst->range == AVCOL_RANGE_UNSPECIFIED;
+    if (!isFloat(src->format))
+        graph->incomplete |= src->range == AVCOL_RANGE_UNSPECIFIED;
+    if (!isFloat(dst->format))
+        graph->incomplete |= dst->range == AVCOL_RANGE_UNSPECIFIED;
 
     /* Allow overriding chroma position with the legacy API */
     legacy_chr_pos(graph, &sws->src_h_chr_pos, ctx->src_h_chr_pos, &warned);
@@ -1024,7 +1033,7 @@ static void get_field(SwsGraph *graph, const SwsFormat *fmt,
 
     /* Take only every second line */
     for (int i = 0; i < 4; i++)
-        frame->linesize[i] <<= 1;
+        frame->linesize[i] *= 2;
 
     frame->height = (frame->height + (fmt->field == FIELD_TOP)) >> 1;
 }
@@ -1037,6 +1046,10 @@ int ff_sws_graph_run(SwsGraph *graph, const AVFrame *dst, const AVFrame *src)
     SwsFrame src_field, dst_field;
     get_field(graph, &graph->dst, dst, &dst_field);
     get_field(graph, &graph->src, src, &src_field);
+
+    /* AVFrame.data requires 16 bytes of padding after the planes for reading */
+    for (int i = 0; i < 4; i++)
+        src_field.padding[i] = 16;
 
     for (int i = 0; i < graph->num_passes; i++) {
         const SwsPass *pass = graph->passes[i];

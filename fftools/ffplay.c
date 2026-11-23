@@ -3067,16 +3067,17 @@ static int stream_component_open(VideoState *is, int stream_index)
             goto fail;
 
         is->audio_stream = stream_index;
-        is->audio_st = ic->streams[stream_index];
 
         if ((ret = decoder_init(&is->auddec, avctx, &is->audioq, is->continue_read_thread)) < 0)
             goto fail;
         if (is->ic->iformat->flags & AVFMT_NOTIMESTAMPS) {
-            is->auddec.start_pts = is->audio_st->start_time;
-            is->auddec.start_pts_tb = is->audio_st->time_base;
+            is->auddec.start_pts = ic->streams[stream_index]->start_time;
+            is->auddec.start_pts_tb = ic->streams[stream_index]->time_base;
         }
         if (!SDL_AtomicGet(&is->replacement) && (ret = audio_start(is)) < 0)
             stream_component_close(is, stream_index);
+        else
+            is->audio_st = ic->streams[stream_index];
         break;
     case AVMEDIA_TYPE_VIDEO:
         is->video_stream = stream_index;
@@ -3249,6 +3250,7 @@ static int read_thread(void *arg)
     }
     ic->interrupt_callback.callback = decode_interrupt_cb;
     ic->interrupt_callback.opaque = is;
+    ic->seek_flags |= AVSEEK_FLAG_PREROLL;
     if ((ret = av_dict_copy(&format_options, format_opts, 0)) < 0)
         goto fail;
     if (!av_dict_get(format_options, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
