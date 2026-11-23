@@ -54,6 +54,18 @@ fate-sws-monow-ed-tail: CMD = framecrc -lavfi color=black:s=100x8:r=1,scale=flag
 fate-sws-monob-ed-tail-bilinear: CMD = framecrc -lavfi color=white:s=102x8:r=1,scale=102:16:flags=bilinear+bitexact:sws_dither=ed,format=monob -frames:v 1
 fate-sws-monow-ed-tail-bilinear: CMD = framecrc -lavfi color=black:s=102x8:r=1,scale=102:16:flags=bilinear+bitexact:sws_dither=ed,format=monow -frames:v 1
 
+# Odd width tails of the unscaled yuv2rgb C converters. These output formats
+# have no SIMD version, so the output is the same on all architectures.
+FATE_SWS_YUV2RGB_ODD = fate-sws-yuv2rgb-odd-yuv420p-rgb4    \
+                       fate-sws-yuv2rgb-odd-yuv422p-rgb4    \
+                       fate-sws-yuv2rgb-odd-yuv420p-bgr48le \
+                       fate-sws-yuv2rgb-odd-yuv422p-rgb48le
+FATE_LIBSWSCALE_FFMPEG-$(call FILTERFRAMECRC, TESTSRC2 CROP SCALE FORMAT) += $(FATE_SWS_YUV2RGB_ODD)
+$(FATE_SWS_YUV2RGB_ODD): SRC_FMT = $(word 5,$(subst -, ,$(@)))
+$(FATE_SWS_YUV2RGB_ODD): DST_FMT = $(word 6,$(subst -, ,$(@)))
+$(FATE_SWS_YUV2RGB_ODD): CMD = framecrc -lavfi testsrc2=s=40x8:r=1,format=$(SRC_FMT),crop=39:8:0:0:exact=1,scale,format=$(DST_FMT) -frames:v 1
+fate-sws-yuv2rgb-odd: $(FATE_SWS_YUV2RGB_ODD)
+
 SWS_UNSTABLE_BACKENDS-yes                            += c memcpy
 ifeq ($(ARCH_X86_64),yes)
 SWS_UNSTABLE_BACKENDS-$(HAVE_X86ASM)                 += x86
@@ -84,17 +96,54 @@ fate-sws-unstable: $(FATE_SWS_UNSTABLE)
 SWS_CPU_BACKENDS := $(filter-out spirv,$(SWS_UNSTABLE_BACKENDS-yes))
 FATE_SWS_UNPADDED := $(SWS_CPU_BACKENDS:%=fate-sws-unpadded-%)
 $(FATE_SWS_UNPADDED): libswscale/tests/swscale$(EXESUF)
-$(FATE_SWS_UNPADDED): CMD = run libswscale/tests/swscale$(EXESUF) -v 16 -backends $(@:fate-sws-unpadded-%=%) -align_src 1 -align_dst 1 -p 0.01
+$(FATE_SWS_UNPADDED): CMD = run libswscale/tests/swscale$(EXESUF) -v 16 -backends $(@:fate-sws-unpadded-%=%) -align_src 1 -align_dst 1 $(SWS_PROB) $(SWS_SCALER)
 $(FATE_SWS_UNPADDED): REF = /dev/null
 fate-sws-unpadded: $(FATE_SWS_UNPADDED)
 
 FATE_SWS_FLIPPED := $(SWS_CPU_BACKENDS:%=fate-sws-flipped-%)
 $(FATE_SWS_FLIPPED): libswscale/tests/swscale$(EXESUF)
-$(FATE_SWS_FLIPPED): CMD = run libswscale/tests/swscale$(EXESUF) -v 16 -backends $(@:fate-sws-flipped-%=%) -align_src -1 -align_dst -1 -p 0.01
+$(FATE_SWS_FLIPPED): CMD = run libswscale/tests/swscale$(EXESUF) -v 16 -backends $(@:fate-sws-flipped-%=%) -align_src -1 -align_dst -1 $(SWS_PROB) $(SWS_SCALER)
 $(FATE_SWS_FLIPPED): REF = /dev/null
 fate-sws-flipped: $(FATE_SWS_FLIPPED)
 
-FATE_LIBSWSCALE += $(FATE_SWS_UNSCALED) $(FATE_SWS_UNSTABLE) $(FATE_SWS_UNPADDED) $(FATE_SWS_FLIPPED)
+# Run only 1% of the tests
+$(FATE_SWS_UNPADDED) $(FATE_SWS_FLIPPED): SWS_PROB = -p 0.01
+
+# The memcpy backend only supports unscaled conversions, so test all of
+# those instead
+fate-sws-unpadded-memcpy fate-sws-flipped-memcpy: SWS_PROB =
+fate-sws-unpadded-memcpy fate-sws-flipped-memcpy: SWS_SCALER = -scaler none
+
+# Count the unscaled conversions supported by each SIMD instruction set,
+# without running them.
+SWS_CPUFLAGS_SSE4      := sse4.1
+SWS_CPUFLAGS_AVX2      := $(SWS_CPUFLAGS_SSE4)+avx2+fma3
+SWS_CPUFLAGS_AVX512    := $(SWS_CPUFLAGS_AVX2)+avx512
+SWS_CPUFLAGS_AVX512ICL := $(SWS_CPUFLAGS_AVX512)+avx512icl
+SWS_CPUFLAGS_NEON      := neon
+
+FATE_SWS_COVERAGE-yes                        += fate-sws-coverage-memcpy
+ifeq ($(ARCH_X86_64),yes)
+FATE_SWS_COVERAGE-$(HAVE_SSE4_EXTERNAL)      += fate-sws-coverage-x86-sse4
+FATE_SWS_COVERAGE-$(HAVE_AVX2_EXTERNAL)      += fate-sws-coverage-x86-avx2
+FATE_SWS_COVERAGE-$(HAVE_AVX512_EXTERNAL)    += fate-sws-coverage-x86-avx512
+FATE_SWS_COVERAGE-$(HAVE_AVX512ICL_EXTERNAL) += fate-sws-coverage-x86-avx512icl
+endif
+ifeq ($(ARCH_AARCH64),yes)
+FATE_SWS_COVERAGE-$(HAVE_NEON)               += fate-sws-coverage-aarch64-neon
+endif
+
+fate-sws-coverage-x86-sse4:      SWS_COVERAGE = -backends +x86     -cpuflags $(SWS_CPUFLAGS_SSE4)
+fate-sws-coverage-x86-avx2:      SWS_COVERAGE = -backends +x86     -cpuflags $(SWS_CPUFLAGS_AVX2)
+fate-sws-coverage-x86-avx512:    SWS_COVERAGE = -backends +x86     -cpuflags $(SWS_CPUFLAGS_AVX512)
+fate-sws-coverage-x86-avx512icl: SWS_COVERAGE = -backends +x86     -cpuflags $(SWS_CPUFLAGS_AVX512ICL)
+fate-sws-coverage-aarch64-neon:  SWS_COVERAGE = -backends +aarch64 -cpuflags $(SWS_CPUFLAGS_NEON)
+
+$(FATE_SWS_COVERAGE-yes): libswscale/tests/swscale$(EXESUF)
+$(FATE_SWS_COVERAGE-yes): CMD = run libswscale/tests/swscale$(EXESUF) -v 16 -coverage 1 -scaler none -backends memcpy $(SWS_COVERAGE)
+fate-sws-coverage: $(FATE_SWS_COVERAGE-yes)
+
+FATE_LIBSWSCALE += $(FATE_SWS_UNSCALED) $(FATE_SWS_UNSTABLE) $(FATE_SWS_UNPADDED) $(FATE_SWS_FLIPPED) $(FATE_SWS_COVERAGE-yes)
 
 ifneq ($(HAVE_BIGENDIAN),yes)
 

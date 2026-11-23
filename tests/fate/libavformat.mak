@@ -1,3 +1,11 @@
+FATE_LIBAVFORMAT += fate-codecstring
+fate-codecstring: libavformat/tests/codecstring$(EXESUF)
+fate-codecstring: CMD = run libavformat/tests/codecstring$(EXESUF)
+
+FATE_LIBAVFORMAT += fate-demux-probe
+fate-demux-probe: libavformat/tests/demux_probe$(EXESUF)
+fate-demux-probe: CMD = run libavformat/tests/demux_probe$(EXESUF)
+
 #FATE_LIBAVFORMAT-$(HAVE_PTHREADS) += fate-async
 #fate-async: libavformat/tests/async$(EXESUF)
 #fate-async: CMD = run libavformat/tests/async
@@ -52,9 +60,30 @@ FATE_LIBAVFORMAT-$(CONFIG_HTTP_PROTOCOL) += fate-http-status-line
 fate-http-status-line: libavformat/tests/http$(EXESUF)
 fate-http-status-line: CMD = run libavformat/tests/http$(EXESUF) $(FATE_HTTP_STATUS_LINES)
 
+FATE_LIBAVFORMAT-$(CONFIG_HTTP_PROTOCOL) += fate-httpcookie
+fate-httpcookie: libavformat/tests/httpcookie$(EXESUF)
+fate-httpcookie: CMD = run libavformat/tests/httpcookie$(EXESUF)
+
 FATE_LIBAVFORMAT-$(CONFIG_NETWORK) += fate-noproxy
 fate-noproxy: libavformat/tests/noproxy$(EXESUF)
 fate-noproxy: CMD = run libavformat/tests/noproxy$(EXESUF)
+
+# HEAD responses have no body, and CONNECT tunnels are unbounded streams.
+# Self-contained loopback test; it needs no samples and no external network.
+FATE_HTTP_NOBODY-$(CONFIG_HTTP_PROTOCOL)      += fate-http-head-no-body
+FATE_HTTP_NOBODY-$(CONFIG_HTTPPROXY_PROTOCOL) += fate-httpproxy-tunnel-eof
+FATE_HTTP_NOBODY-$(CONFIG_LIBCURL_PROTOCOL)   += fate-http-curl-head
+FATE_HTTP_NOBODY_RUN-$(HAVE_LOOPBACK)         += $(FATE_HTTP_NOBODY-yes)
+FATE_LIBAVFORMAT-$(HAVE_PTHREADS)             += $(FATE_HTTP_NOBODY_RUN-yes)
+
+fate-http-head-no-body: libavformat/tests/http_nobody$(EXESUF)
+fate-http-head-no-body: CMD = run libavformat/tests/http_nobody$(EXESUF) http
+
+fate-httpproxy-tunnel-eof: libavformat/tests/http_nobody$(EXESUF)
+fate-httpproxy-tunnel-eof: CMD = run libavformat/tests/http_nobody$(EXESUF) proxy
+
+fate-http-curl-head: libavformat/tests/http_nobody$(EXESUF)
+fate-http-curl-head: CMD = no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost run libavformat/tests/http_nobody$(EXESUF) libcurl
 
 FATE_LIBAVFORMAT-$(CONFIG_FFRTMPCRYPT_PROTOCOL) += fate-rtmpdh
 fate-rtmpdh: libavformat/tests/rtmpdh$(EXESUF)
@@ -81,10 +110,20 @@ FATE_LIBAVFORMAT-$(CONFIG_IMF_DEMUXER) += fate-imf
 fate-imf: libavformat/tests/imf$(EXESUF)
 fate-imf: CMD = run libavformat/tests/imf$(EXESUF)
 
+FATE_LIBAVFORMAT-$(CONFIG_MPEGTS_DEMUXER) += fate-mpegts-probe-pid
+fate-mpegts-probe-pid: libavformat/tests/mpegts_probe$(EXESUF)
+fate-mpegts-probe-pid: CMD = run libavformat/tests/mpegts_probe$(EXESUF)
+
 FATE_LIBAVFORMAT += fate-seek_utils
 fate-seek_utils: libavformat/tests/seek_utils$(EXESUF)
 fate-seek_utils: CMD = run libavformat/tests/seek_utils$(EXESUF)
 
+FATE_LIBAVFORMAT_SAMPLES-$(call ALLYES, AVFORMAT AC3_PARSER AC3_DECODER) += fate-parse-skip-samples
+fate-parse-skip-samples: libavformat/tests/parse_skip_samples$(EXESUF)
+fate-parse-skip-samples: CMD = run libavformat/tests/parse_skip_samples$(EXESUF) $(TARGET_SAMPLES)/ac3/millers_crossing_4.0.ac3
+
+FATE_EXTERN += $(FATE_LIBAVFORMAT_SAMPLES-yes)
+
 FATE_LIBAVFORMAT += $(FATE_LIBAVFORMAT-yes)
 FATE-$(CONFIG_AVFORMAT) += $(FATE_LIBAVFORMAT)
-fate-libavformat: $(FATE_LIBAVFORMAT)
+fate-libavformat: $(FATE_LIBAVFORMAT) $(if $(SAMPLES),$(FATE_LIBAVFORMAT_SAMPLES-yes))

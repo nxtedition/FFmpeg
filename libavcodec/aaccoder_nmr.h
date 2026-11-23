@@ -291,6 +291,63 @@ static void nmr_bail_channel(SingleChannelElement *sce)
     }
 }
 
+/* Zero coded band b, subwindow flags included (the group flag is re-derived
+ * by ANDing). */
+static void nmr_drop_band(NMRSlot *t, int b)
+{
+    for (int w2 = 0; w2 < t->sce->ics.group_len[t->bw[b]]; w2++)
+        t->sce->zeroes[(t->bw[b] + w2)*16 + t->bg[b]] = 1;
+}
+
+/* Keep the coding sequence act[] scalefactor-chain legal on grid `step`.
+ * A band's candidates only reach up to where it quantizes to zero, so two
+ * neighbours more than SCALE_MAX_DIFF apart leave the trellis without any
+ * legal path: every later state stays FLT_MAX and the backtrack returns the
+ * finest candidates, an oversized frame. Walk the chain tracking the
+ * scalefactor range still reachable from its start, and drop the quieter
+ * band of a pair that cannot connect: within reach it would quantize to
+ * zero anyway. A no-op on a legal chain. */
+static void nmr_chain_repair(NMRSlot *t, int step)
+{
+    int rlo[128], rhi[128], n = 0;
+
+    for (int k = 0; k < t->nact; k++) {
+        const int b = t->act[k];
+        const int lo = t->blo[b], hi = lo + (t->bnc[b] - 1)*step;
+        int clo = lo, chi = hi, keep = 1;
+        while (n) {
+            const int p = t->act[n - 1];
+            clo = FFMAX(lo, rlo[n - 1] - SCALE_MAX_DIFF);
+            chi = FFMIN(hi, rhi[n - 1] + SCALE_MAX_DIFF);
+            clo = lo + (clo - lo + step - 1) / step * step;
+            if (clo <= chi) {
+                chi = lo + (chi - lo) / step * step;
+                break;
+            }
+            if (t->maxvals[t->bidx[p]] > t->maxvals[t->bidx[b]]) {
+                keep = 0;
+                break;
+            }
+            nmr_drop_band(t, p);
+            n--;
+        }
+        if (!keep) {
+            nmr_drop_band(t, b);
+            continue;
+        }
+        if (!n) {
+            clo = lo;
+            chi = hi;
+        }
+        /* n <= k: compacting in place never overwrites an unread entry */
+        t->act[n] = b;
+        rlo[n]    = clo;
+        rhi[n]    = chi;
+        n++;
+    }
+    t->nact = n;
+}
+
 /* Per-channel setup into slot t: short-block threshold shaping, the
  * allocation law, zero decisions, and the PASS 1 coarse candidate curves.
  * Returns the coded-band count; 0 = nothing codeable (caller bails). */
@@ -559,67 +616,6 @@ static int nmr_slot_bits(const NMRSlot *t, const int (*nb)[NMR_NCAND], int step)
         tot += NMR_SFBITS((t->blo[t->act[k]]+t->chosen[t->act[k]]*step) -
                           (t->blo[t->act[k-1]]+t->chosen[t->act[k-1]]*step));
     return tot;
-}
-
-/* Zero a coded band for legality, subwindow flags included (the group flag is
- * re-derived by ANDing). PNS skips bands with zeroes[] set, so it stays out. */
-static void nmr_drop_band(NMRSlot *t, int b)
-{
-    SingleChannelElement *sce = t->sce;
-    for (int w2 = 0; w2 < sce->ics.group_len[t->bw[b]]; w2++)
-        sce->zeroes[(t->bw[b] + w2)*16 + t->bg[b]] = 1;
-}
-
-/* Keep act[] chain-legal on the current candidate grid. A band's candidates
- * only span [minsf, the sf at which it quantizes to zero], so a near-silent
- * band that is codeable only around sf 0 next to a loud band whose minsf is
- * more than SCALE_MAX_DIFF away leaves the trellis no legal path. It then
- * fills every later band with FLT_MAX and backtracks to their finest
- * candidates at any lambda, the commit clamps the loud bands below their
- * minsf, and the oversized frame traps the outer re-encode loop forever.
- * Drop the quieter band of each such pair. A no-op on a feasible chain. */
-static void nmr_chain_repair(NMRSlot *t, int step)
-{
-    int keep[128], rlo[128], rhi[128], n = 0;
-
-    for (int k = 0; k < t->nact; k++) {
-        const int b  = t->act[k];
-        const int lo = t->blo[b], hi = lo + (t->bnc[b] - 1) * step;
-        int clo = lo, chi = hi, drop = 0;
-        while (n) {
-            /* b's candidates within reach of the previous kept band's */
-            const int p = keep[n - 1];
-            int rl = FFMAX(lo, rlo[n - 1] - SCALE_MAX_DIFF);
-            int rh = FFMIN(hi, rhi[n - 1] + SCALE_MAX_DIFF);
-            if (rh >= lo) {
-                rl = lo + (rl - lo + step - 1) / step * step;
-                rh = lo + (rh - lo) / step * step;
-                if (rl <= rh) {
-                    clo = rl;
-                    chi = rh;
-                    break;
-                }
-            }
-            if (t->maxvals[t->bidx[p]] > t->maxvals[t->bidx[b]]) {
-                drop = 1;
-                break;
-            }
-            nmr_drop_band(t, p);
-            n--;
-        }
-        if (drop) {
-            nmr_drop_band(t, b);
-            continue;
-        }
-        keep[n] = b;
-        rlo[n]  = clo;
-        rhi[n]  = chi;
-        n++;
-    }
-    if (n != t->nact) {
-        memcpy(t->act, keep, n * sizeof(t->act[0]));
-        t->nact = n;
-    }
 }
 
 /* Run every slot's trellis at one fixed lambda; returns the pooled bits.
@@ -1411,6 +1407,7 @@ static void nmr_solve_group(AVCodecContext *avctx, AACEncContext *s,
                     if (!t->is_pns[t->act[b_]])
                         t->act[n++] = t->act[b_];
                 t->nact = n;
+                /* noise bands leave the scalefactor chain */
                 nmr_chain_repair(t, NMR_STEP);
             }
             pns_total += pns_count;

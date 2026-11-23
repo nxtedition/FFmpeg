@@ -1291,9 +1291,8 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
     ChannelElement *cpe;
     SingleChannelElement *sce;
     IndividualChannelStream *ics;
-    int i, its, ch, w, chans, tag, start_ch, ret, frame_bits;
+    int i, its, ch, w, chans, tag, start_ch, ret, frame_bits, cutoff;
     int target_bits, rate_bits, too_many_bits, too_few_bits;
-    int ms_mode = 0, is_mode = 0, tns_mode = 0, pred_mode = 0;
     int chan_el_counter[4];
     FFPsyWindowInfo windows[AAC_MAX_CHANNELS];
 
@@ -1358,6 +1357,12 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
             } else if (!wi_paired) {
                 wi[ch] = s->psy.model->window(&s->psy, samples2, la, s->cur_channel,
                                               ics->window_sequence[0]);
+            }
+            if (wi[ch].num_windows != 1 && wi[ch].num_windows != 8) {
+                av_log(avctx, AV_LOG_ERROR,
+                       "Psychoacoustic model returned invalid window count %d\n",
+                       wi[ch].num_windows);
+                return AVERROR_BUG;
             }
             ics->window_sequence[1] = ics->window_sequence[0];
             ics->window_sequence[0] = wi[ch].window_type[0];
@@ -1425,16 +1430,26 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
     if ((ret = ff_alloc_packet(avctx, avpkt, 8192 * s->channels)) < 0)
         return ret;
     frame_bits = its = 0;
+    cutoff = 1024;
     do {
-        if (its && ((avctx->flags & AV_CODEC_FLAG_QSCALE) ||
-                    is_mode || ms_mode || tns_mode || pred_mode)) {
-            /* Every retry starts from the original coefficients, including
-             * strict-rate retries and both channels of each CPE. */
+        /* every retry starts from the pristine spectrum: the stereo tools,
+         * TNS and prediction filter the coefficients in place, and psy
+         * re-analyzes them */
+        if (its) {
             for (i = 0; i < s->chan_map[0]; i++) {
                 chans = s->chan_map[i + 1] == TYPE_CPE ? 2 : 1;
-                for (ch = 0; ch < chans; ch++)
-                    memcpy(s->cpe[i].ch[ch].coeffs, s->cpe[i].ch[ch].pcoeffs,
-                           sizeof(s->cpe[i].ch[ch].coeffs));
+                for (ch = 0; ch < chans; ch++) {
+                    sce = &s->cpe[i].ch[ch];
+                    memcpy(sce->coeffs, sce->pcoeffs, sizeof(sce->coeffs));
+                    if (cutoff < 1024) {
+                        /* lowpass, per window */
+                        int nw = sce->ics.window_sequence[0] == EIGHT_SHORT_SEQUENCE ? 8 : 1;
+                        int len = 1024 / nw, cut = cutoff / nw;
+                        for (w = 0; w < nw; w++)
+                            memset(&sce->coeffs[w*len + cut], 0,
+                                   (len - cut) * sizeof(sce->coeffs[0]));
+                    }
+                }
             }
         }
         init_put_bits(&s->pb, avpkt->data, avpkt->size);
@@ -1502,8 +1517,6 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
                         s->coder->mark_pns(s, avctx, sce);
                     s->coder->search_for_tns(s, sce);
                     s->coder->apply_tns_filt(s, sce);
-                    if (sce->tns.present)
-                        tns_mode = 1;
                 }
             }
 
@@ -1542,8 +1555,6 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
                 if (!tns_first && use_tns) {
                     s->coder->search_for_tns(s, sce);
                     s->coder->apply_tns_filt(s, sce);
-                    if (sce->tns.present)
-                        tns_mode = 1;
                 }
                 if (s->options.pns && s->coder->search_for_pns)
                     s->coder->search_for_pns(s, avctx, sce);
@@ -1555,7 +1566,6 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
                         s->coder->search_for_is(s, avctx, cpe);
                     apply_intensity_stereo(cpe);
                 }
-                if (cpe->is_mode) is_mode = 1;
             }
             if (s->options.mid_side && s->options.coder != AAC_CODER_NMR) { /* Mid/Side stereo */
                 if (s->options.mid_side == -1 && s->coder->search_for_ms)
@@ -1570,7 +1580,6 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
                 if (cpe->common_window) {
                     put_ics_info(s, &cpe->ch[0].ics);
                     encode_ms_info(&s->pb, cpe);
-                    if (cpe->ms_mode) ms_mode = 1;
                 }
             }
             for (ch = 0; ch < chans; ch++) {
@@ -1580,19 +1589,31 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
             start_ch += chans;
         }
 
+        frame_bits = put_bits_count(&s->pb);
+
+        /* Out of lambda retries and still over the decoder buffer: rather
+         * than fail the encode or emit a frame a conforming decoder may
+         * reject, keep the coarsest lambda reached and shed the highest
+         * frequencies until the frame fits (an empty spectrum always does). */
+        if (frame_bits >= 6144 * s->channels - 3 && its >= 16 && cutoff) {
+            if (cutoff == 1024)
+                av_log(avctx, AV_LOG_WARNING, "Frame of %d bits exceeds the decoder "
+                       "buffer, reducing its bandwidth\n", frame_bits);
+            cutoff = cutoff * 3 / 4;
+            its++;
+            continue;
+        }
+
         if (avctx->flags & AV_CODEC_FLAG_QSCALE) {
             /* When using a constant Q-scale, don't mess with lambda, unless
              * the frame does not fit the decoder buffer: retry coarser (the
              * coders' legality caps shrink with lambda) */
-            frame_bits = put_bits_count(&s->pb);
             if (frame_bits < 6144 * s->channels - 3 || its >= 16)
                 break;
             s->lambda *= FFMIN(0.9f, (6144.0f * s->channels - 3) / frame_bits);
             its++;
             continue;
         }
-
-        frame_bits = put_bits_count(&s->pb);
 
         /* Stop retrying a coder that cannot fit the decoder buffer. The
          * common check below rejects the frame on every loop exit. */
@@ -1633,7 +1654,7 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
 
         if (   its == 0 /* for steady-state Q-scale tracking */
             || (its < 5 && (frame_bits < too_few_bits || frame_bits > too_many_bits))
-            || frame_bits >= 6144 * s->channels - 3  )
+            || (frame_bits >= 6144 * s->channels - 3 && its < 16))
         {
             float ratio = ((float)rate_bits) / frame_bits;
 
@@ -1650,14 +1671,20 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
                 /* Not so fast though */
                 ratio = sqrtf(ratio);
             }
+            if (frame_bits >= 6144 * s->channels - 3) {
+                /* lambda winds up over quiet passages, far above where the
+                 * coder responds: restart an overflow from the nominal one,
+                 * and shrink at least in proportion to the overshoot (the
+                 * steady-state clamp above would allow 0.9 per retry) */
+                s->lambda = FFMIN(s->lambda, avctx->global_quality > 0 ? avctx->global_quality : 120);
+                ratio = FFMIN(ratio, FFMIN(0.9f, (6144.0f * s->channels - 3) / frame_bits));
+            }
             s->lambda = av_clipf(s->lambda * ratio, FLT_EPSILON, 65536.f);
 
             /* Keep iterating if we must reduce and lambda is in the sky */
-            if (ratio > 0.9f && ratio < 1.1f) {
+            if (ratio > 0.9f && ratio < 1.1f)
                 break;
-            } else {
-                its++;
-            }
+            its++;
         } else {
             break;
         }
@@ -1667,7 +1694,7 @@ static int aac_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
                frame_bits);
         return AVERROR_INVALIDDATA;
     }
-    if ((avctx->flags & AV_CODEC_FLAG_QSCALE) || avctx->bit_rate_tolerance == 0)
+    if ((avctx->flags & AV_CODEC_FLAG_QSCALE) || avctx->bit_rate_tolerance == 0 || cutoff < 1024)
         s->lambda = avctx->global_quality > 0 ? avctx->global_quality : 120;
 
     /* tool-usage stats over the final per-band decisions of this frame */
