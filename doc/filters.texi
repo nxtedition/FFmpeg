@@ -30100,6 +30100,11 @@ Disables multiplane images. Does not apply to decoding.
 @item avoid_host_import
 Avoids the use of dynamic host memory imports, in favor of a regular memcpy()
 into a previously mapped buffer.
+
+@item disable_host_image_copy
+Does not enable host image copies (VK_EXT_host_image_copy) when set to 1, so
+transfers between system memory and images go through buffers on the GPU
+queue. This also applies to filters using the device, such as libplacebo.
 @end table
 
 @item -filter_hw_device @var{name}

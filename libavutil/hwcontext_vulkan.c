@@ -957,12 +957,13 @@ static int check_extensions(AVHWDeviceContext *ctx, int dev, AVDictionary *opts,
     AVVulkanDeviceContext *hwctx = &p->p;
     FFVulkanFunctions *vk = &p->vkctx.vkfn;
     int err = 0, found, extensions_found = 0;
+    int disable_host_image_copy = 0;
 
     const char *mod;
     int optional_exts_num;
     uint32_t sup_ext_count;
     char *user_exts_str = NULL;
-    AVDictionaryEntry *user_exts;
+    AVDictionaryEntry *user_exts, *opt_d;
     VkExtensionProperties *sup_ext;
     const VulkanOptExtension *optional_exts;
 
@@ -995,6 +996,8 @@ static int check_extensions(AVHWDeviceContext *ctx, int dev, AVDictionary *opts,
                 goto fail;
             }
         }
+        opt_d = av_dict_get(opts, "disable_host_image_copy", NULL, 0);
+        disable_host_image_copy = opt_d && strtol(opt_d->value, NULL, 10);
         vk->EnumerateDeviceExtensionProperties(hwctx->phys_dev, NULL,
                                                &sup_ext_count, NULL);
         sup_ext = av_malloc_array(sup_ext_count, sizeof(VkExtensionProperties));
@@ -1008,9 +1011,11 @@ static int check_extensions(AVHWDeviceContext *ctx, int dev, AVDictionary *opts,
         tstr = optional_exts[i].name;
         found = 0;
 
-        /* Check if the device has ReBAR for host image copies */
+        /* Host image copies need ReBAR, and can be turned off by the user.
+         * Without the extension, filters on this device (e.g. libplacebo)
+         * cannot use host image copies either. */
         if (!strcmp(tstr, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME) &&
-            !vulkan_device_has_rebar(ctx))
+            (disable_host_image_copy || !vulkan_device_has_rebar(ctx)))
             continue;
 
         if (dev &&
