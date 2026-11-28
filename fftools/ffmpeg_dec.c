@@ -54,7 +54,6 @@ typedef struct DecoderPriv {
     int                 flags;
     int                 apply_cropping;
 
-    enum AVPixelFormat  hwaccel_pix_fmt;
     enum HWAccelID      hwaccel_id;
     enum AVHWDeviceType hwaccel_device_type;
     enum AVPixelFormat  hwaccel_output_format;
@@ -186,7 +185,6 @@ static int dec_alloc(DecoderPriv **pdec, Scheduler *sch, int send_end_ts)
     dp->last_filter_in_rescale_delta = AV_NOPTS_VALUE;
     dp->last_frame_pts               = AV_NOPTS_VALUE;
     dp->last_frame_tb                = (AVRational){ 1, 1 };
-    dp->hwaccel_pix_fmt              = AV_PIX_FMT_NONE;
 
     ret = sch_add_dec(sch, decoder_thread, dp, send_end_ts);
     if (ret < 0)
@@ -384,10 +382,28 @@ fail:
     return err;
 }
 
+static int hwaccel_format_matches(const DecoderPriv *dp, enum AVPixelFormat fmt)
+{
+    const AVCodec *codec = dp->dec_ctx->codec;
+
+    if (dp->hwaccel_id != HWACCEL_GENERIC && dp->hwaccel_id != HWACCEL_AUTO)
+        return 0;
+
+    for (int i = 0;; i++) {
+        const AVCodecHWConfig *config = avcodec_get_hw_config(codec, i);
+        if (!config)
+            return 0;
+        if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+            config->pix_fmt == fmt)
+            return config->device_type == dp->hwaccel_device_type;
+    }
+}
+
 static int video_frame_process(DecoderPriv *dp, AVFrame *frame,
                                unsigned *outputs_mask)
 {
-    if (frame->format == dp->hwaccel_pix_fmt) {
+    // Frames queued before decoder reinitialization can still be hardware frames.
+    if (frame->hw_frames_ctx && hwaccel_format_matches(dp, frame->format)) {
         int err = hwaccel_retrieve_data(dp->dec_ctx, frame);
         if (err < 0)
             return err;
@@ -1314,6 +1330,7 @@ static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat
 {
     DecoderPriv  *dp = s->opaque;
     const enum AVPixelFormat *p;
+    enum AVPixelFormat hwaccel_pix_fmt = AV_PIX_FMT_NONE;
     int ret;
 
     ret = multiview_setup(dp, s);
@@ -1323,30 +1340,14 @@ static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat
         return AV_PIX_FMT_NONE;
     }
 
-    dp->hwaccel_pix_fmt = AV_PIX_FMT_NONE;
-
     for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(*p);
-        const AVCodecHWConfig  *config = NULL;
 
         if (!(desc->flags & AV_PIX_FMT_FLAG_HWACCEL))
             break;
 
-        if (dp->hwaccel_id == HWACCEL_GENERIC ||
-            dp->hwaccel_id == HWACCEL_AUTO) {
-            for (int i = 0;; i++) {
-                config = avcodec_get_hw_config(s->codec, i);
-                if (!config)
-                    break;
-                if (!(config->methods &
-                      AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))
-                    continue;
-                if (config->pix_fmt == *p)
-                    break;
-            }
-        }
-        if (config && config->device_type == dp->hwaccel_device_type) {
-            dp->hwaccel_pix_fmt = *p;
+        if (hwaccel_format_matches(dp, *p)) {
+            hwaccel_pix_fmt = *p;
             /* Stop at the first matching hardware format unless the user
              * explicitly requested a different *hardware* output format
              * (e.g. CUARRAY vs CUDA, which share a device type) - in that
@@ -1361,16 +1362,16 @@ static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat
         }
     }
 
-    if (dp->hwaccel_pix_fmt != AV_PIX_FMT_NONE) {
+    if (hwaccel_pix_fmt != AV_PIX_FMT_NONE) {
         if (dp->hwaccel_output_format != AV_PIX_FMT_NONE &&
-            dp->hwaccel_output_format != dp->hwaccel_pix_fmt &&
+            dp->hwaccel_output_format != hwaccel_pix_fmt &&
             (av_pix_fmt_desc_get(dp->hwaccel_output_format)->flags & AV_PIX_FMT_FLAG_HWACCEL))
             av_log(dp, AV_LOG_WARNING,
                    "Requested hwaccel output format '%s' not available, "
                    "falling back to '%s'\n",
                    av_get_pix_fmt_name(dp->hwaccel_output_format),
-                   av_get_pix_fmt_name(dp->hwaccel_pix_fmt));
-        return dp->hwaccel_pix_fmt;
+                   av_get_pix_fmt_name(hwaccel_pix_fmt));
+        return hwaccel_pix_fmt;
     }
 
     return *p;
