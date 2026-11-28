@@ -382,11 +382,28 @@ fail:
     return err;
 }
 
+static int hwaccel_format_matches(const DecoderPriv *dp, enum AVPixelFormat fmt)
+{
+    const AVCodec *codec = dp->dec_ctx->codec;
+
+    if (dp->hwaccel_id != HWACCEL_GENERIC && dp->hwaccel_id != HWACCEL_AUTO)
+        return 0;
+
+    for (int i = 0;; i++) {
+        const AVCodecHWConfig *config = avcodec_get_hw_config(codec, i);
+        if (!config)
+            return 0;
+        if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+            config->pix_fmt == fmt)
+            return config->device_type == dp->hwaccel_device_type;
+    }
+}
+
 static int video_frame_process(DecoderPriv *dp, AVFrame *frame,
                                unsigned *outputs_mask)
 {
     // Frames queued before decoder reinitialization can still be hardware frames.
-    if (frame->hw_frames_ctx) {
+    if (frame->hw_frames_ctx && hwaccel_format_matches(dp, frame->format)) {
         int err = hwaccel_retrieve_data(dp->dec_ctx, frame);
         if (err < 0)
             return err;
@@ -1325,25 +1342,11 @@ static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat
 
     for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(*p);
-        const AVCodecHWConfig  *config = NULL;
 
         if (!(desc->flags & AV_PIX_FMT_FLAG_HWACCEL))
             break;
 
-        if (dp->hwaccel_id == HWACCEL_GENERIC ||
-            dp->hwaccel_id == HWACCEL_AUTO) {
-            for (int i = 0;; i++) {
-                config = avcodec_get_hw_config(s->codec, i);
-                if (!config)
-                    break;
-                if (!(config->methods &
-                      AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))
-                    continue;
-                if (config->pix_fmt == *p)
-                    break;
-            }
-        }
-        if (config && config->device_type == dp->hwaccel_device_type) {
+        if (hwaccel_format_matches(dp, *p)) {
             hwaccel_pix_fmt = *p;
             /* Stop at the first matching hardware format unless the user
              * explicitly requested a different *hardware* output format
